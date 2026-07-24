@@ -12,6 +12,7 @@
 		AA000001000000000000003A /* GalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003B /* GalleryView.swift */; };
 		AA000001000000000000004A /* JamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004B /* JamView.swift */; };
 		AA000001000000000000005A /* CaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000005B /* CaptureView.swift */; };
+		AA000001000000000000005C /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000005D /* CameraView.swift */; };
 		AA000001000000000000006A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000006B /* Assets.xcassets */; };
 		AA000001000000000000010A /* PhotoSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000010B /* PhotoSound.swift */; };
 		AA000001000000000000011A /* PhotoMusicPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000011B /* PhotoMusicPipeline.swift */; };
@@ -28,6 +29,7 @@
 		AA000001000000000000003B /* GalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryView.swift; sourceTree = "<group>"; };
 		AA000001000000000000004B /* JamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamView.swift; sourceTree = "<group>"; };
 		AA000001000000000000005B /* CaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureView.swift; sourceTree = "<group>"; };
+		AA000001000000000000005D /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		AA000001000000000000006B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA000001000000000000007B /* Dap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA000001000000000000008B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -140,6 +142,7 @@
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000005B /* CaptureView.swift */,
+				AA000001000000000000005D /* CameraView.swift */,
 			);
 			path = Capture;
 			sourceTree = "<group>";
@@ -218,6 +221,7 @@
 				AA000001000000000000003A /* GalleryView.swift in Sources */,
 				AA000001000000000000004A /* JamView.swift in Sources */,
 				AA000001000000000000005A /* CaptureView.swift in Sources */,
+				AA000001000000000000005C /* CameraView.swift in Sources */,
 				AA000001000000000000010A /* PhotoSound.swift in Sources */,
 				AA000001000000000000011A /* PhotoMusicPipeline.swift in Sources */,
 				AA000001000000000000012A /* RetroCoverRenderer.swift in Sources */,

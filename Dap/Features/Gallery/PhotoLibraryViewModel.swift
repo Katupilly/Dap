@@ -69,17 +69,19 @@ final class PhotoLibraryViewModel {
 
     // MARK: - Import
 
-    /// Processes imageData from a PhotosPickerItem, saves the essential result,
-    /// and immediately returns so CaptureView can dismiss.
-    /// Metadata refinement continues in the background.
     func importPhoto(from pickerItem: PhotosPickerItem) async throws {
-        guard !isImporting else { return }
-        isImporting = true
-        defer { isImporting = false }
-
         guard let imageData = try await pickerItem.loadTransferable(type: Data.self) else {
             throw ImportError.loadFailed
         }
+        try await importPhotoData(imageData)
+    }
+
+    /// Processes imageData, saves the essential result, and starts background metadata refinement.
+    @discardableResult
+    func importPhotoData(_ imageData: Data) async throws -> Bool {
+        guard !isImporting else { return false }
+        isImporting = true
+        defer { isImporting = false }
 
         let result  = try await PhotoMusicPipeline.process(imageData: imageData)
         let updated = try await PhotoStore.shared.save(result, existing: items)
@@ -90,6 +92,7 @@ final class PhotoLibraryViewModel {
 
         // Kick off background metadata generation (non-throwing, non-blocking).
         scheduleMetadataRefinement(for: result.sound, imageData: imageData)
+        return true
     }
 
     // MARK: - Progressive metadata

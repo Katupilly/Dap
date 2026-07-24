@@ -9,11 +9,18 @@ struct CaptureView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showError  = false
     @State private var errorText  = ""
+    @State private var mode: Mode = .options
 
     var body: some View {
         NavigationStack {
             Group {
-                if library.isImporting {
+                if mode == .camera {
+                    CameraView(
+                        onPhotoData: { try await library.importPhotoData($0) },
+                        onSuccess: { dismiss() },
+                        onBack: { mode = .options }
+                    )
+                } else if library.isImporting {
                     processingView
                 } else {
                     optionsView
@@ -24,7 +31,7 @@ struct CaptureView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
-                        .disabled(library.isImporting)
+                        .disabled(library.isImporting || mode == .camera)
                 }
             }
             .alert("Import Failed", isPresented: $showError) {
@@ -80,20 +87,23 @@ struct CaptureView: View {
 
             // Take Photo — visually present, not yet implemented
             Button {
-                // Camera capture — implemented in a later step
+                mode = .camera
             } label: {
-                Label("Take Photo", systemImage: "camera")
+                Label("Camera", systemImage: "camera")
                     .frame(maxWidth: .infinity)
                     .padding()
                     .background(.regularMaterial,
                                 in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .opacity(0.45)
             }
             .buttonStyle(.plain)
-            .disabled(true)
 
             Spacer()
         }
         .padding()
+    }
+
+    private enum Mode {
+        case options
+        case camera
     }
 }
