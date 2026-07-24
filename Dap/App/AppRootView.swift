@@ -37,12 +37,18 @@ struct AppRootView: View {
             .padding(.vertical, 10)
             .background(.bar)
 
-            switch section {
-            case .gallery:
+            ZStack {
                 GalleryView()
-            case .jam:
+                    .opacity(section == .gallery ? 1 : 0)
+                    .allowsHitTesting(section == .gallery)
+                    .accessibilityHidden(section != .gallery)
+
                 JamView()
+                    .opacity(section == .jam ? 1 : 0)
+                    .allowsHitTesting(section == .jam)
+                    .accessibilityHidden(section != .jam)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .sheet(isPresented: $isCapturePresented) {
             CaptureView(isPresented: $isCapturePresented)
