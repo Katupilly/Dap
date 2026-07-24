@@ -8,6 +8,7 @@ enum AppSection {
 struct AppRootView: View {
     @State private var section: AppSection = .gallery
     @State private var isCapturePresented = false
+    @State private var library = PhotoLibraryViewModel()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,7 +39,7 @@ struct AppRootView: View {
             .background(.bar)
 
             ZStack {
-                GalleryView()
+                GalleryView(library: library)
                     .opacity(section == .gallery ? 1 : 0)
                     .allowsHitTesting(section == .gallery)
                     .accessibilityHidden(section != .gallery)
@@ -51,7 +52,10 @@ struct AppRootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .sheet(isPresented: $isCapturePresented) {
-            CaptureView(isPresented: $isCapturePresented)
+            CaptureView(library: library)
+        }
+        .task {
+            await library.loadLibrary()
         }
     }
 }

@@ -13,6 +13,13 @@
 		AA000001000000000000004A /* JamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004B /* JamView.swift */; };
 		AA000001000000000000005A /* CaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000005B /* CaptureView.swift */; };
 		AA000001000000000000006A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000006B /* Assets.xcassets */; };
+		AA000001000000000000010A /* PhotoSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000010B /* PhotoSound.swift */; };
+		AA000001000000000000011A /* PhotoMusicPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000011B /* PhotoMusicPipeline.swift */; };
+		AA000001000000000000012A /* RetroCoverRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000012B /* RetroCoverRenderer.swift */; };
+		AA000001000000000000013A /* PhotoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000013B /* PhotoStore.swift */; };
+		AA000001000000000000014A /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000014B /* MusicPlayer.swift */; };
+		AA000001000000000000015A /* PhotoLibraryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000015B /* PhotoLibraryViewModel.swift */; };
+		AA000001000000000000016A /* PhotoMetadataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000016B /* PhotoMetadataGenerator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +31,13 @@
 		AA000001000000000000006B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA000001000000000000007B /* Dap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA000001000000000000008B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA000001000000000000010B /* PhotoSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoSound.swift; sourceTree = "<group>"; };
+		AA000001000000000000011B /* PhotoMusicPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMusicPipeline.swift; sourceTree = "<group>"; };
+		AA000001000000000000012B /* RetroCoverRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetroCoverRenderer.swift; sourceTree = "<group>"; };
+		AA000001000000000000013B /* PhotoStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoStore.swift; sourceTree = "<group>"; };
+		AA000001000000000000014B /* MusicPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayer.swift; sourceTree = "<group>"; };
+		AA000001000000000000015B /* PhotoLibraryViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibraryViewModel.swift; sourceTree = "<group>"; };
+		AA000001000000000000016B /* PhotoMetadataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMetadataGenerator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +72,8 @@
 			children = (
 				AA0000010000000000000092 /* App */,
 				AA0000010000000000000093 /* Features */,
+				AA000001000000000000097 /* Models */,
+				AA000001000000000000098 /* Services */,
 				AA000001000000000000006B /* Assets.xcassets */,
 				AA000001000000000000008B /* Info.plist */,
 			);
@@ -87,8 +103,29 @@
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000003B /* GalleryView.swift */,
+				AA000001000000000000015B /* PhotoLibraryViewModel.swift */,
 			);
 			path = Gallery;
+			sourceTree = "<group>";
+		};
+		AA000001000000000000097 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001000000000000010B /* PhotoSound.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		AA000001000000000000098 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001000000000000011B /* PhotoMusicPipeline.swift */,
+				AA000001000000000000012B /* RetroCoverRenderer.swift */,
+				AA000001000000000000013B /* PhotoStore.swift */,
+				AA000001000000000000014B /* MusicPlayer.swift */,
+				AA000001000000000000016B /* PhotoMetadataGenerator.swift */,
+			);
+			path = Services;
 			sourceTree = "<group>";
 		};
 		AA0000010000000000000095 /* Jam */ = {
@@ -181,6 +218,13 @@
 				AA000001000000000000003A /* GalleryView.swift in Sources */,
 				AA000001000000000000004A /* JamView.swift in Sources */,
 				AA000001000000000000005A /* CaptureView.swift in Sources */,
+				AA000001000000000000010A /* PhotoSound.swift in Sources */,
+				AA000001000000000000011A /* PhotoMusicPipeline.swift in Sources */,
+				AA000001000000000000012A /* RetroCoverRenderer.swift in Sources */,
+				AA000001000000000000013A /* PhotoStore.swift in Sources */,
+				AA000001000000000000014A /* MusicPlayer.swift in Sources */,
+				AA000001000000000000015A /* PhotoLibraryViewModel.swift in Sources */,
+				AA000001000000000000016A /* PhotoMetadataGenerator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

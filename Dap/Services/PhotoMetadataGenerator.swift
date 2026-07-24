@@ -1,0 +1,218 @@
+import Foundation
+import Vision
+import FoundationModels
+
+// MARK: - Visual label (Sendable transport value)
+
+struct VisualLabel: Sendable {
+    let name: String
+    let confidence: Float
+}
+
+// MARK: - Musical context (Sendable snapshot for cross-boundary transport)
+
+struct MusicalContext: Sendable {
+    let rootName: String
+    let scaleName: String
+    let bpm: Int
+    let waveform: String
+    let luminanceHint: String?  // "bright" | "mellow" | nil
+}
+
+// MARK: - Generated metadata (guided generation target)
+
+@Generable
+struct GeneratedPhotoMetadata {
+    @Guide(description: "A playful, evocative name in English using one to four words.")
+    var name: String
+
+    @Guide(description: "One short playful sentence describing the connection between the image and its sound.")
+    var description: String
+}
+
+// MARK: - PhotoMetadataGenerator
+
+enum PhotoMetadataGenerator {
+
+    // MARK: Public entry point
+
+    /// Runs Vision classification off-main, then asks Foundation Models for
+    /// a name and description. Returns nil silently on any failure.
+    static func generate(
+        imageData: Data,
+        musicalContext: MusicalContext
+    ) async -> GeneratedPhotoMetadata? {
+        // Step 1 — Vision (off-main, returns only Sendable values)
+        let labels = await classifyImage(imageData: imageData)
+
+        // Step 2 — Foundation Models
+        return await generateMetadata(labels: labels, context: musicalContext)
+    }
+
+    // MARK: - Vision classification
+
+    private static func classifyImage(imageData: Data) async -> [VisualLabel] {
+        // Run entirely inside a detached task so Vision never touches MainActor.
+        await Task.detached(priority: .utility) {
+            guard let cgImage = makeCGImage(from: imageData) else { return [] }
+
+            return await withCheckedContinuation { continuation in
+                let request = VNClassifyImageRequest { request, _ in
+                    guard let observations = request.results as? [VNClassificationObservation] else {
+                        continuation.resume(returning: [])
+                        return
+                    }
+                    let labels: [VisualLabel] = observations
+                        .filter { $0.confidence >= 0.12 }           // discard very low confidence
+                        .sorted { $0.confidence > $1.confidence }   // highest first
+                        .prefix(5)                                   // at most five labels
+                        .map { VisualLabel(name: $0.identifier, confidence: $0.confidence) }
+                    continuation.resume(returning: labels)
+                }
+
+                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                do {
+                    try handler.perform([request])
+                } catch {
+                    continuation.resume(returning: [])
+                }
+            }
+        }.value
+    }
+
+    // MARK: - Foundation Models generation
+
+    private static func generateMetadata(
+        labels: [VisualLabel],
+        context: MusicalContext
+    ) async -> GeneratedPhotoMetadata? {
+        let model = SystemLanguageModel.default
+
+        // Check availability — treat any non-available state as silent skip.
+        switch model.availability {
+        case .available:
+            break   // proceed
+        case .unavailable:
+            return nil
+        @unknown default:
+            return nil
+        }
+
+        let prompt = buildPrompt(labels: labels, context: context)
+
+        // New session per photo — prevents context contamination across imports.
+        let session = LanguageModelSession(
+            instructions: Instructions("""
+                You name musical photographs for a playful creative app.
+                Use the visual labels and musical properties provided.
+                Be evocative but concrete.
+                Do not mention technical image analysis.
+                Do not claim to see objects that are not present.
+                Do not explain your reasoning.
+                """)
+        )
+
+        do {
+            let response = try await session.respond(
+                to: prompt,
+                generating: GeneratedPhotoMetadata.self
+            )
+            return sanitize(response.content)
+        } catch {
+            // Guardrail violations, generation errors, context size issues — silent failure.
+            return nil
+        }
+    }
+
+    // MARK: - Prompt builder
+
+    private static func buildPrompt(
+        labels: [VisualLabel],
+        context: MusicalContext
+    ) -> String {
+        var parts: [String] = []
+
+        if labels.isEmpty {
+            parts.append("Visual content: unclassified")
+        } else {
+            let labelList = labels.map { $0.name }.joined(separator: ", ")
+            parts.append("Visual labels: \(labelList)")
+        }
+
+        parts.append("Root: \(context.rootName)")
+        parts.append("Scale: \(context.scaleName)")
+        parts.append("BPM: \(context.bpm)")
+        parts.append("Sound: \(context.waveform)")
+
+        if let hint = context.luminanceHint {
+            parts.append("Mood: \(hint)")
+        }
+
+        return parts.joined(separator: "\n")
+    }
+
+    // MARK: - Sanitization
+
+    private static func sanitize(_ raw: GeneratedPhotoMetadata) -> GeneratedPhotoMetadata? {
+        let name = clean(raw.name, maxLength: 40)
+        let desc = clean(raw.description, maxLength: 140)
+
+        guard !name.isEmpty, !desc.isEmpty else { return nil }
+
+        return GeneratedPhotoMetadata(name: name, description: desc)
+    }
+
+    private static func clean(_ text: String, maxLength: Int) -> String {
+        var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Remove wrapping quotes
+        if s.count >= 2,
+           (s.hasPrefix("\"") && s.hasSuffix("\"")) ||
+           (s.hasPrefix("'")  && s.hasSuffix("'")) {
+            s = String(s.dropFirst().dropLast())
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Remove markdown bold/italic markers
+        s = s.replacingOccurrences(of: "**", with: "")
+        s = s.replacingOccurrences(of: "*",  with: "")
+        s = s.replacingOccurrences(of: "__", with: "")
+
+        // Truncate to reasonable length
+        if s.count > maxLength {
+            s = String(s.prefix(maxLength))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return s
+    }
+
+    // MARK: - CGImage helper (runs inside detached task, no UIImage)
+
+    private static func makeCGImage(from data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+}
+
+// MARK: - MusicalContext convenience init
+
+extension MusicalContext {
+    init(sound: PhotoSound) {
+        let harmony = sound.sequence.harmony
+        let profile = sound.sequence.soundProfile
+
+        let luminance: String?
+        switch profile.waveform {
+        case .square:   luminance = "bright"
+        case .triangle: luminance = "mellow"
+        }
+
+        self.init(
+            rootName: harmony.rootName,
+            scaleName: harmony.scale.displayName,
+            bpm: harmony.bpm,
+            waveform: profile.waveform.rawValue,
+            luminanceHint: luminance
+        )
+    }
+}
