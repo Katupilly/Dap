@@ -3,41 +3,62 @@ import UIKit
 
 struct GalleryView: View {
     let library: PhotoLibraryViewModel
+    @Binding var path: [UUID]
+
+    @Namespace private var namespace
 
     private let columns = [
-        GridItem(.flexible(), spacing: 2),
-        GridItem(.flexible(), spacing: 2),
-        GridItem(.flexible(), spacing: 2),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
     ]
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             if library.items.isEmpty {
                 ContentUnavailableView(
                     "No Photos Yet",
                     systemImage: "photo.stack",
                     description: Text("Musical photos you create will appear here.")
                 )
-                .navigationTitle("Gallery")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.galleryBackground)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 2) {
+                    LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(library.items) { sound in
-                            SoundCellView(
-                                sound: sound,
-                                coverData: library.coverDataByID[sound.id],
-                                isPlaying: library.playingID == sound.id,
-                                isRefining: library.refiningMetadataIDs.contains(sound.id)
-                            )
-                            .onTapGesture {
-                                library.toggle(sound: sound)
+                            Button {
+                                path.append(sound.id)
+                            } label: {
+                                SoundCellView(
+                                    sound: sound,
+                                    coverData: library.coverDataByID[sound.id],
+                                    isPlaying: library.playingID == sound.id,
+                                    isRefining: library.refiningMetadataIDs.contains(sound.id),
+                                    namespace: namespace
+                                )
                             }
+                            .buttonStyle(.plain)
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 84)
+                    .padding(.bottom, 120)
                 }
-                .navigationTitle("Gallery")
+                .background(Color.galleryBackground)
+                .navigationDestination(for: UUID.self) { id in
+                    if let sound = library.items.first(where: { $0.id == id }) {
+                        PhotoInspectorView(
+                            sound: sound,
+                            coverData: library.coverDataByID[id],
+                            library: library,
+                            namespace: namespace
+                        )
+                    }
+                }
             }
         }
+        .background(Color.galleryBackground)
     }
 }
 
@@ -48,48 +69,27 @@ private struct SoundCellView: View {
     let coverData: Data?
     let isPlaying: Bool
     let isRefining: Bool
+    let namespace: Namespace.ID
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: .topLeading) {
             coverImage
-                .aspectRatio(1, contentMode: .fill)
+                .aspectRatio(4 / 5, contentMode: .fill)
                 .clipped()
+                .matchedTransitionSource(id: sound.id, in: namespace)
 
-            VStack(alignment: .leading, spacing: 1) {
-                // Primary title: generated name when available, musical fallback otherwise.
-                Text(sound.name ?? sound.sequence.displayLabel)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                // Secondary: note/scale always visible, BPM below it.
-                if sound.name != nil {
-                    Text(sound.sequence.displayLabel)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.75))
-                        .lineLimit(1)
-                }
-                Text("\(sound.sequence.harmony.bpm) BPM")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.75))
-            }
-            .padding(.horizontal, 5)
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.black.opacity(0.5))
-
-            // Discreet refinement indicator — top-leading corner.
             if isRefining {
                 ProgressView()
                     .progressViewStyle(.circular)
                     .scaleEffect(0.6)
                     .tint(.white)
                     .padding(4)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .overlay {
             if isPlaying {
-                Rectangle()
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .stroke(.white, lineWidth: 2)
                     .overlay(alignment: .topTrailing) {
                         Image(systemName: "waveform")
@@ -100,6 +100,8 @@ private struct SoundCellView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: isPlaying)
+        .accessibilityLabel(sound.name ?? sound.sequence.displayLabel)
+        .accessibilityHint("Opens the Photo Inspector.")
     }
 
     @ViewBuilder
@@ -113,4 +115,8 @@ private struct SoundCellView: View {
                 .fill(.secondary.opacity(0.18))
         }
     }
+}
+
+private extension Color {
+    static let galleryBackground = Color(uiColor: .systemBackground)
 }
