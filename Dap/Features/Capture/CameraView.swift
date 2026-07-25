@@ -74,6 +74,7 @@ struct CameraView: View {
         .onDisappear {
             controller?.stop()
         }
+        .statusBarHidden(true)
     }
 
     private var cameraChrome: some View {

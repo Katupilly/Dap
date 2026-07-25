@@ -45,6 +45,29 @@ struct GalleryView: View {
                     .padding(.top, 84)
                     .padding(.bottom, 120)
                 }
+                .overlay(alignment: .top) {
+                    ZStack {
+                        Rectangle()
+                            .fill(.regularMaterial)
+
+                        Color.black.opacity(0.16)
+                    }
+                    .mask {
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black.opacity(0.82), location: 0.38),
+                                .init(color: .black.opacity(0.28), location: 0.76),
+                                .init(color: .clear, location: 1)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+                    .frame(height: 120)
+                    .ignoresSafeArea(edges: .top)
+                    .allowsHitTesting(false)
+                }
                 .background(Color.galleryBackground)
                 .navigationDestination(for: UUID.self) { id in
                     if let sound = library.items.first(where: { $0.id == id }) {
