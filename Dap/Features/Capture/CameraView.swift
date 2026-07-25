@@ -93,22 +93,19 @@ struct CameraView: View {
 
             VStack(spacing: 13) {
                 commandRow
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(rgbColor: previewPalette.shadow),
-                                Color(rgbColor: previewPalette.dark),
-                                Color(rgbColor: previewPalette.base),
-                                Color(rgbColor: previewPalette.highlight),
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
+                CameraLavaLampView(
+                    palette: previewPalette,
+                    reduceMotion: reduceMotion
+                )
+                .frame(height: 37)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: 5,
+                        style: .continuous
                     )
-                    .frame(height: 37)
-                    .padding(.horizontal, 16)
-                    .accessibilityHidden(true)
+                )
+                .padding(.horizontal, 16)
+                .accessibilityHidden(true)
 
                 HStack {
                     Button {
@@ -317,13 +314,7 @@ struct CameraView: View {
             try await controller.configure()
             controller.onPitchClassSample = { pitchClass in
                 Task { @MainActor in
-                    if reduceMotion {
-                        previewPitchClass = pitchClass
-                    } else {
-                        withAnimation(.easeOut(duration: 0.35)) {
-                            previewPitchClass = pitchClass
-                        }
-                    }
+                    previewPitchClass = pitchClass
                 }
             }
             self.controller?.onPitchClassSample = nil
@@ -811,6 +802,43 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
             return 60 * ((blue - red) / delta + 2)
         }
         return 60 * ((red - green) / delta + 4)
+    }
+}
+
+private struct CameraLavaLampView: View {
+    let palette: ColorPalette
+    let reduceMotion: Bool
+
+    @State private var startDate = Date()
+
+    var body: some View {
+        if reduceMotion {
+            lavaLamp(time: 0)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                lavaLamp(time: context.date.timeIntervalSince(startDate))
+            }
+        }
+    }
+
+    private func lavaLamp(time: TimeInterval) -> some View {
+        Rectangle()
+            .fill(.white)
+            .colorEffect(
+                ShaderLibrary.dapLavaLamp(
+                    .boundingRect,
+                    .float(Float(time)),
+                    .color(Color(rgbColor: palette.shadow)),
+                    .color(Color(rgbColor: palette.dark)),
+                    .color(Color(rgbColor: palette.base)),
+                    .color(Color(rgbColor: palette.highlight)),
+                    .color(Color(rgbColor: palette.base))
+                )
+            )
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.35),
+                value: palette
+            )
     }
 }
 
