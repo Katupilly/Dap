@@ -25,7 +25,7 @@ struct GalleryView: View {
                 .background(Color.galleryBackground)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 12) {
+                    LazyVGrid(columns: columns, spacing: 8) {
                         ForEach(library.items) { sound in
                             Button {
                                 path.append(sound.id)
@@ -95,20 +95,22 @@ private struct SoundCellView: View {
     let namespace: Namespace.ID
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            coverImage
-                .aspectRatio(4 / 5, contentMode: .fill)
-                .clipped()
-                .matchedTransitionSource(id: sound.id, in: namespace)
+        Color.clear
+            .aspectRatio(4.0 / 5.0, contentMode: .fit)
+            .overlay {
+                ZStack(alignment: .topLeading) {
+                    coverImage
+                        .matchedTransitionSource(id: sound.id, in: namespace)
 
-            if isRefining {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .scaleEffect(0.6)
-                    .tint(.white)
-                    .padding(4)
+                    if isRefining {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .scaleEffect(0.6)
+                            .tint(.white)
+                            .padding(4)
+                    }
+                }
             }
-        }
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .overlay {
             if isPlaying {
@@ -133,9 +135,12 @@ private struct SoundCellView: View {
         if let data = coverData, let uiImage = UIImage(data: data) {
             Image(uiImage: uiImage)
                 .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             Rectangle()
                 .fill(.secondary.opacity(0.18))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
