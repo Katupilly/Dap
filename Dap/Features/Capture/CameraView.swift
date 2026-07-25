@@ -17,6 +17,7 @@ struct CameraView: View {
     @State private var isFlashOn = false
     @State private var isFlashAvailable = false
     @State private var isZoomed = false
+    @State private var previewPitchClass: PitchClass = .c
 
     private var latestCoverData: Data? {
         library.items.first.flatMap { library.coverDataByID[$0.id] }
@@ -32,6 +33,10 @@ struct CameraView: View {
 
     private var isGalleryDismissDisabled: Bool {
         state == .capturing || state == .processing
+    }
+
+    private var previewPalette: ColorPalette {
+        RetroCoverRenderer.tonalPalette(for: previewPitchClass)
     }
 
     var body: some View {
@@ -72,6 +77,7 @@ struct CameraView: View {
             Task { await importPickedPhoto(newValue) }
         }
         .onDisappear {
+            controller?.onPitchClassSample = nil
             controller?.stop()
         }
         .statusBarHidden(true)
@@ -88,7 +94,18 @@ struct CameraView: View {
             VStack(spacing: 13) {
                 commandRow
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(.white.opacity(0.06))
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(rgbColor: previewPalette.shadow),
+                                Color(rgbColor: previewPalette.dark),
+                                Color(rgbColor: previewPalette.base),
+                                Color(rgbColor: previewPalette.highlight),
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                     .frame(height: 37)
                     .padding(.horizontal, 16)
                     .accessibilityHidden(true)
@@ -298,6 +315,18 @@ struct CameraView: View {
         let controller = CameraController()
         do {
             try await controller.configure()
+            controller.onPitchClassSample = { pitchClass in
+                Task { @MainActor in
+                    if reduceMotion {
+                        previewPitchClass = pitchClass
+                    } else {
+                        withAnimation(.easeOut(duration: 0.35)) {
+                            previewPitchClass = pitchClass
+                        }
+                    }
+                }
+            }
+            self.controller?.onPitchClassSample = nil
             self.controller = controller
             controller.start()
             isFlashOn = false
@@ -419,14 +448,30 @@ private enum CameraState {
 private final class CameraController: NSObject, @unchecked Sendable {
     let session = AVCaptureSession()
 
+    private static let colorSamplesPerAxis = 12
+    private static let colorSampleInterval: CFAbsoluteTime = 0.25
+
     private let output = AVCapturePhotoOutput()
+    private let videoOutput = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "dap.camera.session")
+    private let videoOutputQueue = DispatchQueue(label: "dap.camera.video-output")
     private var delegate: PhotoDelegate?
     private var device: AVCaptureDevice?
     private var currentInput: AVCaptureDeviceInput?
     private weak var previewLayer: AVCaptureVideoPreviewLayer?
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var previewRotationObservation: NSKeyValueObservation?
+    private var lastColorSampleTime: CFAbsoluteTime = 0
+    private var pendingPitchClass: PitchClass?
+    private var publishedPitchClass: PitchClass?
+
+    var onPitchClassSample: (@Sendable (PitchClass) -> Void)? {
+        didSet {
+            if onPitchClassSample == nil {
+                resetPitchClassSamplingState()
+            }
+        }
+    }
 
     var isFlashAvailable: Bool {
         guard let device else { return false }
@@ -451,10 +496,21 @@ private final class CameraController: NSObject, @unchecked Sendable {
                     guard self.session.canAddInput(input), self.session.canAddOutput(self.output) else {
                         throw CameraError.configurationFailed
                     }
+
+                    self.videoOutput.alwaysDiscardsLateVideoFrames = true
+                    self.videoOutput.videoSettings = [
+                        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                    ]
+                    self.videoOutput.setSampleBufferDelegate(self, queue: self.videoOutputQueue)
+
                     self.session.addInput(input)
                     self.session.addOutput(self.output)
+                    if self.session.canAddOutput(self.videoOutput) {
+                        self.session.addOutput(self.videoOutput)
+                    }
                     self.device = device
                     self.currentInput = input
+                    self.resetPitchClassSamplingState()
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -523,6 +579,7 @@ private final class CameraController: NSObject, @unchecked Sendable {
 
                     self.currentInput = newInput
                     self.device = newDevice
+                    self.resetPitchClassSamplingState()
                     continuation.resume(returning: newDevice)
                 } catch {
                     continuation.resume(throwing: error)
@@ -639,6 +696,12 @@ private final class CameraController: NSObject, @unchecked Sendable {
         output.supportedFlashModes.contains(mode)
     }
 
+    private func resetPitchClassSamplingState() {
+        lastColorSampleTime = 0
+        pendingPitchClass = nil
+        publishedPitchClass = nil
+    }
+
     private func setZoomFactor(_ requestedFactor: CGFloat, on device: AVCaptureDevice) throws -> CGFloat {
         let appliedFactor = min(max(requestedFactor, device.minAvailableVideoZoomFactor), device.maxAvailableVideoZoomFactor)
         try device.lockForConfiguration()
@@ -667,6 +730,87 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
         } else {
             completion(.failure(CameraError.captureFailed))
         }
+    }
+}
+
+extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from _: AVCaptureConnection
+    ) {
+        guard output === videoOutput, onPitchClassSample != nil else { return }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastColorSampleTime >= Self.colorSampleInterval else { return }
+        lastColorSampleTime = now
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let candidatePitchClass = samplePitchClass(from: pixelBuffer)
+
+        guard candidatePitchClass != publishedPitchClass else {
+            pendingPitchClass = nil
+            return
+        }
+
+        guard pendingPitchClass == candidatePitchClass else {
+            pendingPitchClass = candidatePitchClass
+            return
+        }
+
+        pendingPitchClass = nil
+        publishedPitchClass = candidatePitchClass
+        onPitchClassSample?(candidatePitchClass)
+    }
+
+    private func samplePitchClass(from pixelBuffer: CVPixelBuffer) -> PitchClass {
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return .c }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let samplesPerAxis = Self.colorSamplesPerAxis
+        var red = 0.0
+        var green = 0.0
+        var blue = 0.0
+        var sampleCount = 0.0
+
+        for yIndex in 0 ..< samplesPerAxis {
+            let y = min(height - 1, ((yIndex * 2 + 1) * height) / (samplesPerAxis * 2))
+            let row = baseAddress.advanced(by: y * bytesPerRow).assumingMemoryBound(to: UInt8.self)
+
+            for xIndex in 0 ..< samplesPerAxis {
+                let x = min(width - 1, ((xIndex * 2 + 1) * width) / (samplesPerAxis * 2))
+                let pixel = row.advanced(by: x * 4)
+                blue += Double(pixel[0]) / 255
+                green += Double(pixel[1]) / 255
+                red += Double(pixel[2]) / 255
+                sampleCount += 1
+            }
+        }
+
+        guard sampleCount > 0 else { return .c }
+
+        let hue = hueDegrees(red: red / sampleCount, green: green / sampleCount, blue: blue / sampleCount)
+        return PitchClass(rawValue: RetroCoverRenderer.pitchClass(forHueDegrees: hue))!
+    }
+
+    private func hueDegrees(red: Double, green: Double, blue: Double) -> Double {
+        let maxComponent = max(red, green, blue)
+        let minComponent = min(red, green, blue)
+        let delta = maxComponent - minComponent
+
+        if delta == 0 { return 0 }
+        if maxComponent == red {
+            return (60 * ((green - blue) / delta) + 360).truncatingRemainder(dividingBy: 360)
+        }
+        if maxComponent == green {
+            return 60 * ((blue - red) / delta + 2)
+        }
+        return 60 * ((red - green) / delta + 4)
     }
 }
 
@@ -715,4 +859,12 @@ private enum CameraError: LocalizedError {
 
 private extension Color {
     static let cameraChrome = Color.black
+
+    init(rgbColor: RGBColor) {
+        self.init(
+            red: Double(rgbColor.red) / 255,
+            green: Double(rgbColor.green) / 255,
+            blue: Double(rgbColor.blue) / 255
+        )
+    }
 }

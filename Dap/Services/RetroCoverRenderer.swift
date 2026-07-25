@@ -58,6 +58,12 @@ enum RetroCoverRenderer {
 
     static let targetWidth = 160
 
+    static func pitchClass(forHueDegrees hue: Double) -> Int {
+        let normalized = hue.truncatingRemainder(dividingBy: 360)
+        let wrapped = normalized >= 0 ? normalized : normalized + 360
+        return min(11, Int((wrapped / 30).rounded(.down)))
+    }
+
     // MARK: Pitch → Palette (circle of fifths perceptual mapping)
 
     static func tonalPalette(for pitchClass: PitchClass) -> ColorPalette {

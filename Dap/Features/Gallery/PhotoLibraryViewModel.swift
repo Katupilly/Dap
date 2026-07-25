@@ -87,8 +87,8 @@ final class PhotoLibraryViewModel {
         let updated = try await PhotoStore.shared.save(result, existing: items)
 
         // Update memory only after full disk success.
-        items = updated
         coverDataByID[result.sound.id] = result.coverData
+        items = updated
 
         // Kick off background metadata generation (non-throwing, non-blocking).
         scheduleMetadataRefinement(for: result.sound, imageData: imageData)

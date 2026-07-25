@@ -74,8 +74,8 @@ enum PhotoMusicPipeline {
             )
 
             // 6. Resolve dominant pitch class → tonal palette.
-            let dominant = sequence.dominantPitchClass
-            let palette  = RetroCoverRenderer.tonalPalette(for: dominant)
+            let rootPitchClass = PitchClass(rawValue: sequence.harmony.rootPitchClass)!
+            let palette = RetroCoverRenderer.tonalPalette(for: rootPitchClass)
 
             // 7. Recolor the retro image with the tonal palette.
             let recoloredCG = try RetroCoverRenderer.recolor(cgImage: retroCG, palette: palette.all)
@@ -205,7 +205,7 @@ enum PhotoMusicPipeline {
     private static func buildSequence(colorProfile p: ColorProfile,
                                       gridLevels: [Int],
                                       significantToneCount: Int) -> MusicSequence {
-        let root     = min(11, max(0, Int((p.hue / 360 * 12).rounded(.down))))
+        let root     = RetroCoverRenderer.pitchClass(forHueDegrees: p.hue)
         let scale    = musicScale(for: p)
         let bpm      = min(140, max(70, Int((70 + p.luminance * 70).rounded())))
         let harmony  = MusicHarmony(rootPitchClass: root, scale: scale, bpm: bpm)
