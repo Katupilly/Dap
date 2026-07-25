@@ -54,7 +54,7 @@ struct AppRootView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .sheet(isPresented: $isCapturePresented) {
+        .fullScreenCover(isPresented: $isCapturePresented) {
             CameraView(library: library)
         }
         .task {

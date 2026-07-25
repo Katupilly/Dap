@@ -115,6 +115,8 @@ enum PhotoMusicPipeline {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { throw PhotoMusicPipelineError.decodeFailed }
 
+        ctx.translateBy(x: 0, y: CGFloat(height))
+        ctx.scaleBy(x: 1, y: -1)
         UIGraphicsPushContext(ctx)
         image.draw(in: CGRect(x: 0, y: 0, width: width, height: height))
         UIGraphicsPopContext()

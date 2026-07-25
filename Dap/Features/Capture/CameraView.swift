@@ -1,81 +1,237 @@
 import AVFoundation
+import PhotosUI
 import SwiftUI
 import UIKit
 
 struct CameraView: View {
-    let onPhotoData: (Data) async throws -> Bool
-    let onSuccess: () -> Void
-    let onBack: () -> Void
+    let library: PhotoLibraryViewModel
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dismiss) private var dismiss
 
     @State private var state: CameraState = .requestingPermission
     @State private var errorText = "Could not start the camera."
     @State private var controller: CameraController?
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var isPhotoPickerPresented = false
+    @State private var isFlashOn = false
+    @State private var isFlashAvailable = false
+    @State private var isZoomed = false
+
+    private var latestCoverData: Data? {
+        library.items.first.flatMap { library.coverDataByID[$0.id] }
+    }
+
+    private var latestPhotoID: UUID? {
+        library.items.first?.id
+    }
+
+    private var isShutterProcessing: Bool {
+        state == .processing && selectedPhoto == nil
+    }
+
+    private var isGalleryDismissDisabled: Bool {
+        state == .capturing || state == .processing
+    }
 
     var body: some View {
         ZStack {
-            if let controller, state.allowsPreview {
-                CameraPreviewView(session: controller.session)
-                    .ignoresSafeArea()
+            if let controller, state.allowsPreview || isShutterProcessing {
+                CameraPreviewView(controller: controller)
+                    .ignoresSafeArea(edges: .horizontal)
+                    .padding(.top, 98)
+                    .padding(.bottom, 189)
             } else {
                 Color.black.opacity(0.9)
                     .ignoresSafeArea()
             }
 
-            switch state {
-            case .requestingPermission, .configuring:
-                ProgressView()
-                    .tint(.white)
-                    .scaleEffect(1.4)
-            case .processing:
-                processingView
-            case .denied:
-                permissionView
-            case .failed:
-                failedView
-            case .ready, .capturing:
-                cameraControls
-            }
+            cameraChrome
+
+            overlayContent
         }
+        .interactiveDismissDisabled()
         .task {
             await prepareCamera()
+        }
+        .photosPicker(
+            isPresented: $isPhotoPickerPresented,
+            selection: $selectedPhoto,
+            matching: .images,
+            photoLibrary: .shared()
+        )
+        .onChange(of: isPhotoPickerPresented) { _, isPresented in
+            if isPresented {
+                controller?.stop()
+            } else if selectedPhoto == nil, state == .ready {
+                controller?.start()
+            }
+        }
+        .onChange(of: selectedPhoto) { _, newValue in
+            guard let newValue else { return }
+            Task { await importPickedPhoto(newValue) }
         }
         .onDisappear {
             controller?.stop()
         }
     }
 
-    private var cameraControls: some View {
+    private var cameraChrome: some View {
         VStack {
-            HStack {
-                Button("Back") {
-                    controller?.stop()
-                    onBack()
-                }
-                .disabled(state == .capturing)
-                .padding()
-                .background(.regularMaterial, in: Capsule())
-
-                Spacer()
-            }
-            .padding()
+            Color.cameraChrome
+                .frame(height: 98)
+                .ignoresSafeArea(edges: .top)
 
             Spacer()
 
+            VStack(spacing: 13) {
+                commandRow
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(.white.opacity(0.82))
+                    .frame(height: 37)
+                    .padding(.horizontal, 16)
+                    .accessibilityHidden(true)
+
+                HStack {
+                    Button {
+                        guard !isGalleryDismissDisabled else { return }
+                        controller?.stop()
+                        dismiss()
+                    } label: {
+                        galleryThumbnail
+                    }
+                    .buttonStyle(.plain)
+                    .allowsHitTesting(!isGalleryDismissDisabled)
+
+                    Spacer()
+
+                    shutterButton
+
+                    Spacer()
+
+                    Button {
+                        Task { await switchCamera() }
+                    } label: {
+                        Image(systemName: "arrow.trianglehead.2.clockwise")
+                            .font(.system(size: 28, weight: .semibold))
+                            .frame(width: 57, height: 57)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    .allowsHitTesting(state == .ready)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 26)
+            }
+            .padding(.top, 6)
+            .background(Color.cameraChrome.ignoresSafeArea(edges: .bottom))
+        }
+    }
+
+    @ViewBuilder
+    private var overlayContent: some View {
+        switch state {
+        case .requestingPermission, .configuring:
+            ProgressView()
+                .tint(.white)
+                .scaleEffect(1.4)
+        case .processing:
+            if isShutterProcessing {
+                EmptyView()
+            } else {
+                processingView
+            }
+        case .denied:
+            permissionView
+        case .failed:
+            failedView
+        case .ready, .capturing:
+            EmptyView()
+        }
+    }
+
+    private var commandRow: some View {
+        HStack(spacing: 16) {
             Button {
-                Task { await takePhoto() }
+                guard state == .ready else { return }
+                isPhotoPickerPresented = true
             } label: {
-                ZStack {
-                    Circle()
-                        .stroke(.white, lineWidth: 4)
-                        .frame(width: 78, height: 78)
+                Image(systemName: "photo.badge.plus.fill")
+                    .frame(width: 42, height: 42)
+            }
+            .buttonStyle(.plain)
+            .allowsHitTesting(state == .ready)
+
+            Button {
+                guard state == .ready, isFlashAvailable else { return }
+                isFlashOn.toggle()
+            } label: {
+                Image(systemName: "bolt.fill")
+                    .frame(width: 42, height: 42)
+            }
+            .foregroundStyle(isFlashOn ? .yellow : .white)
+            .allowsHitTesting(state == .ready && isFlashAvailable)
+
+            Button {
+                Task { await toggleZoom() }
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+                    .frame(width: 42, height: 42)
+            }
+            .foregroundStyle(isZoomed ? .yellow : .white)
+            .allowsHitTesting(state == .ready)
+        }
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(.white)
+        .background(Color.cameraChrome, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var shutterButton: some View {
+        Button {
+            Task { await takePhoto() }
+        } label: {
+            ZStack {
+                Circle()
+                    .stroke(.white, lineWidth: 4)
+                    .frame(width: 97, height: 97)
+                if state == .capturing || isShutterProcessing {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(width: 82, height: 82)
+                } else {
                     Circle()
                         .fill(.white)
-                        .frame(width: 62, height: 62)
+                        .frame(width: 82, height: 82)
                 }
             }
-            .disabled(state != .ready)
-            .padding(.bottom, 34)
         }
+        .allowsHitTesting(state == .ready)
+    }
+
+    private var galleryThumbnail: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(.white.opacity(0.18))
+                .frame(width: 56, height: 57)
+                .offset(x: 3, y: -2)
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(.white.opacity(0.42))
+                .frame(width: 50, height: 57)
+                .offset(x: 1, y: 1)
+            thumbnailImage
+                .frame(width: 56, height: 57)
+                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+
+            if isShutterProcessing {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(.black.opacity(0.22))
+                    .frame(width: 56, height: 57)
+                ProgressView()
+                    .tint(.white)
+                    .scaleEffect(0.8)
+            }
+        }
+        .accessibilityLabel("Return to Gallery")
     }
 
     private var processingView: some View {
@@ -103,9 +259,6 @@ struct CameraView: View {
                 UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!)
             }
             .buttonStyle(.borderedProminent)
-
-            Button("Back") { onBack() }
-                .foregroundStyle(.white)
         }
         .padding()
     }
@@ -121,9 +274,6 @@ struct CameraView: View {
                 Task { await prepareCamera() }
             }
             .buttonStyle(.borderedProminent)
-
-            Button("Back") { onBack() }
-                .foregroundStyle(.white)
         }
         .padding()
     }
@@ -150,6 +300,9 @@ struct CameraView: View {
             try await controller.configure()
             self.controller = controller
             controller.start()
+            isFlashOn = false
+            isZoomed = false
+            isFlashAvailable = controller.isFlashAvailable
             state = .ready
         } catch {
             errorText = error.localizedDescription
@@ -161,18 +314,85 @@ struct CameraView: View {
         guard state == .ready, let controller else { return }
         state = .capturing
         do {
-            let data = try await controller.capturePhoto()
+            let flashMode: AVCaptureDevice.FlashMode = isFlashOn ? .on : .off
+            let data = try await controller.capturePhoto(flashMode: flashMode)
             state = .processing
+            if try await library.importPhotoData(data) {
+                state = .ready
+            } else {
+                controller.stop()
+                errorText = "Another import is already running."
+                state = .failed
+            }
+        } catch {
             controller.stop()
-            if try await onPhotoData(data) {
-                onSuccess()
+            errorText = error.localizedDescription
+            state = .failed
+        }
+    }
+
+    private func importPickedPhoto(_ item: PhotosPickerItem) async {
+        guard state == .ready else { return }
+        state = .processing
+        controller?.stop()
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                throw CameraError.captureFailed
+            }
+            if try await library.importPhotoData(data) {
+                selectedPhoto = nil
+                dismiss()
             } else {
                 errorText = "Another import is already running."
                 state = .failed
             }
         } catch {
+            selectedPhoto = nil
             errorText = error.localizedDescription
             state = .failed
+            controller?.start()
+        }
+    }
+
+    private func switchCamera() async {
+        guard state == .ready, let controller else { return }
+        do {
+            try await controller.switchCamera()
+            isZoomed = false
+            isFlashAvailable = controller.isFlashAvailable
+            if !isFlashAvailable {
+                isFlashOn = false
+            }
+        } catch {
+            errorText = error.localizedDescription
+            state = .failed
+        }
+    }
+
+    private func toggleZoom() async {
+        guard state == .ready, let controller else { return }
+        let requestedFactor: CGFloat = isZoomed ? 1 : 2
+        do {
+            let appliedFactor = try await controller.setZoomFactor(requestedFactor)
+            isZoomed = appliedFactor > 1.0
+        } catch {
+            errorText = error.localizedDescription
+            state = .failed
+        }
+    }
+
+    @ViewBuilder
+    private var thumbnailImage: some View {
+        if let latestCoverData, let image = UIImage(data: latestCoverData) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .id(latestPhotoID)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.88), value: latestPhotoID)
+        } else {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(.white.opacity(0.84))
         }
     }
 }
@@ -202,6 +422,16 @@ private final class CameraController: NSObject, @unchecked Sendable {
     private let output = AVCapturePhotoOutput()
     private let queue = DispatchQueue(label: "dap.camera.session")
     private var delegate: PhotoDelegate?
+    private var device: AVCaptureDevice?
+    private var currentInput: AVCaptureDeviceInput?
+    private weak var previewLayer: AVCaptureVideoPreviewLayer?
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var previewRotationObservation: NSKeyValueObservation?
+
+    var isFlashAvailable: Bool {
+        guard let device else { return false }
+        return device.hasFlash && supportsFlashMode(.on)
+    }
 
     func configure() async throws {
         try await withCheckedThrowingContinuation { continuation in
@@ -223,6 +453,8 @@ private final class CameraController: NSObject, @unchecked Sendable {
                     }
                     self.session.addInput(input)
                     self.session.addOutput(self.output)
+                    self.device = device
+                    self.currentInput = input
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -245,15 +477,174 @@ private final class CameraController: NSObject, @unchecked Sendable {
         }
     }
 
-    func capturePhoto() async throws -> Data {
+    func switchCamera() async throws {
+        let newDevice = try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    guard
+                        let currentInput = self.currentInput,
+                        let currentDevice = self.device
+                    else {
+                        throw CameraError.configurationFailed
+                    }
+
+                    let newPosition: AVCaptureDevice.Position = currentDevice.position == .back ? .front : .back
+                    guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) else {
+                        throw CameraError.unavailable
+                    }
+
+                    let newInput = try AVCaptureDeviceInput(device: newDevice)
+
+                    self.session.beginConfiguration()
+                    self.session.removeInput(currentInput)
+
+                    guard self.session.canAddInput(newInput) else {
+                        if self.session.canAddInput(currentInput) {
+                            self.session.addInput(currentInput)
+                        }
+                        self.session.commitConfiguration()
+                        throw CameraError.configurationFailed
+                    }
+
+                    self.session.addInput(newInput)
+                    self.session.commitConfiguration()
+
+                    do {
+                        _ = try self.setZoomFactor(1, on: newDevice)
+                    } catch {
+                        self.session.beginConfiguration()
+                        self.session.removeInput(newInput)
+                        if self.session.canAddInput(currentInput) {
+                            self.session.addInput(currentInput)
+                        }
+                        self.session.commitConfiguration()
+                        throw error
+                    }
+
+                    self.currentInput = newInput
+                    self.device = newDevice
+                    continuation.resume(returning: newDevice)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+
+        await MainActor.run {
+            self.rebuildRotationCoordinator(for: newDevice)
+        }
+    }
+
+    func setZoomFactor(_ requestedFactor: CGFloat) async throws -> CGFloat {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    guard let device = self.device else {
+                        throw CameraError.configurationFailed
+                    }
+                    let appliedFactor = try self.setZoomFactor(requestedFactor, on: device)
+                    continuation.resume(returning: appliedFactor)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func attachPreviewLayer(_ previewLayer: AVCaptureVideoPreviewLayer) {
+        if self.previewLayer === previewLayer {
+            if let angle = rotationCoordinator?.videoRotationAngleForHorizonLevelPreview {
+                applyPreviewRotation(angle)
+            }
+            return
+        }
+
+        self.previewLayer = previewLayer
+        previewLayer.session = session
+        previewLayer.videoGravity = .resizeAspectFill
+
+        rebuildRotationCoordinator(for: device)
+    }
+
+    @MainActor
+    func capturePhoto(flashMode: AVCaptureDevice.FlashMode) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
             let delegate = PhotoDelegate { [weak self] result in
                 self?.delegate = nil
                 continuation.resume(with: result)
             }
             self.delegate = delegate
-            output.capturePhoto(with: AVCapturePhotoSettings(), delegate: delegate)
+            applyCaptureRotation()
+            let settings = AVCapturePhotoSettings()
+            let resolvedFlashMode: AVCaptureDevice.FlashMode = supportsFlashMode(flashMode) ? flashMode : .off
+            if supportsFlashMode(resolvedFlashMode) {
+                settings.flashMode = resolvedFlashMode
+            }
+            output.capturePhoto(with: settings, delegate: delegate)
         }
+    }
+
+    @MainActor
+    private func applyPreviewRotation(_ angle: CGFloat) {
+        guard let connection = previewLayer?.connection else { return }
+        if connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        }
+        applyPreviewMirroring(on: connection)
+    }
+
+    @MainActor
+    private func applyCaptureRotation() {
+        guard let connection = output.connection(with: .video) else { return }
+        if let angle = rotationCoordinator?.videoRotationAngleForHorizonLevelCapture,
+           connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        }
+        disableMirroring(on: connection)
+    }
+
+    @MainActor
+    private func disableMirroring(on connection: AVCaptureConnection) {
+        guard connection.isVideoMirroringSupported else { return }
+        connection.automaticallyAdjustsVideoMirroring = false
+        connection.isVideoMirrored = false
+    }
+
+    @MainActor
+    private func rebuildRotationCoordinator(for device: AVCaptureDevice?) {
+        previewRotationObservation = nil
+        rotationCoordinator = nil
+
+        guard let previewLayer, let device else { return }
+
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+        rotationCoordinator = coordinator
+        previewRotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] coordinator, _ in
+            let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+            Task { @MainActor in
+                self?.applyPreviewRotation(angle)
+            }
+        }
+    }
+
+    @MainActor
+    private func applyPreviewMirroring(on connection: AVCaptureConnection) {
+        guard connection.isVideoMirroringSupported else { return }
+        connection.automaticallyAdjustsVideoMirroring = false
+        connection.isVideoMirrored = device?.position == .front
+    }
+
+    private func supportsFlashMode(_ mode: AVCaptureDevice.FlashMode) -> Bool {
+        output.supportedFlashModes.contains(mode)
+    }
+
+    private func setZoomFactor(_ requestedFactor: CGFloat, on device: AVCaptureDevice) throws -> CGFloat {
+        let appliedFactor = min(max(requestedFactor, device.minAvailableVideoZoomFactor), device.maxAvailableVideoZoomFactor)
+        try device.lockForConfiguration()
+        defer { device.unlockForConfiguration() }
+        device.videoZoomFactor = appliedFactor
+        return device.videoZoomFactor
     }
 }
 
@@ -280,17 +671,16 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
 }
 
 private struct CameraPreviewView: UIViewRepresentable {
-    let session: AVCaptureSession
+    let controller: CameraController
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
-        view.previewLayer.session = session
-        view.previewLayer.videoGravity = .resizeAspectFill
+        controller.attachPreviewLayer(view.previewLayer)
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.previewLayer.session = session
+        controller.attachPreviewLayer(uiView.previewLayer)
     }
 }
 
@@ -321,4 +711,8 @@ private enum CameraError: LocalizedError {
         case .captureFailed: "Could not capture the photo."
         }
     }
+}
+
+private extension Color {
+    static let cameraChrome = Color(red: 32 / 255, green: 32 / 255, blue: 34 / 255)
 }
