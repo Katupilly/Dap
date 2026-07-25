@@ -42,7 +42,7 @@ struct CameraView: View {
                     .padding(.top, 98)
                     .padding(.bottom, 189)
             } else {
-                Color.black.opacity(0.9)
+                Color.cameraChrome
                     .ignoresSafeArea()
             }
 
@@ -88,7 +88,7 @@ struct CameraView: View {
             VStack(spacing: 13) {
                 commandRow
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(.white.opacity(0.82))
+                    .fill(.white.opacity(0.06))
                     .frame(height: 37)
                     .padding(.horizontal, 16)
                     .accessibilityHidden(true)
@@ -184,7 +184,6 @@ struct CameraView: View {
         }
         .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(.white)
-        .background(Color.cameraChrome, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var shutterButton: some View {
@@ -715,5 +714,5 @@ private enum CameraError: LocalizedError {
 }
 
 private extension Color {
-    static let cameraChrome = Color(red: 32 / 255, green: 32 / 255, blue: 34 / 255)
+    static let cameraChrome = Color.black
 }
