@@ -243,6 +243,15 @@ final class PhotoLibraryViewModel {
         playingID = nil
     }
 
+    func playTransientSequence(_ sequence: MusicSequence) {
+        stopPlayback()
+        player.play(sequence: sequence)
+    }
+
+    func stopTransientPlayback() {
+        stopPlayback()
+    }
+
     // MARK: - Errors
 
     enum ImportError: LocalizedError {

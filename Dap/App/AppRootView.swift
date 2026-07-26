@@ -23,7 +23,7 @@ struct AppRootView: View {
                     .allowsHitTesting(section == .gallery)
                     .accessibilityHidden(section != .gallery)
 
-                JamView()
+                JamView(library: library, isActive: section == .jam)
                     .opacity(section == .jam ? 1 : 0)
                     .allowsHitTesting(section == .jam)
                     .accessibilityHidden(section != .jam)
