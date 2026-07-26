@@ -36,6 +36,9 @@ enum PhotoMusicPipeline {
     private static let highEdgeDensity           = 0.25
     private static let shortGate                 = 0.25
     private static let longGate                  = 0.98
+    private static let colorPipelineAlgorithmVersion = 2
+    private static let weightedHueFallbackRatio      = 0.003
+    private static let weightedHueSofteningExponent  = 0.85
 
     // MARK: Color analysis result (local, not persisted)
 
@@ -45,6 +48,7 @@ enum PhotoMusicPipeline {
         let luminance:          Double
         let hueVarianceDegrees: Double
         let edgeDensity:        Double
+        let rootPitchClass:     PitchClass
     }
 
     // MARK: Public entry point
@@ -60,7 +64,7 @@ enum PhotoMusicPipeline {
             // 2. Analyze color on a 64×64 scaled version of the shared CGImage.
             let colorProfile = try analyzeColor(cgImage: normalized)
 
-            // 3. Floyd–Steinberg retro cover with default palette.
+            // 3. Legacy Floyd–Steinberg image stays isolated to tone analysis.
             let retroCG = try RetroCoverRenderer.floydSteinberg(cgImage: normalized)
 
             // 4. Tone analysis on the retro image (shared CGImage, no re-decode).
@@ -73,13 +77,13 @@ enum PhotoMusicPipeline {
                 significantToneCount: significantToneCount
             )
 
-            // 6. Resolve dominant pitch class → tonal palette.
-            let rootPitchClass = PitchClass(rawValue: sequence.harmony.rootPitchClass)!
+            // 6. Resolve the persisted cover palette from the selected root pitch.
+            let rootPitchClass = colorProfile.rootPitchClass
             let palette = RetroCoverRenderer.tonalPalette(for: rootPitchClass)
 
-            // 7. Recolor the retro image with the tonal palette.
-            let recoloredCG = try RetroCoverRenderer.recolor(cgImage: retroCG, palette: palette.all)
-            guard let pngData = UIImage(cgImage: recoloredCG).pngData() else {
+            // 7. Render the new pattern halftone cover from the prepared original image.
+            let coverCG = try RetroCoverRenderer.patternHalftone(cgImage: normalized, palette: palette)
+            guard let pngData = UIImage(cgImage: coverCG).pngData() else {
                 throw PhotoMusicPipelineError.encodeFailed
             }
 
@@ -144,6 +148,9 @@ enum PhotoMusicPipeline {
         var r = 0.0, g = 0.0, b = 0.0, weight = 0.0
         var hues: [Double] = []
         var gray = [Double](repeating: 0, count: side * side)
+        var hueBins = [Double](repeating: 0, count: 12)
+        var totalChromaticWeight = 0.0
+        let selectorSeed = stableSelectorSeed(bytes: pixels)
 
         for i in 0..<side * side {
             let p     = i * 4
@@ -153,14 +160,25 @@ enum PhotoMusicPipeline {
             let pg = Double(pixels[p + 1]) / 255
             let pb = Double(pixels[p + 2]) / 255
             r += pr * alpha; g += pg * alpha; b += pb * alpha; weight += alpha
-            gray[i] = 0.2126 * pr + 0.7152 * pg + 0.0722 * pb
+            let luminance = 0.2126 * pr + 0.7152 * pg + 0.0722 * pb
+            gray[i] = luminance
             let (hue, sat) = hsb(r: pr, g: pg, b: pb)
             if sat >= minimumSaturationForHue { hues.append(hue) }
+
+            let saturationWeight = pow(max(0, (sat - 0.08) / 0.92), 2.0)
+            let luminanceConfidence = 0.25 + 0.75 * max(0, 1 - abs(luminance - 0.5) / 0.5)
+            let hueWeight = alpha * saturationWeight * luminanceConfidence
+            if hueWeight > 0 {
+                let bin = min(11, max(0, Int((hue / 30).rounded(.down))))
+                hueBins[bin] += hueWeight
+                totalChromaticWeight += hueWeight
+            }
         }
 
         guard weight > 0 else {
             return ColorProfile(hue: 0, saturation: 0, luminance: 0,
-                                hueVarianceDegrees: 0, edgeDensity: 0)
+                                hueVarianceDegrees: 0, edgeDensity: 0,
+                                rootPitchClass: .c)
         }
         r /= weight; g /= weight; b /= weight
         let (meanHue, meanSat) = hsb(r: r, g: g, b: b)
@@ -168,7 +186,10 @@ enum PhotoMusicPipeline {
         return ColorProfile(
             hue: meanHue, saturation: meanSat, luminance: lum,
             hueVarianceDegrees: circularVarianceDegrees(hues),
-            edgeDensity: sobelEdgeDensity(gray, side: side)
+            edgeDensity: sobelEdgeDensity(gray, side: side),
+            rootPitchClass: selectRootPitchClass(hueBins: hueBins,
+                                                 totalChromaticWeight: totalChromaticWeight,
+                                                 seed: selectorSeed)
         )
     }
 
@@ -205,7 +226,7 @@ enum PhotoMusicPipeline {
     private static func buildSequence(colorProfile p: ColorProfile,
                                       gridLevels: [Int],
                                       significantToneCount: Int) -> MusicSequence {
-        let root     = RetroCoverRenderer.pitchClass(forHueDegrees: p.hue)
+        let root     = p.rootPitchClass.rawValue
         let scale    = musicScale(for: p)
         let bpm      = min(140, max(70, Int((70 + p.luminance * 70).rounded())))
         let harmony  = MusicHarmony(rootPitchClass: root, scale: scale, bpm: bpm)
@@ -227,6 +248,34 @@ enum PhotoMusicPipeline {
                 ))
             }
         }
+
+        if notes.isEmpty {
+            let fallbackRow = MusicSequence.rows / 2
+            let fallbackOffset = pitchOffset(
+                row: fallbackRow,
+                scale: scale,
+                octaveRange: octRange
+            )
+            let fallbackMIDINote = 60 + root + fallbackOffset
+
+            let quarter = max(1, MusicSequence.steps / 4)
+            let fallbackSteps = [
+                0,
+                quarter,
+                quarter * 2,
+                quarter * 3,
+            ].filter { $0 < MusicSequence.steps }
+
+            notes = fallbackSteps.enumerated().map { index, step in
+                MusicNote(
+                    step: step,
+                    row: fallbackRow,
+                    midiNote: fallbackMIDINote,
+                    velocity: index.isMultiple(of: 2) ? 0.5 : 0.4
+                )
+            }
+        }
+
         return MusicSequence(harmony: harmony, notes: notes, soundProfile: profile)
     }
 
@@ -289,6 +338,42 @@ enum PhotoMusicPipeline {
             }
         }
         return count == 0 ? 0 : Double(edges) / Double(count)
+    }
+
+    private static func stableSelectorSeed(bytes: [UInt8]) -> UInt64 {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in bytes {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return hash
+    }
+
+    private static func selectRootPitchClass(hueBins: [Double],
+                                             totalChromaticWeight: Double,
+                                             seed: UInt64) -> PitchClass {
+        let softenedWeights: [Double]
+
+        if totalChromaticWeight > 0.0001 {
+            let fallback = totalChromaticWeight * weightedHueFallbackRatio / 12
+            softenedWeights = hueBins.map { pow($0 + fallback, weightedHueSofteningExponent) }
+        } else {
+            softenedWeights = Array(repeating: 1, count: 12)
+        }
+
+        let totalWeight = max(softenedWeights.reduce(0, +), 0.0001)
+        let selector = Double(seed) / Double(UInt64.max)
+        let target = selector * totalWeight
+
+        var cumulative = 0.0
+        for (index, weight) in softenedWeights.enumerated() {
+            cumulative += weight
+            if target <= cumulative {
+                return PitchClass(rawValue: index) ?? .c
+            }
+        }
+
+        return .b
     }
 }
 

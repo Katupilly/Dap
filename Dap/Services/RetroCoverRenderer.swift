@@ -57,6 +57,15 @@ enum RetroCoverRenderer {
     ]
 
     static let targetWidth = 160
+    private static let coverMaximumDimension = 1024
+    private static let clusteredDotThresholds: [UInt8] = [
+        12, 5, 6, 13,
+        4, 0, 1, 7,
+        11, 3, 2, 8,
+        15, 10, 9, 14,
+    ]
+    private static let clusteredDotMatrixSize = 4
+    private static let clusteredDotPixelScale = 2
 
     static func pitchClass(forHueDegrees hue: Double) -> Int {
         let normalized = hue.truncatingRemainder(dividingBy: 360)
@@ -67,30 +76,79 @@ enum RetroCoverRenderer {
     // MARK: Pitch → Palette (circle of fifths perceptual mapping)
 
     static func tonalPalette(for pitchClass: PitchClass) -> ColorPalette {
-        let base = baseColor(for: pitchClass)
+        let note = pitchClass.canonicalColor
+        let ink = RGBColor(red: 18, green: 20, blue: 24).mixed(with: note, ratio: 0.24)
+        let shadow = note.mixed(with: ink, ratio: 0.40)
+        let paper = RGBColor(red: 245, green: 241, blue: 236).mixed(with: note, ratio: 0.22)
         return ColorPalette(
-            shadow:    base.mixed(with: .black, ratio: 0.72),
-            dark:      base.mixed(with: .black, ratio: 0.45),
-            base:      base,
-            highlight: base.mixed(with: .white, ratio: 0.38)
+            shadow:    ink,
+            dark:      shadow,
+            base:      note,
+            highlight: paper
         )
     }
 
-    private static func baseColor(for pitchClass: PitchClass) -> RGBColor {
-        switch pitchClass {
-        case .c:      RGBColor(red: 228, green: 87,  blue: 46)
-        case .g:      RGBColor(red: 217, green: 142, blue: 4)
-        case .d:      RGBColor(red: 181, green: 161, blue: 0)
-        case .a:      RGBColor(red: 123, green: 174, blue: 0)
-        case .e:      RGBColor(red: 45,  green: 173, blue: 85)
-        case .b:      RGBColor(red: 0,   green: 169, blue: 154)
-        case .fSharp: RGBColor(red: 0,   green: 143, blue: 207)
-        case .cSharp: RGBColor(red: 45,  green: 108, blue: 223)
-        case .gSharp: RGBColor(red: 91,  green: 86,  blue: 214)
-        case .dSharp: RGBColor(red: 138, green: 79,  blue: 208)
-        case .aSharp: RGBColor(red: 179, green: 74,  blue: 184)
-        case .f:      RGBColor(red: 210, green: 74,  blue: 136)
+    // MARK: Pattern halftone cover → CGImage
+
+    static func patternHalftone(cgImage source: CGImage,
+                                palette: ColorPalette) throws -> CGImage {
+        let outputSize = targetCoverSize(for: source)
+        let width = outputSize.width
+        let height = outputSize.height
+        let bytesPerRow = width * 4
+        let bytes = bytesPerRow * height
+
+        var src = [UInt8](repeating: 0, count: bytes)
+        guard let srcCtx = CGContext(
+            data: &src, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw RetroCoverRendererError.contextFailed }
+        srcCtx.interpolationQuality = .medium
+        srcCtx.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var out = [UInt8](repeating: 0, count: bytes)
+        let colors = [palette.shadow, palette.dark, palette.base, palette.highlight]
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let pixelIndex = (y * width + x) * 4
+                let alpha = src[pixelIndex + 3]
+                guard alpha > 0 else { continue }
+
+                let red = Double(src[pixelIndex]) / 255
+                let green = Double(src[pixelIndex + 1]) / 255
+                let blue = Double(src[pixelIndex + 2]) / 255
+                let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+                let adjustedLuminance = min(max((luminance - 0.5) * 1.12 + 0.5, 0), 1)
+                let scaledTone = adjustedLuminance * 3.0
+                let lowerIndex = min(2, max(0, Int(floor(scaledTone))))
+                let fraction = scaledTone - Double(lowerIndex)
+
+                let matrixX = (x / clusteredDotPixelScale) % clusteredDotMatrixSize
+                let matrixY = (y / clusteredDotPixelScale) % clusteredDotMatrixSize
+                let matrixIndex = matrixY * clusteredDotMatrixSize + matrixX
+                let threshold = (Double(clusteredDotThresholds[matrixIndex]) + 0.5) / 16.0
+                let color = fraction > threshold ? colors[lowerIndex + 1] : colors[lowerIndex]
+
+                let opacity = Double(alpha) / 255
+                out[pixelIndex] = UInt8((Double(color.red) * opacity).rounded())
+                out[pixelIndex + 1] = UInt8((Double(color.green) * opacity).rounded())
+                out[pixelIndex + 2] = UInt8((Double(color.blue) * opacity).rounded())
+                out[pixelIndex + 3] = alpha
+            }
         }
+
+        guard let outCtx = CGContext(
+            data: &out, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let result = outCtx.makeImage() else {
+            throw RetroCoverRendererError.contextFailed
+        }
+        return result
     }
 
     // MARK: Floyd–Steinberg dithering → CGImage
@@ -217,5 +275,39 @@ enum RetroCoverRenderer {
         let i = y * width + x
         guard alpha[i] > 0 else { return }
         lum[i] += error * w
+    }
+
+    private static func targetCoverSize(for source: CGImage) -> (width: Int, height: Int) {
+        let width = source.width
+        let height = source.height
+        let maximum = max(width, height)
+        guard maximum > coverMaximumDimension else {
+            return (width, height)
+        }
+
+        let scale = Double(coverMaximumDimension) / Double(maximum)
+        return (
+            max(1, Int((Double(width) * scale).rounded())),
+            max(1, Int((Double(height) * scale).rounded()))
+        )
+    }
+}
+
+private extension PitchClass {
+    var canonicalColor: RGBColor {
+        switch self {
+        case .c:      RGBColor(red: 224, green: 86,  blue: 72)
+        case .cSharp: RGBColor(red: 195, green: 98,  blue: 222)
+        case .d:      RGBColor(red: 230, green: 123, blue: 53)
+        case .dSharp: RGBColor(red: 162, green: 86,  blue: 214)
+        case .e:      RGBColor(red: 81,  green: 176, blue: 86)
+        case .f:      RGBColor(red: 209, green: 75,  blue: 138)
+        case .fSharp: RGBColor(red: 0,   green: 140, blue: 196)
+        case .g:      RGBColor(red: 210, green: 158, blue: 42)
+        case .gSharp: RGBColor(red: 86,  green: 93,  blue: 212)
+        case .a:      RGBColor(red: 136, green: 170, blue: 42)
+        case .aSharp: RGBColor(red: 182, green: 73,  blue: 183)
+        case .b:      RGBColor(red: 0,   green: 164, blue: 148)
+        }
     }
 }
