@@ -47,7 +47,7 @@ struct JamArrangementBuilder {
         }
 
         let preset = interpolatedPreset(for: vibePosition)
-        let registerShift = quantizedRegisterShift(for: preset.registerBias)
+        let registerShift = Int(preset.registerBias.rounded())
         let harmony = globalHarmony(for: assignedSounds.map { $0.sound })
         let melodyProfile = melodySound.sound.sequence.soundProfile
 
@@ -228,13 +228,14 @@ struct JamArrangementBuilder {
         )
 
         return sampledNotes.map { note in
+            let shiftedTarget = min(108, max(48, note.midiNote + registerShift))
             let scaleMIDINote = nearestScaleMIDINote(
-                to: note.midiNote,
+                to: shiftedTarget,
                 rootPitchClass: harmony.rootPitchClass,
                 scale: harmony.scale,
                 range: 48...108
             )
-            let targetMIDINote = min(108, max(48, scaleMIDINote + registerShift))
+            let targetMIDINote = min(108, max(48, scaleMIDINote))
 
             return MusicNote(
                 step: note.step,
@@ -496,29 +497,6 @@ struct JamArrangementBuilder {
                 + deepPreset.gate * wDeep
                 + intensePreset.gate * wIntense
         )
-    }
-
-    private func quantizedRegisterShift(for registerBias: Double) -> Int {
-        let candidates = [-12, 0, 12]
-        var bestCandidate = 0
-        var bestDistance = Double.greatestFiniteMagnitude
-
-        for candidate in candidates {
-            let distance = abs(registerBias - Double(candidate))
-            if distance < bestDistance {
-                bestDistance = distance
-                bestCandidate = candidate
-                continue
-            }
-
-            guard distance == bestDistance else { continue }
-
-            if candidate == 0 {
-                bestCandidate = 0
-            }
-        }
-
-        return bestCandidate
     }
 
     private func row(for midiNote: Int) -> Int {
