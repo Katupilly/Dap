@@ -243,9 +243,13 @@ final class PhotoLibraryViewModel {
         playingID = nil
     }
 
-    func playTransientSequence(_ sequence: MusicSequence, loops: Bool = false) {
+    func playTransientSequence(
+        _ sequence: MusicSequence,
+        percussion: MusicPercussionPattern? = nil,
+        loops: Bool = false
+    ) {
         stopPlayback()
-        player.play(sequence: sequence, loops: loops)
+        player.play(sequence: sequence, percussion: percussion, loops: loops)
     }
 
     func stopTransientPlayback() {
