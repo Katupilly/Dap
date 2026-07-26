@@ -12,12 +12,13 @@ struct CameraView: View {
     @State private var state: CameraState = .requestingPermission
     @State private var errorText = "Could not start the camera."
     @State private var controller: CameraController?
-    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var isPhotoPickerPresented = false
     @State private var isFlashOn = false
     @State private var isFlashAvailable = false
     @State private var isZoomed = false
     @State private var previewPitchClass: PitchClass = .c
+    @State private var importCompletion: ImportCompletion?
 
     private var latestCoverData: Data? {
         library.items.first.flatMap { library.coverDataByID[$0.id] }
@@ -28,7 +29,7 @@ struct CameraView: View {
     }
 
     private var isShutterProcessing: Bool {
-        state == .processing && selectedPhoto == nil
+        state == .processing && selectedPhotos.isEmpty
     }
 
     private var isGalleryDismissDisabled: Bool {
@@ -61,20 +62,22 @@ struct CameraView: View {
         }
         .photosPicker(
             isPresented: $isPhotoPickerPresented,
-            selection: $selectedPhoto,
+            selection: $selectedPhotos,
+            maxSelectionCount: 20,
+            selectionBehavior: .ordered,
             matching: .images,
             photoLibrary: .shared()
         )
         .onChange(of: isPhotoPickerPresented) { _, isPresented in
             if isPresented {
                 controller?.stop()
-            } else if selectedPhoto == nil, state == .ready {
+            } else if selectedPhotos.isEmpty, state == .ready {
                 controller?.start()
             }
         }
-        .onChange(of: selectedPhoto) { _, newValue in
-            guard let newValue else { return }
-            Task { await importPickedPhoto(newValue) }
+        .onChange(of: selectedPhotos) { _, newValue in
+            guard !newValue.isEmpty, state == .ready, !library.isImporting else { return }
+            Task { await importPickedPhotos(newValue) }
         }
         .onDisappear {
             controller?.onPitchClassSample = nil
@@ -168,14 +171,14 @@ struct CameraView: View {
     private var commandRow: some View {
         HStack(spacing: 16) {
             Button {
-                guard state == .ready else { return }
+                guard state == .ready, !library.isImporting else { return }
                 isPhotoPickerPresented = true
             } label: {
                 Image(systemName: "photo.badge.plus.fill")
                     .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
-            .allowsHitTesting(state == .ready)
+            .allowsHitTesting(state == .ready && !library.isImporting)
 
             Button {
                 guard state == .ready, isFlashAvailable else { return }
@@ -253,7 +256,7 @@ struct CameraView: View {
             ProgressView()
                 .tint(.white)
                 .scaleEffect(1.4)
-            Text("Processing…")
+            Text(processingStatusText)
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.75))
         }
@@ -284,8 +287,13 @@ struct CameraView: View {
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
 
-            Button("Try Again") {
-                Task { await prepareCamera() }
+            Button(importCompletion?.showsDoneAction == true ? "Done" : "Try Again") {
+                if importCompletion?.showsDoneAction == true {
+                    dismiss()
+                } else {
+                    importCompletion = nil
+                    Task { await prepareCamera() }
+                }
             }
             .buttonStyle(.borderedProminent)
         }
@@ -351,24 +359,42 @@ struct CameraView: View {
         }
     }
 
-    private func importPickedPhoto(_ item: PhotosPickerItem) async {
-        guard state == .ready else { return }
+    private var batchProgressDisplayCount: Int {
+        guard library.batchTotalCount > 0 else { return 0 }
+        return min(
+            max(1, library.batchCompletedCount + (library.batchCompletedCount < library.batchTotalCount ? 1 : 0)),
+            library.batchTotalCount
+        )
+    }
+
+    private var processingStatusText: String {
+        guard library.isImporting, library.batchTotalCount > 0 else {
+            return "Processing…"
+        }
+        return "Importing \(batchProgressDisplayCount) of \(library.batchTotalCount)"
+    }
+
+    private func importPickedPhotos(_ items: [PhotosPickerItem]) async {
+        guard state == .ready, !items.isEmpty, !library.isImporting else { return }
         state = .processing
         controller?.stop()
-        do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                throw CameraError.captureFailed
-            }
-            if try await library.importPhotoData(data) {
-                selectedPhoto = nil
-                dismiss()
-            } else {
-                errorText = "Another import is already running."
-                state = .failed
-            }
-        } catch {
-            selectedPhoto = nil
-            errorText = error.localizedDescription
+
+        importCompletion = nil
+        let totalCount = items.count
+        let result = await library.importPhotos(from: items)
+        selectedPhotos = []
+
+        if result.importedCount == totalCount {
+            dismiss()
+        } else if result.importedCount > 0 {
+            importCompletion = .partial
+            errorText = "Imported \(result.importedCount) of \(totalCount) photos"
+            state = .failed
+        } else {
+            importCompletion = .failed
+            errorText = totalCount == 1
+                ? "Could not import the selected photo."
+                : "Could not import the selected photos."
             state = .failed
             controller?.start()
         }
@@ -413,6 +439,20 @@ struct CameraView: View {
         } else {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(.white.opacity(0.84))
+        }
+    }
+}
+
+private enum ImportCompletion {
+    case partial
+    case failed
+
+    var showsDoneAction: Bool {
+        switch self {
+        case .partial:
+            true
+        case .failed:
+            false
         }
     }
 }

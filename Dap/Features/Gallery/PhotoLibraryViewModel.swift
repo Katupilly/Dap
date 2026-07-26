@@ -23,6 +23,8 @@ final class PhotoLibraryViewModel {
     // MARK: Import state
 
     private(set) var isImporting = false
+    private(set) var batchCompletedCount = 0
+    private(set) var batchTotalCount = 0
 
     // MARK: Progressive metadata refinement
 
@@ -76,6 +78,60 @@ final class PhotoLibraryViewModel {
         try await importPhotoData(imageData)
     }
 
+    func importPhotos(
+        from pickerItems: [PhotosPickerItem]
+    ) async -> (importedCount: Int, failedCount: Int) {
+        guard !isImporting else {
+            return (0, pickerItems.count)
+        }
+
+        isImporting = true
+        batchTotalCount = pickerItems.count
+        batchCompletedCount = 0
+
+        defer {
+            isImporting = false
+        }
+
+        var workingItems = items
+        var workingCoverData = coverDataByID
+        var successfulImports: [(soundID: UUID, pickerItem: PhotosPickerItem)] = []
+        var importedCount = 0
+        var failedCount = 0
+
+        for pickerItem in pickerItems {
+            do {
+                try Task.checkCancellation()
+
+                guard let imageData = try await pickerItem.loadTransferable(type: Data.self) else {
+                    failedCount += 1
+                    batchCompletedCount += 1
+                    continue
+                }
+
+                let result = try await PhotoMusicPipeline.process(imageData: imageData)
+                workingItems = try await PhotoStore.shared.save(result, existing: workingItems)
+                workingCoverData[result.sound.id] = result.coverData
+                successfulImports.append((result.sound.id, pickerItem))
+                importedCount += 1
+                batchCompletedCount += 1
+            } catch is CancellationError {
+                break
+            } catch {
+                failedCount += 1
+                batchCompletedCount += 1
+            }
+        }
+
+        if importedCount > 0 {
+            items = workingItems
+            coverDataByID = workingCoverData
+            scheduleBatchMetadataRefinement(for: successfulImports)
+        }
+
+        return (importedCount, failedCount)
+    }
+
     /// Processes imageData, saves the essential result, and starts background metadata refinement.
     @discardableResult
     func importPhotoData(_ imageData: Data) async throws -> Bool {
@@ -103,42 +159,66 @@ final class PhotoLibraryViewModel {
         // Cancel any in-flight generation for this ID before starting a new one.
         metadataTasks[soundID]?.cancel()
 
-        refiningMetadataIDs.insert(soundID)
-
-        let context = MusicalContext(sound: sound)
-
         let task = Task { [weak self] in
-            guard !Task.isCancelled else { return }
-
-            // Run Vision + Foundation Models off-main; result is Sendable.
-            let generated = await PhotoMetadataGenerator.generate(
-                imageData: imageData,
-                musicalContext: context
-            )
-
-            guard !Task.isCancelled else { return }
-
             guard let self else { return }
-
-            if let metadata = generated {
-                // Persist — errors are silent; fallback stays in place.
-                if let updatedSound = try? await PhotoStore.shared.updateMetadata(
-                    id: soundID,
-                    name: metadata.name,
-                    description: metadata.description
-                ) {
-                    // Patch only the matching item in memory.
-                    if let idx = self.items.firstIndex(where: { $0.id == soundID }) {
-                        self.items[idx] = updatedSound
-                    }
-                }
-            }
-
-            self.refiningMetadataIDs.remove(soundID)
-            self.metadataTasks.removeValue(forKey: soundID)
+            await self.refineMetadata(for: soundID, imageData: imageData)
         }
 
         metadataTasks[soundID] = task
+    }
+
+    private func scheduleBatchMetadataRefinement(
+        for successfulImports: [(soundID: UUID, pickerItem: PhotosPickerItem)]
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+
+            for successfulImport in successfulImports {
+                guard !Task.isCancelled else { break }
+
+                guard let imageData = try? await successfulImport.pickerItem.loadTransferable(type: Data.self) else {
+                    continue
+                }
+
+                await self.refineMetadata(for: successfulImport.soundID, imageData: imageData)
+            }
+        }
+    }
+
+    private func refineMetadata(for soundID: UUID, imageData: Data) async {
+        guard let sound = items.first(where: { $0.id == soundID }) else { return }
+
+        refiningMetadataIDs.insert(soundID)
+        let context = MusicalContext(sound: sound)
+
+        defer {
+            refiningMetadataIDs.remove(soundID)
+            metadataTasks.removeValue(forKey: soundID)
+        }
+
+        guard !Task.isCancelled else { return }
+
+        // Run Vision + Foundation Models off-main; result is Sendable.
+        let generated = await PhotoMetadataGenerator.generate(
+            imageData: imageData,
+            musicalContext: context
+        )
+
+        guard !Task.isCancelled else { return }
+
+        if let metadata = generated {
+            // Persist — errors are silent; fallback stays in place.
+            if let updatedSound = try? await PhotoStore.shared.updateMetadata(
+                id: soundID,
+                name: metadata.name,
+                description: metadata.description
+            ) {
+                // Patch only the matching item in memory.
+                if let idx = items.firstIndex(where: { $0.id == soundID }) {
+                    items[idx] = updatedSound
+                }
+            }
+        }
     }
 
     // MARK: - Playback
