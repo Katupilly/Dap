@@ -91,7 +91,8 @@ struct JamArrangementBuilder {
             )
         )
         let percussion = grooveLibrary.pattern(
-            for: vibePosition
+            for: vibePosition,
+            soundIDs: sounds.map(\.id)
         )
 
         return JamArrangement(
