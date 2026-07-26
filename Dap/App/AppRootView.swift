@@ -23,7 +23,7 @@ struct AppRootView: View {
                     .allowsHitTesting(section == .gallery)
                     .accessibilityHidden(section != .gallery)
 
-                JamView()
+                JamView(library: library, isActive: section == .jam)
                     .opacity(section == .jam ? 1 : 0)
                     .allowsHitTesting(section == .jam)
                     .accessibilityHidden(section != .jam)
@@ -114,6 +114,10 @@ private struct SectionSwitcher: View {
     @Binding var selection: AppSection
     @Namespace private var selectionBackground
 
+    private var selectionAnimation: Animation? {
+        reduceMotion ? .easeOut(duration: 0.12) : .spring(duration: 0.22, bounce: 0)
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             switchButton(.gallery, icon: "photo.stack.fill", title: "Gallery")
@@ -128,30 +132,46 @@ private struct SectionSwitcher: View {
         let isSelected = selection == section
 
         return Button {
-            withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
+            withAnimation(selectionAnimation) {
                 selection = section
             }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon)
                     .font(.system(size: 16, weight: .semibold))
+
                 if isSelected {
                     Text(title)
                         .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .transition(
+                            reduceMotion
+                                ? .opacity
+                                : .asymmetric(
+                                    insertion: .opacity.combined(with: .offset(x: 4)),
+                                    removal: .opacity
+                                )
+                        )
                 }
             }
-            .frame(
-                width: isSelected ? 121 : 61,
-                height: 32
-            )
+            .frame(width: isSelected ? 121 : 61, height: 32)
             .foregroundStyle(isSelected ? .black : .white)
             .background {
                 if isSelected {
-                    Capsule()
-                        .fill(.white)
-                        .matchedGeometryEffect(id: "selectedSection", in: selectionBackground)
+                    if reduceMotion {
+                        Capsule()
+                            .fill(.white)
+                    } else {
+                        Capsule()
+                            .fill(.white)
+                            .matchedGeometryEffect(id: "selectedSection", in: selectionBackground)
+                    }
                 }
             }
+            .padding(.vertical, 6)
+            .contentShape(.interaction, Rectangle())
+            .padding(.vertical, -6)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
