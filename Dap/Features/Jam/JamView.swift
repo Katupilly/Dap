@@ -1,7 +1,14 @@
 import SwiftUI
 import UIKit
 
+private let jamStepsPerBar = MusicSequence.steps
+private let jamBPM = 96.0
+private let jamStepDuration = 60.0 / jamBPM / 4.0
+private let jamBarDuration = jamStepDuration * Double(jamStepsPerBar)
+
 struct JamView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let library: PhotoLibraryViewModel
     let isActive: Bool
 
@@ -10,6 +17,10 @@ struct JamView: View {
     @State private var isPhotoSelectorPresented = false
     @State private var isPlaying = false
     @State private var hasPendingArrangementChanges = false
+    @State private var currentStep: Int?
+    @State private var activeSoundIDs: Set<UUID> = []
+    @State private var activeArrangement: JamArrangement?
+    @State private var transportTask: Task<Void, Never>?
 
     private var selectedSounds: [PhotoSound] {
         selectedSoundIDs.compactMap { id in
@@ -30,11 +41,15 @@ struct JamView: View {
     }
 
     private var playbackAction: PlaybackAction {
-        if isPlaying {
-            return hasPendingArrangementChanges ? .update : .stop
-        }
+        isPlaying ? .stop : .play
+    }
 
-        return .play
+    private var roleBySoundID: [UUID: JamRole] {
+        Dictionary(uniqueKeysWithValues: assignedSounds.map { ($0.sound.id, $0.role) })
+    }
+
+    private var applyingNextBar: Bool {
+        isPlaying && hasPendingArrangementChanges
     }
 
     var body: some View {
@@ -47,9 +62,19 @@ struct JamView: View {
                         emptyState
                     } else {
                         selectedPhotoPreview
+                        barProgressView
 
                         VibeControl(position: $vibePosition) {
-                            hasPendingArrangementChanges = true
+                            if isPlaying {
+                                hasPendingArrangementChanges = true
+                            }
+                        }
+
+                        if applyingNextBar {
+                            Text("Applying next bar")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                         playbackButton
@@ -72,11 +97,11 @@ struct JamView: View {
                 )
             }
             .onDisappear {
-                stopPlayback()
+                clearTransportAndPlayback()
             }
             .onChange(of: isActive) { _, isActive in
                 guard !isActive else { return }
-                stopPlayback()
+                clearTransportAndPlayback()
             }
             .onChange(of: selectedSoundIDs) { _, newValue in
                 let validIDs = newValue.filter { id in
@@ -84,9 +109,10 @@ struct JamView: View {
                 }
 
                 if validIDs != newValue {
-                    stopPlayback()
+                    if isPlaying {
+                        hasPendingArrangementChanges = true
+                    }
                     selectedSoundIDs = validIDs
-                    hasPendingArrangementChanges = !validIDs.isEmpty
                 }
             }
         }
@@ -140,33 +166,14 @@ struct JamView: View {
     private var selectedPhotoPreview: some View {
         VStack(spacing: 16) {
             HStack(spacing: 12) {
-                ForEach(assignedSounds) { assignedSound in
-                    VStack(spacing: 10) {
-                        Group {
-                            if let coverData = library.coverDataByID[assignedSound.sound.id],
-                               let image = UIImage(data: coverData) {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFill()
-                            } else {
-                                Rectangle()
-                                    .fill(.secondary.opacity(0.18))
-                            }
-                        }
-                        .aspectRatio(4 / 5, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-                        VStack(spacing: 4) {
-                            Text(assignedSound.role.displayName)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-
-                            Text(assignedSound.sound.name ?? assignedSound.sound.sequence.displayLabel)
-                                .font(.caption)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
+                ForEach(selectedSounds) { sound in
+                    JamSelectedPhotoTile(
+                        sound: sound,
+                        coverData: library.coverDataByID[sound.id],
+                        role: roleBySoundID[sound.id],
+                        isActive: activeSoundIDs.contains(sound.id),
+                        reduceMotion: reduceMotion
+                    )
                 }
             }
 
@@ -177,15 +184,26 @@ struct JamView: View {
         .frame(maxWidth: .infinity)
     }
 
+    private var barProgressView: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<jamStepsPerBar, id: \.self) { step in
+                Capsule(style: .continuous)
+                    .fill(step == currentStep ? Color.primary : Color.secondary.opacity(0.18))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 4)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityHidden(true)
+    }
+
     private var playbackButton: some View {
         Button {
             switch playbackAction {
             case .play:
                 startPlaybackIfPossible()
             case .stop:
-                stopPlayback()
-            case .update:
-                updatePlaybackIfPossible()
+                clearTransportAndPlayback()
             }
         } label: {
             Label(playbackAction.title, systemImage: playbackAction.systemImage)
@@ -208,39 +226,108 @@ struct JamView: View {
         let stableSelection = newSelectionIDs.sorted { $0.uuidString < $1.uuidString }
         guard stableSelection != selectedSoundIDs else { return }
 
-        stopPlayback()
         selectedSoundIDs = stableSelection
-        hasPendingArrangementChanges = !stableSelection.isEmpty
+        if isPlaying {
+            hasPendingArrangementChanges = true
+        }
     }
 
     private func startPlaybackIfPossible() {
+        cancelTransportTask()
+
         guard let arrangement = buildArrangement() else {
             return
         }
 
-        library.playTransientSequence(arrangement)
+        activeArrangement = arrangement
+        library.playTransientSequence(arrangement.sequence)
+        updateStepState(step: 0, arrangement: arrangement)
         isPlaying = true
         hasPendingArrangementChanges = false
+        startTransportLoop()
     }
 
-    private func updatePlaybackIfPossible() {
-        guard let arrangement = buildArrangement() else {
-            stopPlayback()
-            return
-        }
-
+    private func clearTransportAndPlayback(clearPending: Bool = true) {
+        cancelTransportTask()
         library.stopTransientPlayback()
-        library.playTransientSequence(arrangement)
-        isPlaying = true
-        hasPendingArrangementChanges = false
-    }
-
-    private func stopPlayback() {
-        library.stopTransientPlayback()
+        activeArrangement = nil
+        currentStep = nil
+        activeSoundIDs = []
         isPlaying = false
+        if clearPending {
+            hasPendingArrangementChanges = false
+        }
     }
 
-    private func buildArrangement() -> MusicSequence? {
+    private func cancelTransportTask() {
+        transportTask?.cancel()
+        transportTask = nil
+    }
+
+    private func startTransportLoop() {
+        cancelTransportTask()
+
+        transportTask = Task { @MainActor in
+            let clock = ContinuousClock()
+            let stepInterval = Duration.seconds(jamStepDuration)
+            var nextTick = clock.now.advanced(by: stepInterval)
+            var step = 0
+
+            while !Task.isCancelled && isPlaying {
+                try? await clock.sleep(until: nextTick)
+                guard !Task.isCancelled, isPlaying else { break }
+
+                step = (step + 1) % jamStepsPerBar
+
+                if step == 0 {
+                    if hasPendingArrangementChanges {
+                        guard let nextArrangement = buildArrangement() else {
+                            clearTransportAndPlayback()
+                            break
+                        }
+
+                        activeArrangement = nextArrangement
+                        library.playTransientSequence(nextArrangement.sequence)
+                        hasPendingArrangementChanges = false
+                        updateStepState(step: 0, arrangement: nextArrangement)
+                    } else if let activeArrangement {
+                        library.playTransientSequence(activeArrangement.sequence)
+                        updateStepState(step: 0, arrangement: activeArrangement)
+                    } else {
+                        clearTransportAndPlayback()
+                        break
+                    }
+                } else if let activeArrangement {
+                    updateStepState(step: step, arrangement: activeArrangement)
+                } else {
+                    clearTransportAndPlayback()
+                    break
+                }
+
+                nextTick = nextTick.advanced(by: stepInterval)
+            }
+        }
+    }
+
+    private func updateStepState(step: Int, arrangement: JamArrangement) {
+        let activeIDs = Set(
+            arrangement.activeStepsBySoundID.compactMap { soundID, steps in
+                steps.contains(step) ? soundID : nil
+            }
+        )
+
+        if reduceMotion {
+            currentStep = step
+            activeSoundIDs = activeIDs
+        } else {
+            withAnimation(.easeInOut(duration: jamStepDuration * 0.6)) {
+                currentStep = step
+                activeSoundIDs = activeIDs
+            }
+        }
+    }
+
+    private func buildArrangement() -> JamArrangement? {
         let assignedSounds = assignedSounds(for: playableSelectedSounds)
         guard let melodySound = assignedSounds.first(where: { $0.role == .melody }) else {
             return nil
@@ -251,13 +338,22 @@ struct JamView: View {
         let harmony = globalHarmony(for: assignedSounds.map { $0.sound })
         let melodyProfile = melodySound.sound.sequence.soundProfile
 
+        var activeStepsBySoundID: [UUID: Set<Int>] = [:]
+
         let notes = assignedSounds.flatMap { assignedSound in
-            buildNotes(
+            let notes = buildNotes(
                 for: assignedSound,
                 harmony: harmony,
                 registerShift: registerShift
             )
+
+            if !notes.isEmpty {
+                activeStepsBySoundID[assignedSound.sound.id] = Set(notes.map(\.step))
+            }
+
+            return notes
         }
+
         .sorted {
             if $0.step != $1.step { return $0.step < $1.step }
             if $0.row != $1.row { return $0.row < $1.row }
@@ -266,18 +362,21 @@ struct JamView: View {
 
         guard !notes.isEmpty else { return nil }
 
-        return MusicSequence(
-            harmony: MusicHarmony(
-                rootPitchClass: harmony.rootPitchClass,
-                scale: harmony.scale,
-                bpm: 96
+        return JamArrangement(
+            sequence: MusicSequence(
+                harmony: MusicHarmony(
+                    rootPitchClass: harmony.rootPitchClass,
+                    scale: harmony.scale,
+                    bpm: Int(jamBPM)
+                ),
+                notes: notes,
+                soundProfile: SoundProfile(
+                    gate: preset.gate,
+                    octaveRange: melodyProfile.octaveRange,
+                    waveform: melodyProfile.waveform
+                )
             ),
-            notes: notes,
-            soundProfile: SoundProfile(
-                gate: preset.gate,
-                octaveRange: melodyProfile.octaveRange,
-                waveform: melodyProfile.waveform
-            )
+            activeStepsBySoundID: activeStepsBySoundID
         )
     }
 
@@ -848,6 +947,74 @@ private struct JamPhotoCell: View {
     }
 }
 
+private struct JamSelectedPhotoTile: View {
+    let sound: PhotoSound
+    let coverData: Data?
+    let role: JamRole?
+    let isActive: Bool
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Color.clear
+                .aspectRatio(4.0 / 5.0, contentMode: .fit)
+                .overlay {
+                    coverImage
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(borderColor, lineWidth: isActive ? 2 : 1)
+                }
+                .overlay(alignment: .topLeading) {
+                    if let role {
+                        Text(role.displayName)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(Color.black.opacity(0.65), in: Capsule())
+                            .padding(6)
+                    }
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.white.opacity(isActive ? 0.08 : 0))
+                }
+                .scaleEffect(reduceMotion ? 1 : (isActive ? 1.03 : 1.0))
+                .animation(reduceMotion ? nil : .easeInOut(duration: jamStepDuration * 0.6), value: isActive)
+
+            Text(sound.name ?? sound.sequence.displayLabel)
+                .font(.caption)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var coverImage: some View {
+        if let coverData, let image = UIImage(data: coverData) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            Rectangle()
+                .fill(.secondary.opacity(0.18))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var borderColor: Color {
+        if isActive {
+            return .primary
+        }
+
+        return .secondary.opacity(0.18)
+    }
+}
+
 private struct VibeControl: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -1035,13 +1202,11 @@ private struct JamSecondaryButtonStyle: ButtonStyle {
 private enum PlaybackAction {
     case play
     case stop
-    case update
 
     var title: String {
         switch self {
         case .play: "Play"
         case .stop: "Stop"
-        case .update: "Update"
         }
     }
 
@@ -1049,7 +1214,6 @@ private enum PlaybackAction {
         switch self {
         case .play: "play.fill"
         case .stop: "stop.fill"
-        case .update: "arrow.clockwise"
         }
     }
 }
@@ -1080,6 +1244,11 @@ private struct VibePreset {
     let density: Double
     let registerBias: Double
     let gate: Double
+}
+
+private struct JamArrangement {
+    let sequence: MusicSequence
+    let activeStepsBySoundID: [UUID: Set<Int>]
 }
 
 private struct CornerWeights {
