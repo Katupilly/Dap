@@ -97,10 +97,40 @@ struct MusicNote: Codable, Sendable, Equatable, Identifiable {
 
 // MARK: - Music Sequence
 
+struct MusicPercussionHit: Sendable, Equatable {
+    let step: Int
+    let velocity: Float
+
+    init(step: Int, velocity: Float) {
+        self.step = step
+        self.velocity = min(max(velocity, 0), 1)
+    }
+}
+
+enum MusicRimStyle: Sendable, Equatable {
+    case soft
+    case main
+    case hard
+}
+
+struct MusicRimHit: Sendable, Equatable {
+    let step: Int
+    let velocity: Float
+    let style: MusicRimStyle
+
+    init(step: Int, velocity: Float, style: MusicRimStyle) {
+        self.step = step
+        self.velocity = min(max(velocity, 0), 1)
+        self.style = style
+    }
+}
+
 struct MusicPercussionPattern: Equatable, Sendable {
-    let kickSteps: Set<Int>
-    let snareSteps: Set<Int>
-    let closedHatSteps: Set<Int>
+    let kickHits: [MusicPercussionHit]
+    let snareHits: [MusicPercussionHit]
+    let closedHatHits: [MusicPercussionHit]
+    let openHatHits: [MusicPercussionHit]
+    let rimHits: [MusicRimHit]
 }
 
 struct MusicSequence: Codable, Sendable, Equatable {
