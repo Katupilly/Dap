@@ -243,9 +243,9 @@ final class PhotoLibraryViewModel {
         playingID = nil
     }
 
-    func playTransientSequence(_ sequence: MusicSequence) {
+    func playTransientSequence(_ sequence: MusicSequence, loops: Bool = false) {
         stopPlayback()
-        player.play(sequence: sequence)
+        player.play(sequence: sequence, loops: loops)
     }
 
     func stopTransientPlayback() {

@@ -45,7 +45,7 @@ final class MusicPlayer {
     // MARK: Public API
 
     /// Stops current playback (if any) and starts a new render+play cycle.
-    func play(sequence: MusicSequence) {
+    func play(sequence: MusicSequence, loops: Bool = false) {
         stop()
 
         // Activate audio session and start engine if needed.
@@ -73,14 +73,23 @@ final class MusicPlayer {
             // Buffer creation on MainActor.
             guard let buffer = self.makeBuffer(samples: samples) else { return }
 
-            // Schedule with .dataPlayedBack so the callback fires after the audio is heard.
-            self.playerNode.scheduleBuffer(
-                buffer,
-                completionCallbackType: .dataPlayedBack
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self, self.playbackGeneration == generation else { return }
-                    self.onPlaybackFinished?()
+            if loops {
+                self.playerNode.scheduleBuffer(
+                    buffer,
+                    at: nil,
+                    options: .loops,
+                    completionHandler: nil
+                )
+            } else {
+                // Schedule with .dataPlayedBack so the callback fires after the audio is heard.
+                self.playerNode.scheduleBuffer(
+                    buffer,
+                    completionCallbackType: .dataPlayedBack
+                ) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.playbackGeneration == generation else { return }
+                        self.onPlaybackFinished?()
+                    }
                 }
             }
 
