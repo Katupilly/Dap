@@ -45,7 +45,7 @@ final class MusicPlayer {
     // MARK: Public API
 
     /// Stops current playback (if any) and starts a new render+play cycle.
-    func play(sequence: MusicSequence) {
+    func play(sequence: MusicSequence, percussion: MusicPercussionPattern? = nil, loops: Bool = false) {
         stop()
 
         // Activate audio session and start engine if needed.
@@ -64,7 +64,7 @@ final class MusicPlayer {
         renderTask = Task { [weak self] in
             // Render samples on a detached task (off MainActor, off main thread).
             let samples = await Task.detached(priority: .userInitiated) {
-                MusicPlayer.renderSequence(sequence, sampleRate: 44_100)
+                MusicPlayer.renderSequence(sequence, percussion: percussion, sampleRate: 44_100)
             }.value
 
             guard let self, !Task.isCancelled,
@@ -73,14 +73,23 @@ final class MusicPlayer {
             // Buffer creation on MainActor.
             guard let buffer = self.makeBuffer(samples: samples) else { return }
 
-            // Schedule with .dataPlayedBack so the callback fires after the audio is heard.
-            self.playerNode.scheduleBuffer(
-                buffer,
-                completionCallbackType: .dataPlayedBack
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self, self.playbackGeneration == generation else { return }
-                    self.onPlaybackFinished?()
+            if loops {
+                self.playerNode.scheduleBuffer(
+                    buffer,
+                    at: nil,
+                    options: .loops,
+                    completionHandler: nil
+                )
+            } else {
+                // Schedule with .dataPlayedBack so the callback fires after the audio is heard.
+                self.playerNode.scheduleBuffer(
+                    buffer,
+                    completionCallbackType: .dataPlayedBack
+                ) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.playbackGeneration == generation else { return }
+                        self.onPlaybackFinished?()
+                    }
                 }
             }
 
@@ -124,7 +133,11 @@ final class MusicPlayer {
 
     // MARK: - Sequence rendering (called from Task.detached, nonisolated context)
 
-    nonisolated private static func renderSequence(_ sequence: MusicSequence, sampleRate: Int) -> [Float] {
+    nonisolated private static func renderSequence(
+        _ sequence: MusicSequence,
+        percussion: MusicPercussionPattern?,
+        sampleRate: Int
+    ) -> [Float] {
         let bpm           = Double(sequence.harmony.bpm)
         let samplesPerStep = Int((60.0 / bpm / 4.0 * Double(sampleRate)).rounded())
         let gateSamples   = max(1, Int(Double(samplesPerStep) * sequence.soundProfile.gate))
@@ -143,7 +156,128 @@ final class MusicPlayer {
                 }
             }
         }
+
+        if let percussion {
+            renderPercussion(
+                percussion,
+                into: &output,
+                samplesPerStep: samplesPerStep,
+                sampleRate: sampleRate
+            )
+        }
+
         return output.map { max(-0.92, min(0.92, $0)) }
+    }
+
+    nonisolated private static func renderPercussion(
+        _ pattern: MusicPercussionPattern,
+        into output: inout [Float],
+        samplesPerStep: Int,
+        sampleRate: Int
+    ) {
+        for step in pattern.kickSteps.sorted() {
+            renderKick(step: step, into: &output, samplesPerStep: samplesPerStep, sampleRate: sampleRate)
+        }
+
+        for step in pattern.snareSteps.sorted() {
+            renderSnare(step: step, into: &output, samplesPerStep: samplesPerStep, sampleRate: sampleRate)
+        }
+
+        for step in pattern.closedHatSteps.sorted() {
+            renderClosedHat(step: step, into: &output, samplesPerStep: samplesPerStep, sampleRate: sampleRate)
+        }
+    }
+
+    nonisolated private static func renderKick(
+        step: Int,
+        into output: inout [Float],
+        samplesPerStep: Int,
+        sampleRate: Int
+    ) {
+        guard (0..<MusicSequence.steps).contains(step) else { return }
+
+        let startSample = step * samplesPerStep
+        let durationSamples = max(1, Int((0.24 * Double(sampleRate)).rounded()))
+        var phase = 0.0
+
+        for localSample in 0..<durationSamples {
+            let index = startSample + localSample
+            guard index < output.count else { break }
+
+            let progress = Double(localSample) / Double(durationSamples)
+            let frequency = 120.0 * pow(48.0 / 120.0, progress)
+            phase += 2.0 * Double.pi * frequency / Double(sampleRate)
+
+            let envelope = exp(-8.0 * progress)
+            let sample = Float(sin(phase) * envelope * 0.16)
+            output[index] += sample
+        }
+    }
+
+    nonisolated private static func renderSnare(
+        step: Int,
+        into output: inout [Float],
+        samplesPerStep: Int,
+        sampleRate: Int
+    ) {
+        guard (0..<MusicSequence.steps).contains(step) else { return }
+
+        let startSample = step * samplesPerStep
+        let durationSamples = max(1, Int((0.16 * Double(sampleRate)).rounded()))
+        let seed: UInt32 = 0x5A17E
+
+        for localSample in 0..<durationSamples {
+            let index = startSample + localSample
+            guard index < output.count else { break }
+
+            let progress = Double(localSample) / Double(durationSamples)
+            let envelope = exp(-12.0 * progress)
+            let sample = deterministicNoise(sampleIndex: index, seed: seed) * Float(envelope * 0.075)
+            output[index] += sample
+        }
+    }
+
+    nonisolated private static func renderClosedHat(
+        step: Int,
+        into output: inout [Float],
+        samplesPerStep: Int,
+        sampleRate: Int
+    ) {
+        guard (0..<MusicSequence.steps).contains(step) else { return }
+
+        let startSample = step * samplesPerStep
+        let durationSamples = max(1, Int((0.05 * Double(sampleRate)).rounded()))
+        let seed: UInt32 = 0xC105ED
+
+        for localSample in 0..<durationSamples {
+            let index = startSample + localSample
+            guard index < output.count else { break }
+
+            let currentNoise = deterministicNoise(sampleIndex: index, seed: seed)
+            let previousNoise: Float
+            if localSample == 0 {
+                previousNoise = 0
+            } else {
+                previousNoise = deterministicNoise(sampleIndex: index - 1, seed: seed)
+            }
+
+            let progress = Double(localSample) / Double(durationSamples)
+            let envelope = exp(-35.0 * progress)
+            let sample = (currentNoise - previousNoise) * Float(envelope * 0.028)
+            output[index] += sample
+        }
+    }
+
+    nonisolated private static func deterministicNoise(sampleIndex: Int, seed: UInt32) -> Float {
+        var value = UInt32(truncatingIfNeeded: sampleIndex) &+ seed
+        value ^= value >> 16
+        value = value &* 0x7FEB352D
+        value ^= value >> 15
+        value = value &* 0x846CA68B
+        value ^= value >> 16
+
+        let normalized = Double(value) / Double(UInt32.max)
+        return Float(normalized * 2.0 - 1.0)
     }
 
     nonisolated private static func waveformTable(_ waveform: MusicWaveform, size: Int) -> [Float] {

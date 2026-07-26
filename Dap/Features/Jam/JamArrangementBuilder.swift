@@ -3,6 +3,7 @@ import Foundation
 
 struct JamArrangementBuilder {
     let bpm: Int
+    private let grooveLibrary = JamGrooveLibrary()
 
     func assignRoles(to sounds: [PhotoSound]) -> [AssignedSound] {
         let orderedSounds = sounds.sorted { lhs, rhs in
@@ -47,7 +48,7 @@ struct JamArrangementBuilder {
         }
 
         let preset = interpolatedPreset(for: vibePosition)
-        let registerShift = quantizedRegisterShift(for: preset.registerBias)
+        let registerShift = Int(preset.registerBias.rounded())
         let harmony = globalHarmony(for: assignedSounds.map { $0.sound })
         let melodyProfile = melodySound.sound.sequence.soundProfile
 
@@ -76,21 +77,28 @@ struct JamArrangementBuilder {
 
         guard !notes.isEmpty else { return nil }
 
-        return JamArrangement(
-            sequence: MusicSequence(
-                harmony: MusicHarmony(
-                    rootPitchClass: harmony.rootPitchClass,
-                    scale: harmony.scale,
-                    bpm: bpm
-                ),
-                notes: notes,
-                soundProfile: SoundProfile(
-                    gate: preset.gate,
-                    octaveRange: melodyProfile.octaveRange,
-                    waveform: melodyProfile.waveform
-                )
+        let sequence = MusicSequence(
+            harmony: MusicHarmony(
+                rootPitchClass: harmony.rootPitchClass,
+                scale: harmony.scale,
+                bpm: bpm
             ),
-            activeStepsBySoundID: activeStepsBySoundID
+            notes: notes,
+            soundProfile: SoundProfile(
+                gate: preset.gate,
+                octaveRange: melodyProfile.octaveRange,
+                waveform: melodyProfile.waveform
+            )
+        )
+        let percussion = grooveLibrary.pattern(
+            for: vibePosition,
+            soundIDs: sounds.map(\.id)
+        )
+
+        return JamArrangement(
+            sequence: sequence,
+            activeStepsBySoundID: activeStepsBySoundID,
+            percussion: percussion
         )
     }
 
@@ -228,13 +236,14 @@ struct JamArrangementBuilder {
         )
 
         return sampledNotes.map { note in
+            let shiftedTarget = min(108, max(48, note.midiNote + registerShift))
             let scaleMIDINote = nearestScaleMIDINote(
-                to: note.midiNote,
+                to: shiftedTarget,
                 rootPitchClass: harmony.rootPitchClass,
                 scale: harmony.scale,
                 range: 48...108
             )
-            let targetMIDINote = min(108, max(48, scaleMIDINote + registerShift))
+            let targetMIDINote = min(108, max(48, scaleMIDINote))
 
             return MusicNote(
                 step: note.step,
@@ -498,29 +507,6 @@ struct JamArrangementBuilder {
         )
     }
 
-    private func quantizedRegisterShift(for registerBias: Double) -> Int {
-        let candidates = [-12, 0, 12]
-        var bestCandidate = 0
-        var bestDistance = Double.greatestFiniteMagnitude
-
-        for candidate in candidates {
-            let distance = abs(registerBias - Double(candidate))
-            if distance < bestDistance {
-                bestDistance = distance
-                bestCandidate = candidate
-                continue
-            }
-
-            guard distance == bestDistance else { continue }
-
-            if candidate == 0 {
-                bestCandidate = 0
-            }
-        }
-
-        return bestCandidate
-    }
-
     private func row(for midiNote: Int) -> Int {
         let normalized = Double(108 - min(108, max(48, midiNote))) / 60.0
         return min(7, max(0, Int((normalized * 7).rounded())))
@@ -547,6 +533,7 @@ struct AssignedSound: Identifiable, Equatable {
 struct JamArrangement {
     let sequence: MusicSequence
     let activeStepsBySoundID: [UUID: Set<Int>]
+    let percussion: MusicPercussionPattern
 }
 
 private struct GlobalHarmony {

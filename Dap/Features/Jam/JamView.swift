@@ -273,7 +273,11 @@ struct JamView: View {
         }
 
         activeArrangement = arrangement
-        library.playTransientSequence(arrangement.sequence)
+        library.playTransientSequence(
+            arrangement.sequence,
+            percussion: arrangement.percussion,
+            loops: true
+        )
         updateStepState(step: 0, arrangement: arrangement)
         isPlaying = true
         hasPendingArrangementChanges = false
@@ -320,12 +324,15 @@ struct JamView: View {
                         }
 
                         activeArrangement = nextArrangement
-                        library.playTransientSequence(nextArrangement.sequence)
+                        library.playTransientSequence(
+                            nextArrangement.sequence,
+                            percussion: nextArrangement.percussion,
+                            loops: true
+                        )
                         hasPendingArrangementChanges = false
                         appliedArrangementVersion += 1
                         updateStepState(step: 0, arrangement: nextArrangement)
                     } else if let activeArrangement {
-                        library.playTransientSequence(activeArrangement.sequence)
                         updateStepState(step: 0, arrangement: activeArrangement)
                     } else {
                         clearTransportAndPlayback()

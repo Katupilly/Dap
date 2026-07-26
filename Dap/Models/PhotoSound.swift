@@ -97,6 +97,12 @@ struct MusicNote: Codable, Sendable, Equatable, Identifiable {
 
 // MARK: - Music Sequence
 
+struct MusicPercussionPattern: Equatable, Sendable {
+    let kickSteps: Set<Int>
+    let snareSteps: Set<Int>
+    let closedHatSteps: Set<Int>
+}
+
 struct MusicSequence: Codable, Sendable, Equatable {
     static let steps = 16
     static let rows  = 8
