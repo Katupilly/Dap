@@ -21,6 +21,7 @@ struct JamView: View {
     @State private var activeSoundIDs: Set<UUID> = []
     @State private var activeArrangement: JamArrangement?
     @State private var transportTask: Task<Void, Never>?
+    @State private var appliedArrangementVersion = 0
 
     private var selectedSounds: [PhotoSound] {
         selectedSoundIDs.compactMap { id in
@@ -44,12 +45,50 @@ struct JamView: View {
         isPlaying ? .stop : .play
     }
 
-    private var roleBySoundID: [UUID: JamRole] {
-        Dictionary(uniqueKeysWithValues: assignedSounds.map { ($0.sound.id, $0.role) })
-    }
-
     private var applyingNextBar: Bool {
         isPlaying && hasPendingArrangementChanges
+    }
+
+    private var selectedPhotoCountSummary: String {
+        switch selectedSounds.count {
+        case 1:
+            return "1 photo"
+        case 2:
+            return "2 photos"
+        case 3:
+            return "3 photos"
+        default:
+            return "Select up to 3 photos"
+        }
+    }
+
+    private var presentedSelectedSounds: [PresentedJamSound] {
+        let assignedIDs = Set(assignedSounds.map(\.sound.id))
+        let arrangedSounds = assignedSounds.map {
+            PresentedJamSound(sound: $0.sound, role: $0.role)
+        }
+        let inactiveSelectedSounds = selectedSounds
+            .filter { !assignedIDs.contains($0.id) }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { PresentedJamSound(sound: $0, role: nil) }
+
+        return arrangedSounds + inactiveSelectedSounds
+    }
+
+    private var transportStatusTitle: String {
+        if !isPlaying {
+            return "Ready"
+        }
+
+        return applyingNextBar ? "Next bar" : "Playing"
+    }
+
+    private var transportStatusAccessibilityLabel: String {
+        if applyingNextBar {
+            return "Changes queued for next bar"
+        }
+
+        return transportStatusTitle
     }
 
     var body: some View {
@@ -62,19 +101,12 @@ struct JamView: View {
                         emptyState
                     } else {
                         selectedPhotoPreview
-                        barProgressView
+                        transportStrip
 
                         VibeControl(position: $vibePosition) {
                             if isPlaying {
                                 hasPendingArrangementChanges = true
                             }
-                        }
-
-                        if applyingNextBar {
-                            Text("Applying next bar")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                         playbackButton
@@ -87,6 +119,7 @@ struct JamView: View {
             }
             .background(Color(uiColor: .systemBackground))
             .navigationBarTitleDisplayMode(.inline)
+            .sensoryFeedback(.selection, trigger: appliedArrangementVersion)
             .sheet(isPresented: $isPhotoSelectorPresented) {
                 JamPhotoSelectorSheet(
                     sounds: library.items,
@@ -124,30 +157,13 @@ struct JamView: View {
                 .font(.largeTitle.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if selectedSounds.isEmpty {
-                Text("Choose up to three photos to build one shared arrangement.")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if assignedSounds.isEmpty {
-                Text("Selected photos do not contain musical material.")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Text(roleSummary)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            Text("\(selectedPhotoCountSummary) · 96 BPM · 16-step loop")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.15), value: selectedPhotoCountSummary)
         }
-    }
-
-    private var roleSummary: String {
-        assignedSounds.map {
-            "\($0.role.displayName): \($0.sound.name ?? $0.sound.sequence.displayLabel)"
-        }
-        .joined(separator: "  ·  ")
     }
 
     private var emptyState: some View {
@@ -164,37 +180,48 @@ struct JamView: View {
     }
 
     private var selectedPhotoPreview: some View {
-        VStack(spacing: 16) {
-            HStack(spacing: 12) {
-                ForEach(selectedSounds) { sound in
-                    JamSelectedPhotoTile(
-                        sound: sound,
-                        coverData: library.coverDataByID[sound.id],
-                        role: roleBySoundID[sound.id],
-                        isActive: activeSoundIDs.contains(sound.id),
-                        reduceMotion: reduceMotion
-                    )
-                }
+        HStack(spacing: 12) {
+            ForEach(presentedSelectedSounds) { presentedSound in
+                JamSelectedPhotoTile(
+                    sound: presentedSound.sound,
+                    coverData: library.coverDataByID[presentedSound.sound.id],
+                    role: presentedSound.role,
+                    isActive: presentedSound.role != nil && activeSoundIDs.contains(presentedSound.sound.id),
+                    reduceMotion: reduceMotion
+                )
             }
-
-            Text("Shared key with fixed 96 BPM over one 16-step loop.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
     }
 
-    private var barProgressView: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<jamStepsPerBar, id: \.self) { step in
-                Capsule(style: .continuous)
-                    .fill(step == currentStep ? Color.primary : Color.secondary.opacity(0.18))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 4)
+    private var transportStrip: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(transportStatusTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isPlaying ? .primary : .secondary)
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.15), value: transportStatusTitle)
+
+            HStack(spacing: 4) {
+                ForEach(0..<jamStepsPerBar, id: \.self) { step in
+                    Capsule(style: .continuous)
+                        .fill(step == currentStep ? Color.primary : Color.secondary.opacity(isPlaying ? 0.22 : 0.12))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 6)
+                        .animation(.easeInOut(duration: jamStepDuration * 0.35), value: currentStep)
+                }
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        }
         .frame(maxWidth: .infinity)
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(transportStatusAccessibilityLabel)
     }
 
     private var playbackButton: some View {
@@ -206,9 +233,13 @@ struct JamView: View {
                 clearTransportAndPlayback()
             }
         } label: {
-            Label(playbackAction.title, systemImage: playbackAction.systemImage)
-                .font(.headline)
-                .frame(maxWidth: .infinity)
+            HStack(spacing: 10) {
+                Image(systemName: playbackAction.systemImage)
+                    .font(.headline.weight(.semibold))
+                Text(playbackAction.title)
+                    .font(.headline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(JamPrimaryButtonStyle())
         .disabled(!canPlay)
@@ -289,6 +320,7 @@ struct JamView: View {
                         activeArrangement = nextArrangement
                         library.playTransientSequence(nextArrangement.sequence)
                         hasPendingArrangementChanges = false
+                        appliedArrangementVersion += 1
                         updateStepState(step: 0, arrangement: nextArrangement)
                     } else if let activeArrangement {
                         library.playTransientSequence(activeArrangement.sequence)
@@ -842,7 +874,6 @@ struct JamView: View {
 private struct JamPhotoSelectorSheet: View {
     let sounds: [PhotoSound]
     let coverDataByID: [UUID: Data]
-    let selectedSoundIDs: [UUID]
     @Binding var isPresented: Bool
     let onConfirmSelection: ([UUID]) -> Void
 
@@ -854,31 +885,68 @@ private struct JamPhotoSelectorSheet: View {
         GridItem(.flexible(), spacing: 12)
     ]
 
+    private var selectionSummary: String {
+        switch pendingSelectionIDs.count {
+        case 0:
+            return "Select up to 3 photos"
+        case 1:
+            return "1 of 3 selected"
+        case 2:
+            return "2 of 3 selected"
+        default:
+            return "3 of 3 selected"
+        }
+    }
+
+    init(
+        sounds: [PhotoSound],
+        coverDataByID: [UUID: Data],
+        selectedSoundIDs: [UUID],
+        isPresented: Binding<Bool>,
+        onConfirmSelection: @escaping ([UUID]) -> Void
+    ) {
+        self.sounds = sounds
+        self.coverDataByID = coverDataByID
+        self._isPresented = isPresented
+        self.onConfirmSelection = onConfirmSelection
+        _pendingSelectionIDs = State(initialValue: Set(selectedSoundIDs))
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(sounds) { sound in
-                        let isSelected = pendingSelectionIDs.contains(sound.id)
-                        let canSelectMore = pendingSelectionIDs.count < 3 || isSelected
+                VStack(alignment: .leading, spacing: 18) {
+                    Text(selectionSummary)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Button {
-                            toggleSelection(for: sound.id)
-                        } label: {
-                            JamPhotoCell(
-                                sound: sound,
-                                coverData: coverDataByID[sound.id],
-                                isSelected: isSelected,
-                                isSelectable: canSelectMore
-                            )
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(sounds) { sound in
+                            let isSelected = pendingSelectionIDs.contains(sound.id)
+                            let canSelectMore = pendingSelectionIDs.count < 3 || isSelected
+
+                            Button {
+                                toggleSelection(for: sound.id)
+                            } label: {
+                                JamPhotoCell(
+                                    sound: sound,
+                                    coverData: coverDataByID[sound.id],
+                                    isSelected: isSelected,
+                                    isSelectable: canSelectMore,
+                                    selectionLimitReached: pendingSelectionIDs.count >= 3
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!canSelectMore)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(20)
             }
             .navigationTitle("Choose Photos")
             .navigationBarTitleDisplayMode(.inline)
+            .sensoryFeedback(.selection, trigger: pendingSelectionIDs)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -887,16 +955,13 @@ private struct JamPhotoSelectorSheet: View {
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Use Photos") {
+                    Button("Use") {
                         let stableSelection = pendingSelectionIDs.sorted { $0.uuidString < $1.uuidString }
                         onConfirmSelection(stableSelection)
                         isPresented = false
                     }
                     .disabled(pendingSelectionIDs.isEmpty)
                 }
-            }
-            .onAppear {
-                pendingSelectionIDs = Set(selectedSoundIDs)
             }
         }
     }
@@ -915,44 +980,7 @@ private struct JamPhotoCell: View {
     let coverData: Data?
     let isSelected: Bool
     let isSelectable: Bool
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Group {
-                if let coverData, let image = UIImage(data: coverData) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    Rectangle()
-                        .fill(.secondary.opacity(0.18))
-                }
-            }
-            .aspectRatio(4 / 5, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isSelected ? Color.primary : Color.clear, lineWidth: 3)
-            }
-
-            Text(sound.name ?? sound.sequence.displayLabel)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-        }
-        .opacity(isSelectable ? 1 : 0.45)
-        .accessibilityLabel(sound.name ?? sound.sequence.displayLabel)
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : [.isButton])
-    }
-}
-
-private struct JamSelectedPhotoTile: View {
-    let sound: PhotoSound
-    let coverData: Data?
-    let role: JamRole?
-    let isActive: Bool
-    let reduceMotion: Bool
+    let selectionLimitReached: Bool
 
     var body: some View {
         VStack(spacing: 8) {
@@ -964,32 +992,30 @@ private struct JamSelectedPhotoTile: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .stroke(borderColor, lineWidth: isActive ? 2 : 1)
+                        .stroke(isSelected ? Color.white.opacity(0.88) : Color.white.opacity(0.12), lineWidth: isSelected ? 2 : 1)
                 }
-                .overlay(alignment: .topLeading) {
-                    if let role {
-                        Text(role.displayName)
-                            .font(.caption2.weight(.semibold))
+                .overlay(alignment: .topTrailing) {
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 4)
-                            .background(Color.black.opacity(0.65), in: Capsule())
                             .padding(6)
+                            .accessibilityHidden(true)
                     }
                 }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Color.white.opacity(isActive ? 0.08 : 0))
-                }
-                .scaleEffect(reduceMotion ? 1 : (isActive ? 1.03 : 1.0))
-                .animation(reduceMotion ? nil : .easeInOut(duration: jamStepDuration * 0.6), value: isActive)
 
             Text(sound.name ?? sound.sequence.displayLabel)
-                .font(.caption)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, minHeight: 16, maxHeight: 16, alignment: .top)
         }
-        .frame(maxWidth: .infinity)
+        .opacity(isSelectable ? 1 : 0.42)
+        .contentShape(Rectangle())
+        .accessibilityLabel(sound.name ?? sound.sequence.displayLabel)
+        .accessibilityHint(accessibilityHint)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : [.isButton])
     }
 
     @ViewBuilder
@@ -999,6 +1025,77 @@ private struct JamSelectedPhotoTile: View {
                 .resizable()
                 .scaledToFill()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+        } else {
+            Rectangle()
+                .fill(.secondary.opacity(0.18))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var accessibilityHint: String {
+        if isSelected {
+            return "Removes this photo from the selection."
+        }
+
+        if !isSelectable && selectionLimitReached {
+            return "Selection limit reached. Remove a selected photo to choose another."
+        }
+
+        return "Adds this photo to the selection."
+    }
+}
+
+private struct JamSelectedPhotoTile: View {
+    let sound: PhotoSound
+    let coverData: Data?
+    let role: JamRole?
+    let isActive: Bool
+    let reduceMotion: Bool
+
+    var body: some View {
+        Color.clear
+            .aspectRatio(4.0 / 5.0, contentMode: .fit)
+            .overlay {
+                coverImage
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(borderColor, lineWidth: isActive ? 2 : 1)
+            }
+            .overlay(alignment: .topLeading) {
+                if let role {
+                    Text(role.displayName)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.64), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .padding(6)
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.white.opacity(isActive ? 0.08 : 0))
+            }
+            .opacity(role == nil ? 0.58 : 1)
+            .scaleEffect(reduceMotion ? 1 : (isActive ? 1.03 : 1.0))
+            .animation(reduceMotion ? nil : .easeInOut(duration: jamStepDuration * 0.6), value: isActive)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(sound.name ?? sound.sequence.displayLabel)
+        .accessibilityValue(accessibilityValue)
+    }
+
+    @ViewBuilder
+    private var coverImage: some View {
+        if let coverData, let image = UIImage(data: coverData) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
         } else {
             Rectangle()
                 .fill(.secondary.opacity(0.18))
@@ -1008,10 +1105,18 @@ private struct JamSelectedPhotoTile: View {
 
     private var borderColor: Color {
         if isActive {
-            return .primary
+            return .white.opacity(0.88)
         }
 
-        return .secondary.opacity(0.18)
+        return .white.opacity(role == nil ? 0.08 : 0.12)
+    }
+
+    private var accessibilityValue: String {
+        if let role {
+            return isActive ? "\(role.displayName), active on this step" : role.displayName
+        }
+
+        return "No musical material"
     }
 }
 
@@ -1023,6 +1128,7 @@ private struct VibeControl: View {
 
     @State private var lastQuadrant: Quadrant?
     @State private var feedbackGenerator = UIImpactFeedbackGenerator(style: .light)
+    @GestureState private var isDragging = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -1034,10 +1140,12 @@ private struct VibeControl: View {
 
             ZStack {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(Color.secondary.opacity(0.08))
+                    .fill(Color.secondary.opacity(0.07))
+
+                quadrantHighlights
 
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.24), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
 
                 crosshair
 
@@ -1048,14 +1156,23 @@ private struct VibeControl: View {
                     .frame(width: 30, height: 30)
                     .overlay {
                         Circle()
+                            .stroke(Color.white.opacity(0.14), lineWidth: 10)
+                            .blur(radius: 2)
+                    }
+                    .overlay {
+                        Circle()
                             .stroke(Color(uiColor: .systemBackground), lineWidth: 3)
                     }
-                    .shadow(color: .black.opacity(reduceMotion ? 0 : 0.12), radius: reduceMotion ? 0 : 10, y: reduceMotion ? 0 : 5)
+                    .scaleEffect(isDragging && !reduceMotion ? 1.03 : 1)
+                    .shadow(color: .black.opacity(reduceMotion ? 0 : 0.14), radius: reduceMotion ? 0 : 8, y: reduceMotion ? 0 : 4)
                     .position(handlePosition)
             }
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
+                    .updating($isDragging) { _, state, _ in
+                        state = true
+                    }
                     .onChanged { value in
                         let newPosition = normalizedPosition(for: value.location, in: size)
                         position = newPosition
@@ -1104,8 +1221,18 @@ private struct VibeControl: View {
                 path.move(to: CGPoint(x: 0, y: geometry.size.height / 2))
                 path.addLine(to: CGPoint(x: geometry.size.width, y: geometry.size.height / 2))
             }
-            .stroke(Color.secondary.opacity(0.18), style: StrokeStyle(lineWidth: 1, dash: [6, 6]))
+            .stroke(Color.white.opacity(0.10), style: StrokeStyle(lineWidth: 1, dash: [6, 6]))
         }
+    }
+
+    private var quadrantHighlights: some View {
+        ZStack {
+            LinearGradient(colors: [Color.white.opacity(0.08), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: [Color.white.opacity(0.05), .clear], startPoint: .topTrailing, endPoint: .bottomLeading)
+            LinearGradient(colors: [.clear, Color.white.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomLeading)
+            LinearGradient(colors: [.clear, Color.white.opacity(0.03)], startPoint: .topTrailing, endPoint: .bottomTrailing)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var cornerLabels: some View {
@@ -1128,15 +1255,15 @@ private struct VibeControl: View {
     }
 
     private func cornerLabel(_ title: String, weight: CGFloat) -> some View {
-        let prominence = 0.45 + weight * 0.55
+        let prominence = 0.42 + weight * 0.58
 
         return Text(title)
-            .font(.footnote.weight(weight > 0.5 ? .bold : .semibold))
-            .foregroundStyle(.secondary.opacity(prominence))
+            .font(.footnote.weight(weight > 0.55 ? .bold : .semibold))
+            .foregroundStyle(Color.primary.opacity(prominence))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(Color(uiColor: .systemBackground).opacity(0.72), in: Capsule())
-            .scaleEffect(0.94 + weight * 0.08)
+            .background(Color(uiColor: .systemBackground).opacity(0.62), in: Capsule())
+            .scaleEffect(0.95 + weight * 0.07)
     }
 
     private func normalizedPosition(for location: CGPoint, in size: CGSize) -> CGPoint {
@@ -1181,10 +1308,16 @@ private enum Quadrant: Equatable {
 private struct JamPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .padding(.vertical, 16)
+            .padding(.vertical, 17)
             .padding(.horizontal, 18)
             .foregroundStyle(.white)
-            .background(Color.black.opacity(configuration.isPressed ? 0.82 : 1), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(Color.black.opacity(configuration.isPressed ? 0.9 : 1), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            }
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -1196,6 +1329,10 @@ private struct JamSecondaryButtonStyle: ButtonStyle {
             .padding(.horizontal, 18)
             .foregroundStyle(.primary)
             .background(Color.secondary.opacity(configuration.isPressed ? 0.16 : 0.1), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            }
     }
 }
 
@@ -1256,6 +1393,13 @@ private struct CornerWeights {
     let bright: CGFloat
     let deep: CGFloat
     let intense: CGFloat
+}
+
+private struct PresentedJamSound: Identifiable {
+    let sound: PhotoSound
+    let role: JamRole?
+
+    var id: UUID { sound.id }
 }
 
 private let airyPreset = VibePreset(density: 0.40, registerBias: 7, gate: 0.72)
