@@ -13,6 +13,8 @@
 		AA000001000000000000003C /* PhotoInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003D /* PhotoInspectorView.swift */; };
 		AA000001000000000000004A /* JamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004B /* JamView.swift */; };
 		AA000001000000000000004C /* JamArrangementBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004D /* JamArrangementBuilder.swift */; };
+		AA0000010000000000000196 /* JamAssignments.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000197 /* JamAssignments.swift */; };
+		AA0000010000000000000198 /* JamPhotoSelectorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */; };
 		AA000001000000000000017A /* JamGrooveLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000017B /* JamGrooveLibrary.swift */; };
 		AA000001000000000000005C /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000005D /* CameraView.swift */; };
 		AA0000010000000000000190 /* DapLavaLamp.metal in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000191 /* DapLavaLamp.metal */; };
@@ -37,6 +39,8 @@
 		AA000001000000000000003D /* PhotoInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoInspectorView.swift; sourceTree = "<group>"; };
 		AA000001000000000000004B /* JamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamView.swift; sourceTree = "<group>"; };
 		AA000001000000000000004D /* JamArrangementBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamArrangementBuilder.swift; sourceTree = "<group>"; };
+		AA0000010000000000000197 /* JamAssignments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamAssignments.swift; sourceTree = "<group>"; };
+		AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPhotoSelectorSheet.swift; sourceTree = "<group>"; };
 		AA000001000000000000017B /* JamGrooveLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamGrooveLibrary.swift; sourceTree = "<group>"; };
 		AA000001000000000000005D /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		AA0000010000000000000191 /* DapLavaLamp.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = DapLavaLamp.metal; sourceTree = "<group>"; };
@@ -168,8 +172,10 @@
 		AA0000010000000000000095 /* Jam */ = {
 			isa = PBXGroup;
 			children = (
+				AA0000010000000000000197 /* JamAssignments.swift */,
 				AA000001000000000000004D /* JamArrangementBuilder.swift */,
 				AA000001000000000000017B /* JamGrooveLibrary.swift */,
+				AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */,
 				AA000001000000000000004B /* JamView.swift */,
 			);
 			path = Jam;
@@ -259,8 +265,10 @@
 				AA000001000000000000002A /* AppRootView.swift in Sources */,
 				AA000001000000000000003A /* GalleryView.swift in Sources */,
 				AA000001000000000000003C /* PhotoInspectorView.swift in Sources */,
+				AA0000010000000000000196 /* JamAssignments.swift in Sources */,
 				AA000001000000000000004C /* JamArrangementBuilder.swift in Sources */,
 				AA000001000000000000017A /* JamGrooveLibrary.swift in Sources */,
+				AA0000010000000000000198 /* JamPhotoSelectorSheet.swift in Sources */,
 				AA000001000000000000004A /* JamView.swift in Sources */,
 				AA000001000000000000005C /* CameraView.swift in Sources */,
 				AA0000010000000000000190 /* DapLavaLamp.metal in Sources */,

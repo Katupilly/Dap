@@ -14,7 +14,8 @@ struct JamView: View {
 
     private let arrangementBuilder = JamArrangementBuilder(bpm: Int(jamBPM))
 
-    @State private var selectedSoundIDs: [UUID] = []
+    @State private var selectedPhotoIDs: [UUID] = []
+    @State private var slotAssignments = JamSlotAssignments()
     @State private var vibePosition = CGPoint(x: 0.5, y: 0.5)
     @State private var drumKitSelection: MusicDrumKitSelection = .auto
     @State private var isPhotoSelectorPresented = false
@@ -31,7 +32,7 @@ struct JamView: View {
     @State private var appliedArrangementVersion = 0
 
     private var selectedSounds: [PhotoSound] {
-        selectedSoundIDs.compactMap { id in
+        selectedPhotoIDs.compactMap { id in
             library.items.first(where: { $0.id == id })
         }
     }
@@ -41,7 +42,20 @@ struct JamView: View {
     }
 
     private var assignedSounds: [AssignedSound] {
-        arrangementBuilder.assignRoles(to: playableSelectedSounds)
+        let roleByID = slotAssignments.assignedRolesByID
+        let orderedRoles: [JamRole] = [.bass, .harmony, .melody]
+        var seen: Set<UUID> = []
+        var result: [AssignedSound] = []
+
+        for sound in playableSelectedSounds where !seen.contains(sound.id) {
+            guard let role = roleByID[sound.id] else { continue }
+            seen.insert(sound.id)
+            result.append(AssignedSound(sound: sound, role: role))
+        }
+
+        return orderedRoles.compactMap { role in
+            result.first(where: { $0.role == role })
+        }
     }
 
     private var canPlay: Bool {
@@ -57,7 +71,7 @@ struct JamView: View {
     }
 
     private var selectedPhotoCountSummary: String {
-        switch selectedSounds.count {
+        switch selectedPhotoIDs.count {
         case 1:
             return "1 photo"
         case 2:
@@ -70,16 +84,28 @@ struct JamView: View {
     }
 
     private var presentedSelectedSounds: [PresentedJamSound] {
-        let assignedIDs = Set(assignedSounds.map(\.sound.id))
-        let arrangedSounds = assignedSounds.map {
-            PresentedJamSound(sound: $0.sound, role: $0.role)
+        let selectionIDSet = Set(selectedPhotoIDs)
+        let orderedAssigned: [(UUID?, JamRole)] = [
+            (slotAssignments.bass, .bass),
+            (slotAssignments.harmony, .harmony),
+            (slotAssignments.melody, .melody)
+        ]
+
+        let arranged = orderedAssigned.compactMap { id, role -> PresentedJamSound? in
+            guard let id, selectionIDSet.contains(id),
+                  let sound = library.items.first(where: { $0.id == id }) else {
+                return nil
+            }
+            return PresentedJamSound(sound: sound, role: role)
         }
-        let inactiveSelectedSounds = selectedSounds
+
+        let assignedIDs = Set(arranged.map(\.sound.id))
+        let unassignedSounds = selectedSounds
             .filter { !assignedIDs.contains($0.id) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { PresentedJamSound(sound: $0, role: nil) }
 
-        return arrangedSounds + inactiveSelectedSounds
+        return arranged + unassignedSounds
     }
 
     private var transportStatusTitle: String {
@@ -136,7 +162,7 @@ struct JamView: View {
                 JamPhotoSelectorSheet(
                     sounds: library.items,
                     coverDataByID: library.coverDataByID,
-                    selectedSoundIDs: selectedSoundIDs,
+                    selectedPhotoIDs: selectedPhotoIDs,
                     isPresented: $isPhotoSelectorPresented,
                     onConfirmSelection: confirmPhotoSelection
                 )
@@ -156,29 +182,27 @@ struct JamView: View {
             }
             .onChange(of: library.items.map(\.id)) { _, itemIDs in
                 let validIDs = Set(itemIDs)
-                let filtered = selectedSoundIDs.filter(validIDs.contains)
-                if filtered != selectedSoundIDs {
-                    if isPlaying {
-                        hasPendingArrangementChanges = true
-                    }
-                    selectedSoundIDs = filtered
+                let cleanedSelection = selectedPhotoIDs.filter(validIDs.contains)
+                let cleanedAssignments = slotAssignments.pruningInvalidIDs(validIDs: validIDs)
+
+                let selectionChanged = cleanedSelection != selectedPhotoIDs
+                let assignmentsChanged = cleanedAssignments != slotAssignments
+                guard selectionChanged || assignmentsChanged else { return }
+
+                if isPlaying {
+                    hasPendingArrangementChanges = true
+                }
+
+                if selectionChanged {
+                    selectedPhotoIDs = cleanedSelection
+                }
+                if assignmentsChanged {
+                    slotAssignments = cleanedAssignments
                 }
             }
             .onChange(of: library.isTransientPlaybackActive) { _, isActive in
                 guard !isActive, isPlaying else { return }
                 clearTransportState()
-            }
-            .onChange(of: selectedSoundIDs) { _, newValue in
-                let validIDs = newValue.filter { id in
-                    library.items.contains(where: { $0.id == id })
-                }
-
-                if validIDs != newValue {
-                    if isPlaying {
-                        hasPendingArrangementChanges = true
-                    }
-                    selectedSoundIDs = validIDs
-                }
             }
         }
     }
@@ -363,9 +387,32 @@ struct JamView: View {
 
     private func confirmPhotoSelection(_ newSelectionIDs: [UUID]) {
         let stableSelection = newSelectionIDs.sorted { $0.uuidString < $1.uuidString }
-        guard stableSelection != selectedSoundIDs else { return }
+        let validIDs = Set(library.items.map(\.id))
+        let confirmedIDs = stableSelection.filter { validIDs.contains($0) }
 
-        selectedSoundIDs = stableSelection
+        // Same selection (any order) is a no-op so a future manual slot
+        // swap is not undone by re-running `assignRoles` when the user
+        // simply re-confirms the same photos in the selector.
+        guard Set(confirmedIDs) != Set(selectedPhotoIDs) else { return }
+
+        selectedPhotoIDs = confirmedIDs
+
+        let resolvedSounds = confirmedIDs.compactMap { id in
+            library.items.first(where: { $0.id == id })
+        }
+        let playableSounds = resolvedSounds.filter { !$0.sequence.notes.isEmpty }
+
+        let newAssignments: JamSlotAssignments
+        switch playableSounds.count {
+        case 0:
+            newAssignments = JamSlotAssignments()
+        default:
+            let initialAssigned = arrangementBuilder.assignRoles(to: playableSounds)
+            newAssignments = JamSlotAssignments(assignedSounds: initialAssigned)
+        }
+
+        guard newAssignments != slotAssignments else { return }
+        slotAssignments = newAssignments
         if isPlaying {
             hasPendingArrangementChanges = true
         }
@@ -510,7 +557,7 @@ struct JamView: View {
         let drumKit = resolvedDrumKit(selection: drumKitSelection, region: region)
 
         return arrangementBuilder.build(
-            sounds: playableSelectedSounds,
+            assignedSounds: assignedSounds,
             vibePosition: vibePosition,
             drumKit: drumKit
         )
@@ -593,181 +640,6 @@ struct JamView: View {
         } else {
             Text(selection.displayName)
         }
-    }
-}
-
-private struct JamPhotoSelectorSheet: View {
-    let sounds: [PhotoSound]
-    let coverDataByID: [UUID: Data]
-    @Binding var isPresented: Bool
-    let onConfirmSelection: ([UUID]) -> Void
-
-    @State private var pendingSelectionIDs: Set<UUID> = []
-
-    private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
-
-    private var selectionSummary: String {
-        switch pendingSelectionIDs.count {
-        case 0:
-            return "Select up to 3 photos"
-        case 1:
-            return "1 of 3 selected"
-        case 2:
-            return "2 of 3 selected"
-        default:
-            return "3 of 3 selected"
-        }
-    }
-
-    init(
-        sounds: [PhotoSound],
-        coverDataByID: [UUID: Data],
-        selectedSoundIDs: [UUID],
-        isPresented: Binding<Bool>,
-        onConfirmSelection: @escaping ([UUID]) -> Void
-    ) {
-        self.sounds = sounds
-        self.coverDataByID = coverDataByID
-        self._isPresented = isPresented
-        self.onConfirmSelection = onConfirmSelection
-        _pendingSelectionIDs = State(initialValue: Set(selectedSoundIDs))
-    }
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text(selectionSummary)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(sounds) { sound in
-                            let isSelected = pendingSelectionIDs.contains(sound.id)
-                            let canSelectMore = pendingSelectionIDs.count < 3 || isSelected
-
-                            Button {
-                                toggleSelection(for: sound.id)
-                            } label: {
-                                JamPhotoCell(
-                                    sound: sound,
-                                    coverData: coverDataByID[sound.id],
-                                    isSelected: isSelected,
-                                    isSelectable: canSelectMore,
-                                    selectionLimitReached: pendingSelectionIDs.count >= 3
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!canSelectMore)
-                        }
-                    }
-                }
-                .padding(20)
-            }
-            .navigationTitle("Choose Photos")
-            .navigationBarTitleDisplayMode(.inline)
-            .sensoryFeedback(.selection, trigger: pendingSelectionIDs)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        isPresented = false
-                    }
-                }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Use") {
-                        let stableSelection = pendingSelectionIDs.sorted { $0.uuidString < $1.uuidString }
-                        onConfirmSelection(stableSelection)
-                        isPresented = false
-                    }
-                    .disabled(pendingSelectionIDs.isEmpty)
-                }
-            }
-        }
-    }
-
-    private func toggleSelection(for id: UUID) {
-        if pendingSelectionIDs.contains(id) {
-            pendingSelectionIDs.remove(id)
-        } else if pendingSelectionIDs.count < 3 {
-            pendingSelectionIDs.insert(id)
-        }
-    }
-}
-
-private struct JamPhotoCell: View {
-    let sound: PhotoSound
-    let coverData: Data?
-    let isSelected: Bool
-    let isSelectable: Bool
-    let selectionLimitReached: Bool
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Color.clear
-                .aspectRatio(4.0 / 5.0, contentMode: .fit)
-                .overlay {
-                    coverImage
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .stroke(isSelected ? Color.white.opacity(0.88) : Color.white.opacity(0.12), lineWidth: isSelected ? 2 : 1)
-                }
-                .overlay(alignment: .topTrailing) {
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(6)
-                            .accessibilityHidden(true)
-                    }
-                }
-
-            Text(sound.name ?? sound.sequence.displayLabel)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, minHeight: 16, maxHeight: 16, alignment: .top)
-        }
-        .opacity(isSelectable ? 1 : 0.42)
-        .contentShape(Rectangle())
-        .accessibilityLabel(sound.name ?? sound.sequence.displayLabel)
-        .accessibilityHint(accessibilityHint)
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : [.isButton])
-    }
-
-    @ViewBuilder
-    private var coverImage: some View {
-        if let coverData, let image = UIImage(data: coverData) {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-        } else {
-            Rectangle()
-                .fill(.secondary.opacity(0.18))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private var accessibilityHint: String {
-        if isSelected {
-            return "Removes this photo from the selection."
-        }
-
-        if !isSelectable && selectionLimitReached {
-            return "Selection limit reached. Remove a selected photo to choose another."
-        }
-
-        return "Adds this photo to the selection."
     }
 }
 

@@ -44,6 +44,18 @@ struct JamArrangementBuilder {
         drumKit: MusicDrumKit
     ) -> JamArrangement? {
         let assignedSounds = assignRoles(to: sounds)
+        return build(
+            assignedSounds: assignedSounds,
+            vibePosition: vibePosition,
+            drumKit: drumKit
+        )
+    }
+
+    func build(
+        assignedSounds: [AssignedSound],
+        vibePosition: CGPoint,
+        drumKit: MusicDrumKit
+    ) -> JamArrangement? {
         guard let melodySound = assignedSounds.first(where: { $0.role == .melody }) else {
             return nil
         }
@@ -55,7 +67,7 @@ struct JamArrangementBuilder {
         let region = JamGrooveLibrary.region(for: vibePosition)
         let percussion = grooveLibrary.pattern(
             for: vibePosition,
-            soundIDs: sounds.map(\.id),
+            soundIDs: assignedSounds.map(\.sound.id),
             drumKit: drumKit
         )
 
@@ -1424,23 +1436,6 @@ struct JamArrangementBuilder {
         let normalized = Double(108 - min(108, max(48, midiNote))) / 60.0
         return min(7, max(0, Int((normalized * 7).rounded())))
     }
-}
-
-enum JamRole: String, Equatable {
-    case bass
-    case harmony
-    case melody
-
-    var displayName: String {
-        rawValue.capitalized
-    }
-}
-
-struct AssignedSound: Identifiable, Equatable {
-    let sound: PhotoSound
-    let role: JamRole
-
-    var id: UUID { sound.id }
 }
 
 struct JamArrangement {
