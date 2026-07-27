@@ -221,6 +221,20 @@ final class PhotoLibraryViewModel {
         }
     }
 
+    func delete(sound: PhotoSound) async throws {
+        let updated = try await PhotoStore.shared.delete(id: sound.id)
+
+        if playingID == sound.id {
+            stopPlayback()
+        }
+
+        metadataTasks[sound.id]?.cancel()
+        metadataTasks.removeValue(forKey: sound.id)
+        refiningMetadataIDs.remove(sound.id)
+        coverDataByID.removeValue(forKey: sound.id)
+        items = updated
+    }
+
     // MARK: - Playback
 
     /// Toggles playback for a sound:
