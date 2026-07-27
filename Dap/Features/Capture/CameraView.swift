@@ -14,6 +14,7 @@ struct CameraView: View {
     @State private var controller: CameraController?
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var isPhotoPickerPresented = false
+    @State private var isCameraObscured = false
     @State private var isFlashOn = false
     @State private var isFlashAvailable = false
     @State private var isZoomed = false
@@ -47,6 +48,13 @@ struct CameraView: View {
                     .ignoresSafeArea(edges: .horizontal)
                     .padding(.top, 98)
                     .padding(.bottom, 189)
+                    .overlay {
+                        if isCameraObscured {
+                            Color.cameraChrome
+                                .ignoresSafeArea()
+                                .transition(.opacity.animation(reduceMotion ? nil : .easeOut(duration: 0.12)))
+                        }
+                    }
             } else {
                 Color.cameraChrome
                     .ignoresSafeArea()
@@ -70,9 +78,13 @@ struct CameraView: View {
         )
         .onChange(of: isPhotoPickerPresented) { _, isPresented in
             if isPresented {
+                isCameraObscured = true
                 controller?.stop()
-            } else if selectedPhotos.isEmpty, state == .ready {
-                controller?.start()
+            } else {
+                isCameraObscured = false
+                if selectedPhotos.isEmpty, state == .ready {
+                    controller?.start()
+                }
             }
         }
         .onChange(of: selectedPhotos) { _, newValue in

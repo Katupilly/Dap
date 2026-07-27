@@ -39,6 +39,7 @@ enum PhotoMusicPipeline {
     private static let colorPipelineAlgorithmVersion = 2
     private static let weightedHueFallbackRatio      = 0.003
     private static let weightedHueSofteningExponent  = 0.85
+    private static let toneAnalysisMaximumDimension  = 256
 
     // MARK: Color analysis result (local, not persisted)
 
@@ -64,30 +65,27 @@ enum PhotoMusicPipeline {
             // 2. Analyze color on a 64×64 scaled version of the shared CGImage.
             let colorProfile = try analyzeColor(cgImage: normalized)
 
-            // 3. Legacy Floyd–Steinberg image stays isolated to tone analysis.
-            let retroCG = try RetroCoverRenderer.floydSteinberg(cgImage: normalized)
+            // 3. Tone analysis stays on direct source luminance so cover tuning does not change music.
+            let (gridLevels, significantToneCount) = try analyzeTones(cgImage: normalized)
 
-            // 4. Tone analysis on the retro image (shared CGImage, no re-decode).
-            let (gridLevels, significantToneCount) = try analyzeTones(cgImage: retroCG)
-
-            // 5. Build musical sequence from color profile + tone grid.
+            // 4. Build musical sequence from color profile + tone grid.
             let sequence = buildSequence(
                 colorProfile: colorProfile,
                 gridLevels: gridLevels,
                 significantToneCount: significantToneCount
             )
 
-            // 6. Resolve the persisted cover palette from the selected root pitch.
+            // 5. Resolve the persisted cover palette from the selected root pitch.
             let rootPitchClass = colorProfile.rootPitchClass
             let palette = RetroCoverRenderer.tonalPalette(for: rootPitchClass)
 
-            // 7. Render the new pattern halftone cover from the prepared original image.
+            // 6. Render the new pattern halftone cover from the prepared original image.
             let coverCG = try RetroCoverRenderer.patternHalftone(cgImage: normalized, palette: palette)
             guard let pngData = UIImage(cgImage: coverCG).pngData() else {
                 throw PhotoMusicPipelineError.encodeFailed
             }
 
-            // 8. Assemble result — only Sendable values cross out of this task.
+            // 7. Assemble result — only Sendable values cross out of this task.
             let id    = UUID()
             let sound = PhotoSound(
                 id: id,
@@ -196,9 +194,13 @@ enum PhotoMusicPipeline {
     // MARK: - Tone analysis (adapted from ImageSequenceGenerator.analyzeTones)
 
     private static func analyzeTones(cgImage source: CGImage) throws -> ([Int], Int) {
-        let fullLevels = try toneLevels(source, width: source.width, height: source.height)
-        let total      = fullLevels.count
-        let counts     = (0...3).map { lv in fullLevels.filter { $0 == lv }.count }
+        let significantSize = toneAnalysisSize(for: source)
+        let fullLevels = try toneLevels(source, width: significantSize.width, height: significantSize.height)
+        let total = max(1, fullLevels.count)
+        var counts = [Int](repeating: 0, count: 4)
+        for level in fullLevels {
+            counts[level] += 1
+        }
         let significant = counts.filter { Double($0) / Double(total) >= significantToneFraction }.count
         let gridLevels  = try toneLevels(source, width: MusicSequence.steps, height: MusicSequence.rows)
         return (gridLevels, significant)
@@ -212,13 +214,40 @@ enum PhotoMusicPipeline {
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { throw PhotoMusicPipelineError.renderFailed }
-        ctx.interpolationQuality = .none
+        ctx.interpolationQuality = .medium
         ctx.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
         return (0..<width * height).map { i in
             let p   = i * 4
-            let lum = 0.2126 * Double(pixels[p]) + 0.7152 * Double(pixels[p+1]) + 0.0722 * Double(pixels[p+2])
-            return min(3, max(0, Int((lum / 256 * 4).rounded(.down))))
+            let alpha = Double(pixels[p + 3]) / 255
+            guard alpha > 0 else { return 0 }
+            let red = min(max(Double(pixels[p]) / 255 / alpha, 0), 1)
+            let green = min(max(Double(pixels[p + 1]) / 255 / alpha, 0), 1)
+            let blue = min(max(Double(pixels[p + 2]) / 255 / alpha, 0), 1)
+            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+            let normalized = normalizedToneAnalysisLuminance(luminance)
+            return min(3, max(0, Int((normalized * 4).rounded(.down))))
         }
+    }
+
+    private static func toneAnalysisSize(for source: CGImage) -> (width: Int, height: Int) {
+        let width = source.width
+        let height = source.height
+        let maximum = max(width, height)
+        guard maximum > toneAnalysisMaximumDimension else {
+            return (max(1, width), max(1, height))
+        }
+
+        let scale = Double(toneAnalysisMaximumDimension) / Double(maximum)
+        return (
+            width: max(1, Int((Double(width) * scale).rounded())),
+            height: max(1, Int((Double(height) * scale).rounded()))
+        )
+    }
+
+    private static func normalizedToneAnalysisLuminance(_ luminance: Double) -> Double {
+        let contrast = ((luminance - 0.5) * 1.12 + 0.5).clamped(to: 0...1)
+        let shadowBias = contrast + max(0, 0.24 - contrast) * 0.10
+        return (shadowBias - max(0, shadowBias - 0.82) * 0.08).clamped(to: 0...1)
     }
 
     // MARK: - Sequence builder (adapted from ImageSequenceGenerator)
