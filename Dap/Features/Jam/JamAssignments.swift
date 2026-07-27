@@ -1,6 +1,6 @@
 import Foundation
 
-enum JamRole: String, Equatable {
+enum JamRole: String, Equatable, CaseIterable {
     case bass
     case harmony
     case melody
@@ -84,6 +84,32 @@ struct JamSlotAssignments: Equatable {
         bass != other.bass
             || harmony != other.harmony
             || melody != other.melody
+    }
+
+    func photoID(for role: JamRole) -> UUID? {
+        switch role {
+        case .bass: return bass
+        case .harmony: return harmony
+        case .melody: return melody
+        }
+    }
+
+    func swapping(_ first: JamRole, _ second: JamRole) -> JamSlotAssignments {
+        guard first != second else { return self }
+        let firstID = photoID(for: first)
+        let secondID = photoID(for: second)
+        var next = self
+        switch first {
+        case .bass: next.bass = secondID
+        case .harmony: next.harmony = secondID
+        case .melody: next.melody = secondID
+        }
+        switch second {
+        case .bass: next.bass = firstID
+        case .harmony: next.harmony = firstID
+        case .melody: next.melody = firstID
+        }
+        return next
     }
 
     func reconcilingSelection(

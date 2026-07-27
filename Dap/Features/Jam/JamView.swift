@@ -26,6 +26,7 @@ struct JamView: View {
     @State private var isPreparedDrumKitChangePending = false
     @State private var isDrumKitPendingIndicatorPulsing = false
     @State private var drumKitConfirmationPulseTrigger = 0
+    @State private var swapArrangementVersion = 0
     @State private var currentStep: Int?
     @State private var activeSoundIDs: Set<UUID> = []
     @State private var activeArrangement: JamArrangement?
@@ -72,31 +73,6 @@ struct JamView: View {
 
     private var applyingNextBar: Bool {
         isPlaying && hasPendingArrangementChanges
-    }
-
-    private var presentedSelectedSounds: [PresentedJamSound] {
-        let selectionIDSet = Set(slotAssignments.allPhotoIDs)
-        let orderedAssigned: [(UUID?, JamRole)] = [
-            (slotAssignments.bass, .bass),
-            (slotAssignments.harmony, .harmony),
-            (slotAssignments.melody, .melody)
-        ]
-
-        let arranged = orderedAssigned.compactMap { id, role -> PresentedJamSound? in
-            guard let id, selectionIDSet.contains(id),
-                  let sound = library.items.first(where: { $0.id == id }) else {
-                return nil
-            }
-            return PresentedJamSound(sound: sound, role: role)
-        }
-
-        let assignedIDs = Set(arranged.map(\.sound.id))
-        let unassignedSounds = selectedSounds
-            .filter { !assignedIDs.contains($0.id) }
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-            .map { PresentedJamSound(sound: $0, role: nil) }
-
-        return arranged + unassignedSounds
     }
 
     private var resolvedDrumKitValue: MusicDrumKit {
@@ -223,6 +199,7 @@ struct JamView: View {
             }
         }
         .sensoryFeedback(.selection, trigger: appliedArrangementVersion)
+        .sensoryFeedback(.success, trigger: swapArrangementVersion)
         .sheet(isPresented: $isPhotoSelectorPresented) {
             JamPhotoSelectorSheet(
                 sounds: library.items,
@@ -405,20 +382,38 @@ struct JamView: View {
     private var selectedPhotoArea: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                ForEach(presentedSelectedSounds) { presentedSound in
-                    JamSelectedPhotoTile(
-                        sound: presentedSound.sound,
-                        coverData: library.coverDataByID[presentedSound.sound.id],
-                        role: presentedSound.role,
-                        isActive: presentedSound.role != nil && activeSoundIDs.contains(presentedSound.sound.id),
-                        reduceMotion: reduceMotion
-                    )
+                ForEach(JamRole.allCases, id: \.self) { role in
+                    roleSlot(for: role)
                 }
             }
             .frame(maxWidth: .infinity)
 
             changePhotosButton()
         }
+    }
+
+    @ViewBuilder
+    private func roleSlot(for role: JamRole) -> some View {
+        let photoID = slotAssignments.photoID(for: role)
+        let sound = photoID.flatMap { id in library.items.first(where: { $0.id == id }) }
+        let isActive = photoID.map { activeSoundIDs.contains($0) } ?? false
+        let color: Color? = photoColor(for: role)
+        JamSelectedPhotoTile(
+            sound: sound,
+            coverData: sound.flatMap { library.coverDataByID[$0.id] },
+            role: photoID == nil ? nil : role,
+            isActive: photoID != nil && isActive,
+            reduceMotion: reduceMotion,
+            photoColor: color,
+            onDropPhotoID: { droppedID in
+                handleTileDrop(droppedID: droppedID, onto: role)
+            },
+            onSwapForAccessibility: { _, target in
+                guard let photoID else { return }
+                performSwapFromAccessibility(source: role, target: target, photoID: photoID)
+            }
+        )
+        .id(role)
     }
 
     private var sequencerAndStatus: some View {
@@ -559,6 +554,48 @@ struct JamView: View {
         if isPlaying && newAssignments.hasDifferentActiveSlots(from: previousAssignments) {
             hasPendingArrangementChanges = true
         }
+    }
+
+    private func handleTileDrop(droppedID: String, onto targetRole: JamRole?) {
+        guard let targetRole,
+              let parsedID = UUID(uuidString: droppedID),
+              slotAssignments.activePhotoIDs.contains(parsedID) else {
+            return
+        }
+        guard let sourceRole = slotAssignments.assignedRolesByID[parsedID] else {
+            return
+        }
+        guard sourceRole != targetRole else { return }
+        let source = sourceRole
+        let destination = targetRole
+        // Defer mutation to the next MainActor turn so the native drag session
+        // can finish tearing down its source snapshot before we rebuild the slot.
+        Task { @MainActor in
+            await Task.yield()
+            applySwap(source: source, destination: destination)
+        }
+    }
+
+    private func performSwapFromAccessibility(source: JamRole, target: JamRole, photoID: UUID) {
+        // Accessibility path has no native drag session, so no defer is needed.
+        guard source != target,
+              slotAssignments.photoID(for: source) == photoID else { return }
+        applySwap(source: source, destination: target)
+    }
+
+    private func applySwap(source: JamRole, destination: JamRole) {
+        guard source != destination else { return }
+        let next = slotAssignments.swapping(source, destination)
+        guard next != slotAssignments else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            slotAssignments = next
+            if isPlaying {
+                hasPendingArrangementChanges = true
+            }
+        }
+        swapArrangementVersion += 1
     }
 
     private func selectDrumKit(_ selection: MusicDrumKitSelection) {
@@ -770,11 +807,16 @@ struct JamView: View {
 }
 
 private struct JamSelectedPhotoTile: View {
-    let sound: PhotoSound
+    let sound: PhotoSound?
     let coverData: Data?
     let role: JamRole?
     let isActive: Bool
     let reduceMotion: Bool
+    let photoColor: Color?
+    let onDropPhotoID: (String) -> Void
+    let onSwapForAccessibility: (JamRole, JamRole) -> Void
+
+    @State private var targetedDropRole: JamRole?
 
     var body: some View {
         Color.clear
@@ -785,7 +827,13 @@ private struct JamSelectedPhotoTile: View {
             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .stroke(borderColor, lineWidth: isActive ? 2 : 1)
+                    .stroke(borderColor, lineWidth: borderWidth)
+            }
+            .overlay {
+                if isHoverTarget {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill((photoColor ?? .primary).opacity(0.12))
+                }
             }
             .overlay(alignment: .topLeading) {
                 if let role {
@@ -799,13 +847,15 @@ private struct JamSelectedPhotoTile: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                Text(sound.sequence.harmony.rootName)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.64), in: Capsule())
-                    .padding(6)
+                if !noteLabel.isEmpty {
+                    Text(noteLabel)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.64), in: Capsule())
+                        .padding(6)
+                }
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -815,12 +865,51 @@ private struct JamSelectedPhotoTile: View {
             .scaleEffect(reduceMotion ? 1 : (isActive ? 1.03 : 1.0))
             .animation(reduceMotion ? nil : .easeInOut(duration: jamStepDuration * 0.6), value: isActive)
         .frame(maxWidth: .infinity)
+        .modifier(JamTileDragAndDrop(
+            role: role,
+            photoID: sound?.id,
+            targetedRole: $targetedDropRole,
+            onDropPhotoID: onDropPhotoID
+        ))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityName)
         .accessibilityValue(accessibilityValue)
+        .modifier(JamTileAccessibilityActions(
+            role: role,
+            performSwap: { target in performSwapForAccessibility(target: target) }
+        ))
+    }
+
+    private var isHoverTarget: Bool {
+        targetedDropRole != nil
+    }
+
+    private var borderColor: Color {
+        if isHoverTarget {
+            return (photoColor ?? .primary).opacity(0.75)
+        }
+        if isActive {
+            return .white.opacity(0.88)
+        }
+
+        return .white.opacity(role == nil ? 0.08 : 0.12)
+    }
+
+    private var borderWidth: CGFloat {
+        if isHoverTarget { return 2 }
+        return isActive ? 2 : 1
+    }
+
+    private func performSwapForAccessibility(target: JamRole) {
+        guard let source = role, source != target else { return }
+        onSwapForAccessibility(source, target)
     }
 
     private var accessibilityName: String {
+        guard let sound else {
+            if let role { return role.displayName }
+            return "Empty slot"
+        }
         let note = sound.sequence.harmony.rootName
         if let role {
             return "\(role.displayName), \(note)"
@@ -843,12 +932,8 @@ private struct JamSelectedPhotoTile: View {
         }
     }
 
-    private var borderColor: Color {
-        if isActive {
-            return .white.opacity(0.88)
-        }
-
-        return .white.opacity(role == nil ? 0.08 : 0.12)
+    private var noteLabel: String {
+        sound?.sequence.harmony.rootName ?? ""
     }
 
     private var accessibilityValue: String {
@@ -856,7 +941,67 @@ private struct JamSelectedPhotoTile: View {
             return isActive ? "\(role.displayName), active on this step" : role.displayName
         }
 
-        return "No musical material"
+        return sound == nil ? "Empty slot" : "No musical material"
+    }
+}
+
+private struct JamTileDragAndDrop: ViewModifier {
+    let role: JamRole?
+    let photoID: UUID?
+    @Binding var targetedRole: JamRole?
+    let onDropPhotoID: (String) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let role, let photoID {
+            content
+                .draggable(photoID.uuidString) {
+                    Text(role.displayName)
+                        .font(.caption2.weight(.semibold))
+                        .opacity(0.90)
+                }
+                .dropDestination(for: String.self) { items, _ in
+                    guard let first = items.first else { return false }
+                    onDropPhotoID(first)
+                    // Clear hover immediately so the destination tile is not
+                    // still highlighted when the swap mutates the source view.
+                    if targetedRole == role {
+                        targetedRole = nil
+                    }
+                    return true
+                } isTargeted: { isOver in
+                    if isOver {
+                        if targetedRole != role { targetedRole = role }
+                    } else if targetedRole == role {
+                        targetedRole = nil
+                    }
+                }
+        } else {
+            content
+        }
+    }
+}
+
+private struct JamTileAccessibilityActions: ViewModifier {
+    let role: JamRole?
+    let performSwap: (JamRole) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let role {
+            let allRoles: [JamRole] = [.bass, .harmony, .melody]
+            let otherRoles = allRoles.filter { $0 != role }
+            let labels = otherRoles.map { "Move to \($0.displayName)" }
+            content
+                .accessibilityAction(named: labels[0]) {
+                    performSwap(otherRoles[0])
+                }
+                .accessibilityAction(named: labels[1]) {
+                    performSwap(otherRoles[1])
+                }
+        } else {
+            content
+        }
     }
 }
 
@@ -1333,13 +1478,6 @@ private struct CornerWeights {
     let bright: CGFloat
     let deep: CGFloat
     let intense: CGFloat
-}
-
-private struct PresentedJamSound: Identifiable {
-    let sound: PhotoSound
-    let role: JamRole?
-
-    var id: UUID { sound.id }
 }
 
 extension Color {
