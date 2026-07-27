@@ -32,7 +32,6 @@ struct JamView: View {
     @State private var transportTask: Task<Void, Never>?
     @State private var appliedArrangementVersion = 0
 
-    private let panelRevealHeight: CGFloat = 254
     private let panelDockGap: CGFloat = 14
     private let bottomReserve: CGFloat = 168
 
@@ -175,19 +174,18 @@ struct JamView: View {
             Color(uiColor: .systemBackground)
 
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(spacing: 18) {
+                    if hasAnySelection {
+                        sequencerAndStatus
+                    }
+
                     if selectedSounds.isEmpty {
                         emptyState
                     } else {
                         selectedPhotoArea
                     }
-
-                    if hasAnySelection {
-                        sequencerAndStatus
-                    }
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 84)
                 .padding(.bottom, bottomReserve)
                 .frame(maxWidth: .infinity)
             }
@@ -281,11 +279,10 @@ struct JamView: View {
         if isPanelPresented || selectedPanel != .none {
             ZStack(alignment: .bottom) {
                 panelContent
+                    .scaleEffect(isPanelPresented ? 1 : 0.94, anchor: .bottom)
                     .opacity(isPanelPresented ? 1 : 0)
-                    .offset(y: isPanelPresented ? 0 : panelRevealHeight + panelDockGap)
             }
-            .frame(width: 254, height: panelRevealHeight)
-            .clipped()
+            .frame(width: 254, height: panelLayerHeight)
             .frame(maxWidth: .infinity)
             .padding(.bottom, 82 + 68 + panelDockGap)
             .allowsHitTesting(isPanelPresented)
@@ -307,9 +304,9 @@ struct JamView: View {
     private var vibePanelContent: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.secondary.opacity(0.10))
+                .fill(Color(uiColor: .secondarySystemBackground))
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
             VibeControl(position: $vibePosition) {
                 if isPlaying {
                     hasPendingArrangementChanges = true
@@ -324,9 +321,9 @@ struct JamView: View {
     private var effectsPanelContent: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.secondary.opacity(0.10))
+                .fill(Color(uiColor: .secondarySystemBackground))
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
             VStack(spacing: 8) {
                 Text("Effect Rack")
                     .font(.subheadline.weight(.semibold))
@@ -343,7 +340,7 @@ struct JamView: View {
             }
             .padding(16)
         }
-        .frame(width: 254, height: 254)
+        .frame(width: 254, height: 160)
         .accessibilityLabel("Effect Rack")
         .accessibilityValue("Empty")
     }
@@ -373,10 +370,14 @@ struct JamView: View {
         }
     }
 
+    private var panelLayerHeight: CGFloat {
+        254
+    }
+
     private var panelRevealAnimation: Animation {
         reduceMotion
             ? .easeOut(duration: 0.15)
-            : .snappy(duration: 0.32, extraBounce: 0)
+            : .spring(response: 0.26, dampingFraction: 0.96)
     }
 
     private var thumbnailLabel: String {
@@ -791,11 +792,20 @@ private struct JamSelectedPhotoTile: View {
                     Text(role.displayName)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 7)
                         .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.64), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(Color.black.opacity(0.64), in: Capsule())
                         .padding(6)
                 }
+            }
+            .overlay(alignment: .topTrailing) {
+                Text(sound.sequence.harmony.rootName)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.64), in: Capsule())
+                    .padding(6)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -806,8 +816,16 @@ private struct JamSelectedPhotoTile: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: jamStepDuration * 0.6), value: isActive)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(sound.name ?? sound.sequence.displayLabel)
+        .accessibilityLabel(accessibilityName)
         .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityName: String {
+        let note = sound.sequence.harmony.rootName
+        if let role {
+            return "\(role.displayName), \(note)"
+        }
+        return sound.name ?? sound.sequence.displayLabel
     }
 
     @ViewBuilder
