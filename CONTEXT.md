@@ -1,362 +1,912 @@
-# Dap Domain Context
+# Dap Product and Code Context
 
-This file defines Dap's shared domain language, invariants, ownership, and current scope.
+Last synchronized with the supplied repository worktree: 2026-07-26.
 
-Read it before changing the domain model or introducing a new module. It is not an implementation spec: features still require authorization from the current spec or an accepted ADR.
+This document records the current product, domain model, implemented flows, deterministic algorithms, audio runtime, module ownership, and known gaps. It is a state document, not a changelog or roadmap.
+
+When this file conflicts with the code, inspect the code and update this document.
 
 ## Product definition
 
-Dap turns a photo into a playable musical object and lets the user combine musical photos inside a Jam.
+Dap is an iOS app that transforms a captured or imported Source Image into a **Musical Photo**:
 
-Product principles:
-
-- The photo is the creative starting point.
-- The first playable result should feel immediate.
-- Optional AI enrichment must never block creation.
-- Simple interaction comes before advanced editing.
-- Musical Photos, Effects, and Jams are distinct domain concepts.
-
-## Domain glossary
-
-### Musical Photo
-
-The saved creative object generated from one captured or imported image.
-
-It currently contains:
-
-- a stable UUID;
-- creation date;
-- generated Cover;
-- Musical Sequence;
+- a deterministic four-tone pattern-halftone Cover;
+- a deterministic 16-step Musical Sequence;
+- a root pitch class, scale, BPM, gate, octave range, and waveform profile;
 - optional generated name and description.
 
-The current code symbol is `PhotoSound`. Product language and documentation should prefer **Musical Photo** or **Photo**. Do not rename the symbol opportunistically; rename it only as an intentional scoped change.
+Musical Photos can be browsed and played individually or combined transiently in **Jam**, where up to three photos are assigned Bass, Harmony, and Melody roles and interpreted through a Vibe XY control, deterministic grooves, selectable drum kits, role-specific voices, and a looping transport.
 
-A Musical Photo is not an Effect and must not be called a pedal.
+The app is local-first. No account, network service, cloud sync, analytics, multiplayer, or remote generation is required by the current code.
 
-### Source Image
+## Implemented product surface
 
-The image data received from the camera or Photos picker before processing.
+### Root
 
-The current implementation treats it as transient. Dap persists the generated Cover and musical data, not the original image. Do not assume the original is available later unless a future spec changes this.
+`AppRootView` owns:
 
-### Photo Creation
+- one shared `PhotoLibraryViewModel`;
+- Gallery/Jam section selection;
+- Gallery UUID navigation path;
+- full-screen Capture presentation;
+- the root Gallery/Jam segmented switcher;
+- the centered Capture button shown only at the Gallery root.
 
-The complete transformation from Source Image to saved Musical Photo:
-
-1. decode and normalize the image;
-2. analyze visual properties;
-3. generate the retro image;
-4. generate the Musical Sequence;
-5. recolor the Cover from its tonal identity;
-6. persist the essential result;
-7. optionally refine its metadata.
-
-The essential result is the Cover plus Musical Sequence. Metadata is enrichment.
-
-### Cover
-
-The generated retro visual displayed in Gallery and Photo Inspector.
-
-The current Cover is a four-tone, 2-bit rendering recolored from the dominant pitch class. It is persisted as PNG data. It is derived media, not the Source Image.
-
-### Musical Sequence
-
-The playable representation derived from image analysis.
-
-It currently contains:
-
-- a 16-step by 8-row note grid;
-- root pitch class and scale;
-- BPM;
-- note velocity;
-- gate and octave range;
-- waveform.
-
-For the same normalized image and algorithm version, the Musical Sequence and Cover should remain deterministic. UUIDs, timestamps, and generated metadata are excluded from this guarantee.
-
-### Musical Identity
-
-The properties that make one Musical Photo recognizable: root, scale, BPM, waveform, and dominant pitch class.
-
-The dominant pitch class also selects the Cover palette, intentionally connecting visual and musical identity.
-
-### Metadata
-
-The optional generated name and description.
-
-Metadata refinement occurs after the essential Musical Photo is saved. Failure, cancellation, model unavailability, or guardrail rejection must leave the Photo usable.
-
-A metadata update may change only `name` and `description`. It must preserve identity, creation date, Cover reference, and Musical Sequence.
+Gallery and Jam remain mounted and switch through opacity and hit-testing. Root chrome is hidden while Photo Inspector is pushed.
 
 ### Gallery
 
-The user's canonical collection of saved Musical Photos.
+Gallery currently provides:
 
-Gallery browses and opens Photos. Its views do not own persistence and must not perform synchronous disk I/O while rendering.
+- a three-column grid of persisted Covers;
+- newest-first ordering from the shared library state;
+- an empty state when the library has no items;
+- an in-memory Cover cache;
+- a metadata-refinement progress indicator;
+- a playing indicator for the active Musical Photo;
+- UUID navigation to Photo Inspector;
+- a native zoom transition when Reduce Motion is disabled;
+- top and bottom material fades integrated with root chrome.
+
+Gallery does not currently implement multi-selection, delete, share, manual reordering, Year/Month grouping, or a Gallery-local import tile.
 
 ### Photo Inspector
 
-The detail surface for one Musical Photo.
+Photo Inspector currently provides:
 
-It presents the Cover, metadata, Musical Identity, playback, and future actions such as adding Effects or adding the Photo to a Jam. It is not a separate persisted entity.
+- the selected Cover;
+- a background derived from the final root-note palette;
+- generated name and description when available;
+- root, scale, and BPM information;
+- play/pause through the shared `MusicPlayer`;
+- a Gallery-to-Inspector zoom transition when motion is allowed.
+
+`Add Effects`, `Add to Jam`, and the overflow action are visible placeholders and do not currently perform product actions.
+
+### Capture
+
+Capture is a full-screen AVFoundation camera flow.
+
+Current controls and behavior:
+
+- rear/front camera switching;
+- flash toggle when supported;
+- 1×/2× zoom toggle;
+- shutter capture;
+- ordered multi-photo import through PhotosUI;
+- latest-Cover thumbnail that returns to Gallery;
+- permission, configuration, ready, processing, completion, and failure states;
+- orientation-aware preview and capture;
+- front-preview mirroring while persisted captures remain unmirrored;
+- live provisional pitch-color sampling;
+- a Metal lava-lamp strip driven by the provisional pitch palette.
+
+Interactive dismissal is disabled while Capture owns a blocking state. The normal exit path is the Gallery thumbnail or the explicit completion action shown after applicable import outcomes.
+
+A successful shutter capture:
+
+1. captures Source Image data;
+2. processes and persists the Musical Photo;
+3. updates the shared library and latest Cover thumbnail;
+4. returns Capture to ready state without dismissing it.
+
+Photos import supports up to 20 ordered images. Processing is sequential. Successful items remain saved when another item fails. Batch state reports progress and partial failure.
+
+### Jam Vibe
+
+Jam is implemented as a local, transient Vibe experience.
+
+Current behavior:
+
+- select one to three persisted Musical Photos in a sheet;
+- ignore selected photos whose sequences contain no notes;
+- assign deterministic Bass, Harmony, and Melody roles;
+- display selected photos and assigned roles;
+- control density, register bias, and gate with an XY pad;
+- interpolate continuously between Airy, Bright, Deep, and Intense presets;
+- classify the current Vibe into one of four groove regions;
+- select one of three deterministic 16-step grooves per region;
+- choose Drum Kit `Auto`, `Soft`, `Club`, `Break`, or `Metal`;
+- map Auto as Airy→Soft, Bright→Club, Deep→Break, Intense→Metal;
+- render sampled drums with kick, snare, closed hat, open hat, and rim events;
+- render procedural Future Bass, sample-based Harmony, and sample-based Melody;
+- apply kick-driven pumping to Bass and Harmony;
+- generate Melody as a deterministic A/A' motif;
+- play one fixed 16-step loop at 96 BPM;
+- display a local transport step indicator;
+- queue selection, Vibe, and kit changes while playing;
+- schedule the latest rendered replacement for the next loop boundary;
+- stop transient playback when Jam disappears or loses root focus.
+
+Jam state is not persisted. Studio does not exist in the current code.
+
+## Domain glossary
+
+### Source Image
+
+Raw image data received from AVFoundation capture or PhotosUI import.
+
+The Source Image is used during processing and optional metadata refinement. It is not currently persisted after creation.
+
+### Musical Photo
+
+The persisted photo-derived object represented by `PhotoSound`.
+
+A Musical Photo contains:
+
+- stable UUID;
+- optional name;
+- optional description;
+- creation date;
+- Cover filename;
+- `MusicSequence`.
+
+### Cover
+
+The persisted PNG visual generated from the normalized Source Image using a pitch-derived four-tone palette and clustered-dot pattern halftone.
+
+The Cover is not the original Source Image.
+
+### Musical Sequence
+
+The deterministic playable value represented by `MusicSequence`:
+
+- `MusicHarmony`;
+- an array of `MusicNote` values;
+- `SoundProfile`.
+
+The grid is fixed at 16 steps by 8 rows.
+
+Persisted photo notes normally have no `voiceRole`. Jam arrangements create transient notes with `.bass`, `.harmony`, or `.melody` roles.
+
+### Musical Identity
+
+The tonal identity derived during photo analysis:
+
+- root pitch class;
+- root-note color palette;
+- scale;
+- BPM;
+- waveform;
+- gate;
+- octave range.
+
+The root pitch class is the canonical connection between music, persisted Cover color, and Inspector background color.
+
+### Voice Role
+
+`MusicVoiceRole` identifies transient Jam rendering behavior:
+
+- `.bass` → procedural Future Bass stem;
+- `.harmony` → Dap Analog Family Harmony samples;
+- `.melody` → Dap Analog Family Melody samples.
+
+A nil role keeps the legacy procedural photo-playback path.
+
+### Metadata
+
+Optional name and description generated after the essential Musical Photo is persisted.
+
+Metadata is enrichment. It must never determine whether Musical Photo creation succeeds.
 
 ### Playback
 
-The local audio rendering of a Musical Sequence.
+Audio rendering of a `MusicSequence`, optionally with a `MusicPercussionPattern`, through the single shared `MusicPlayer`.
 
-The current application has one shared active playback state. Starting another Musical Photo stops the previous one. UI features must not create independent audio-engine owners.
+### Percussion Pattern
 
-### Effect
+A transient `MusicPercussionPattern` containing:
 
-An audio transformation such as reverb, distortion, delay, or filtering.
+- resolved `MusicDrumKit`;
+- kick hits;
+- snare hits;
+- closed-hat hits;
+- open-hat hits;
+- rim hits with Soft, Main, or Hard style.
 
-Effects are the concepts that may use pedal-like visual language. A Musical Photo itself is not a pedal.
+### Drum Kit Selection
 
-Planned scopes:
+The UI-level selection is `Auto`, `Soft`, `Club`, `Break`, or `Metal`.
 
-- **Photo Effect** — previewed or applied to one Musical Photo;
-- **Global Jam Effect** — applied to the combined Jam output.
+`Auto` resolves from the current Jam region. The resulting concrete `MusicDrumKit` is stored in the percussion pattern passed to the renderer.
 
-Do not assume Photo Effects are inherited by Jam. Current product direction keeps Jam effects global. Persistence rules for Photo Effects remain undecided.
+### Jam Arrangement
 
-### Jam
+A transient `JamArrangement` containing:
 
-A playable session that combines multiple Musical Photos under shared musical and effect controls.
+- one combined `MusicSequence`;
+- active steps by source Musical Photo UUID;
+- one percussion pattern.
 
-A Jam references existing Photos by stable identity. It does not duplicate ownership of their Covers, Musical Sequences, or metadata.
-
-The first Jam implementation is local and centered on Vibe.
+It is built in memory and is not persisted.
 
 ### Vibe
 
-The simple, default interaction mode inside Jam.
+The current Jam interaction mode. A normalized `CGPoint` bilinearly interpolates four corner presets:
 
-Vibe uses a spatial control to shape shared musical behavior with minimal setup. It is a Jam mode, not another top-level domain.
+- Airy: top-left;
+- Bright: top-right;
+- Deep: bottom-left;
+- Intense: bottom-right.
 
-The exact coordinate-to-music mapping requires a dedicated spec.
+The groove region itself uses quadrant boundaries at `x == 0.5` and `y == 0.5`.
 
 ### Studio
 
-A future advanced Jam mode for explicit arrangement and connections between Photos.
-
-Studio is deferred. Do not introduce Studio models, graph structures, canvas architecture, or navigation before a current spec authorizes them.
+A possible future explicit arrangement mode. It is not implemented and has no authorized architecture in the current repository.
 
 ## Core workflows
 
-### Create a Musical Photo
+### Application startup
 
-`Camera or Photos → Source Image → Photo Creation → PhotoStore → Gallery`
+`DapApp → AppRootView → PhotoLibraryViewModel.loadLibrary() → PhotoStore.load() + coverData(for:)`
 
-The Photo appears after the essential result is persisted. Metadata may refine afterward.
+The library is loaded once per shared view-model lifetime. Covers are loaded into memory before the views render them.
 
-Capture is a full-screen workflow. A successful shutter capture keeps Capture presented, returns it to its ready state, and updates the Gallery thumbnail from shared library state. The user exits Capture only by tapping the Gallery thumbnail.### Inspect and play
+### Create from camera
 
-`Gallery → Photo Inspector → shared Playback`
+`CameraController → Source Image Data → PhotoMusicPipeline → PhotoStore.save → PhotoLibraryViewModel memory update → metadata refinement`
 
-Photo Inspector acts on the existing Musical Photo and shared playback state.
+Capture remains presented after a successful shutter creation.
 
-### Create a Jam — planned first slice
+### Create from Photos
 
-`Gallery Photos → Jam → Vibe → shared playback and Global Jam Effects`
+`PhotosPickerItem → Data → PhotoMusicPipeline → PhotoStore.save → batched memory publication → sequential metadata refinement`
 
-This is product direction, not authorization to implement all steps at once.
+Batch processing continues after individual failures unless the task is cancelled.
 
-## Domain invariants
+### Inspect and play
 
-1. A successfully created Musical Photo has one stable UUID.
-2. Creation succeeds only after its Cover and essential musical data are persisted.
-3. Metadata never determines whether creation succeeded.
-4. Metadata never changes the Cover or Musical Sequence.
-5. Gallery renders from in-memory state; storage reads remain behind persistence.
-6. The persisted library is newest-first until a spec defines user ordering.
-7. Only one Musical Photo plays at a time in the current application.
-8. Capture acquires Source Image data but does not own the persisted library.
-9. Photo Inspector presents a Musical Photo but does not duplicate it.
-10. A Jam references Photos by stable identity.
-11. Musical Photos and Effects remain distinct models.
-12. Vibe and Studio remain modes inside Jam.
+`Gallery UUID path → PhotoInspectorView → PhotoLibraryViewModel.toggle(sound:) → shared MusicPlayer`
 
-## Current module ownership
+Only one shared playback runtime exists.
+
+### Create and play a Jam
+
+`Jam selection → JamArrangementBuilder → JamGrooveLibrary → PhotoLibraryViewModel.playTransientSequence → MusicPlayer loop`
+
+The builder receives the concrete Drum Kit already resolved by `JamView`.
+
+## Deterministic photo pipeline
+
+`PhotoMusicPipeline.process(imageData:)` runs heavy work in a detached user-initiated task and returns Sendable values.
+
+### 1. Decode and normalize
+
+The Source Image is decoded with `UIImage` and redrawn into a new `CGImage` so orientation is applied before analysis and rendering.
+
+### 2. Color analysis
+
+The normalized image is drawn into a 64×64 RGBA buffer.
+
+The analysis computes:
+
+- mean RGB, hue, saturation, and luminance;
+- chromatic hue samples;
+- circular hue variance;
+- Sobel edge density;
+- twelve weighted hue bins;
+- a stable FNV-style seed from pixel bytes.
+
+The root pitch class is selected from softened weighted hue bins using the stable seed. The result is deterministic for the same analyzed pixels and current algorithm.
+
+Current color-pipeline algorithm constant: `2`.
+
+### 3. Tone analysis
+
+A four-tone Floyd-Steinberg image is generated at target width 160 pixels. This legacy dithered image is used only for tone analysis, not as the persisted Cover.
+
+Tone analysis derives:
+
+- significant tone count from the full dithered image;
+- a 16×8 tone grid for note generation.
+
+### 4. Sequence construction
+
+Current mappings:
+
+- root: selected root pitch class;
+- BPM: luminance mapped and clamped to 70...140;
+- scale:
+  - high hue variance → whole tone;
+  - medium hue variance → dorian;
+  - otherwise saturation chooses major or minor pentatonic;
+- octave range: significant tone count;
+- gate: Sobel edge density mapped from long to short;
+- waveform:
+  - hue from 90° through under 300° → square;
+  - remaining hues → triangle;
+- notes: nonzero levels from the 16×8 tone grid.
+
+If the tone grid produces no notes, the pipeline inserts four fallback notes at quarter-bar steps using the middle row.
+
+### 5. Cover rendering
+
+The persisted Cover is rendered from the normalized original image, not from the low-resolution analysis dither.
+
+`RetroCoverRenderer.patternHalftone`:
+
+- limits the maximum output dimension to 1024 pixels;
+- computes luminance with a mild contrast adjustment;
+- quantizes across four colors;
+- uses a 4×4 clustered-dot threshold matrix;
+- uses a matrix pixel scale of 2;
+- preserves alpha.
+
+### 6. Tonal palette
+
+`PitchClass.canonicalColor` defines twelve canonical pitch colors.
+
+`RetroCoverRenderer.tonalPalette(for:)` derives:
+
+- shadow;
+- dark;
+- base;
+- highlight.
+
+This is the canonical pitch-to-color path. The persisted Cover and Inspector use the final pipeline root. Capture uses the same palette function with a provisional live-camera root, so Capture color may differ from the final persisted result.
+
+### 7. Essential persistence
+
+The pipeline creates a new UUID, a `PhotoSound` with nil metadata, and PNG Cover data. The essential result is persisted before it appears in shared state.
+
+### 8. Progressive metadata
+
+After persistence, `PhotoMetadataGenerator`:
+
+1. classifies the Source Image with Vision;
+2. keeps up to five labels with confidence of at least 0.12;
+3. builds a prompt from visual labels and Musical Identity;
+4. uses a new Foundation Models session for each photo;
+5. requests a short English name and one-sentence description;
+6. sanitizes and length-limits generated text;
+7. patches only `name` and `description` in persistence and memory.
+
+Unavailable models, classification failures, guardrail failures, and generation failures preserve the fallback metadata state.
+
+## Audio runtime
+
+`MusicPlayer` is a `@MainActor` concrete runtime with:
+
+- one `AVAudioEngine`;
+- one `AVAudioPlayerNode`;
+- stereo 44,100 Hz output;
+- lazy audio-session activation and engine startup;
+- cancellable detached offline rendering;
+- generation tokens that reject stale completions;
+- one-shot scheduling;
+- native looping;
+- debounced loop replacement;
+- audio-interruption handling.
+
+All tonal and percussion content is rendered into arrays before an `AVAudioPCMBuffer` is scheduled.
+
+### Single-photo procedural playback
+
+Persisted Gallery and Inspector sequences normally contain notes with `voiceRole == nil`.
+
+Those notes use the legacy procedural path:
+
+- square or triangle waveform table from `SoundProfile`;
+- MIDI-to-frequency conversion;
+- shared gate envelope;
+- velocity scaling through `tonalGain`;
+- stereo duplication;
+- final output clamp.
+
+This path is intentionally preserved so Jam voice changes do not alter persisted single-photo playback.
+
+### Jam melodic routing
+
+Jam notes are split into semantic stems inside `renderSequence`:
+
+- Bass stem;
+- Harmony stem;
+- main output for Melody and nil-role notes.
+
+Role-specific fallbacks remain inside their semantic stem so Bass and Harmony still receive pumping when a preferred renderer is unavailable.
+
+### Future Bass
+
+The primary Jam Bass renderer is procedural and monophonic.
+
+Current voice characteristics:
+
+- sine sub: 0.50;
+- saw: 0.35;
+- triangle: 0.15;
+- fast attack;
+- decay and sustain envelope;
+- dynamic low-pass contour;
+- tanh saturation;
+- gain scaled by note velocity;
+- 85 ms glide only when consecutive Bass events overlap musically;
+- Bass timing offsets clamped to approximately -0.06...+0.08 steps.
+
+The bundled Bass samples in `DapAnalogFamily` are not the primary current Bass path.
+
+### Harmony and Melody samples
+
+`MelodicSampleLibrary` loads mono 44,100 Hz WAVs and selects the nearest root sample with linear interpolation during playback.
+
+Bundled root samples:
+
+- Harmony: C3, C4, C5, C6;
+- Melody: C4, C5, C6, C7;
+- Bass assets also exist at C2, C3, C4, but the current renderer uses Future Bass instead.
+
+Playback ranges:
+
+- Bass library range: MIDI 36...60;
+- Harmony: MIDI 48...84;
+- Melody: MIDI 60...96.
+
+Current role gains:
+
+- Bass renderer: 0.70;
+- Harmony sample path: 0.44;
+- Melody sample path: 0.50.
+
+Harmony uses at least 75% of one step as its musical gate and is cut at the next Harmony attack when earlier. Existing role-specific fades are preserved.
+
+If a Harmony or Melody sample cannot load, the note falls back to the procedural waveform renderer.
+
+### Kick-driven pumping
+
+Actual `percussion.kickHits` are converted to sorted unique frame positions.
+
+Offline quadratic ease-out gain envelopes are applied before drums are mixed:
+
+- Bass minimum gain: 0.72;
+- Bass release: 170 ms;
+- Harmony minimum gain: 0.54;
+- Harmony release: 210 ms;
+- Melody: no ducking.
+
+Overlapping duck envelopes use the minimum required gain rather than multiplication, so consecutive kicks do not push the signal below the configured minimum.
+
+Pumping is not circular across the loop boundary. A kick at step 0 starts a new envelope at frame 0.
+
+### Percussion rendering
+
+`DrumSampleLibrary` loads bundled WAV resources and exposes four concrete kits:
+
+- Soft;
+- Club;
+- Break;
+- Metal.
+
+Each kit defines kick, snare, closed hat, open hat, shared rim samples, and per-voice trims.
+
+The renderer supports:
+
+- mono or stereo samples;
+- kick, snare, closed-hat, open-hat, and rim events;
+- open-hat choking from closed hats;
+- Soft, Main, and Hard rim styles;
+- loop wrapping for sample tails;
+- procedural kick, snare, and closed-hat fallback if a required sample is unavailable.
+
+The resource bundle also contains additional claps, cymbals, shakers, tambourines, textures, and unused alternates. Their presence does not mean they are currently selected by any kit.
+
+### Output and loop scheduling
+
+For looping Jam playback, frame count is exactly one 16-step tonal bar. Sample tails wrap inside that frame count.
+
+When `play(... loops: true)` is called while a loop is already playing:
+
+1. pending replacement work is cancelled;
+2. a new generation token is created;
+3. rendering is debounced by approximately 135 ms;
+4. only the latest render completion remains valid;
+5. the new buffer is scheduled with `.loops` and `.interruptsAtLoop`;
+6. `onLoopUpdatePrepared` informs Jam that the replacement is queued.
+
+The visible Jam transport is a separate `ContinuousClock` task. It clears prepared Drum Kit feedback at step 0 after scheduling confirmation.
+
+## Jam arrangement algorithm
+
+### Selection
+
+Jam accepts up to three Musical Photos. Selector output is sorted by UUID for stable storage. Photos with empty sequences are excluded from arrangement building.
+
+### Role assignment
+
+Photos are sorted by:
+
+1. average MIDI register;
+2. note count;
+3. UUID string.
+
+Roles are assigned as:
+
+- one photo → Melody;
+- two photos → Bass and Melody;
+- three photos → Bass, Harmony, and Melody.
+
+### Global harmony
+
+All selected notes are counted by pitch class. The builder evaluates every root for major pentatonic and minor pentatonic and selects the candidate with greatest note coverage.
+
+Ties prefer:
+
+1. major pentatonic over minor pentatonic;
+2. lower root pitch class within the same scale.
+
+All selected photos influence this root and scale.
+
+### Vibe interpolation
+
+The XY position bilinearly interpolates four presets:
+
+| Preset | Density | Register bias | Gate |
+|---|---:|---:|---:|
+| Airy | 0.40 | +7 | 0.72 |
+| Bright | 0.72 | +12 | 0.42 |
+| Deep | 0.34 | -12 | 0.78 |
+| Intense | 0.82 | -5 | 0.34 |
+
+Density is further scaled by role:
+
+- Bass: 0.60;
+- Harmony: 0.80;
+- Melody: 1.00.
+
+### Bass transformation
+
+Bass:
+
+- uses one representative source note per step;
+- samples by effective Bass density;
+- maps pitch classes to global root or fifth;
+- keeps a low register;
+- applies deterministic velocity accents;
+- applies structured microtiming for selected pickups and offbeats;
+- marks notes with `voiceRole == .bass`.
+
+### Harmony transformation
+
+Harmony:
+
+- uses one representative source note per step;
+- samples by effective Harmony density;
+- snaps to global harmony;
+- keeps a middle register;
+- reduces source velocity;
+- marks notes with `voiceRole == .harmony`.
+
+### Melody source scope
+
+The Melody's primary pitch material comes from only one Musical Photo: the photo assigned the `.melody` role.
+
+The builder passes only that photo's source notes through:
+
+`source notes → register shift → global-scale snap → transformed Melody pool`
+
+All selected photos still influence:
+
+- global root and scale;
+- sorted UUIDs used by the Melody seed;
+- Bass and Harmony accompaniment;
+- which photo becomes the Melody role.
+
+The other photos do not currently add equal pitch candidates to the Melody pool.
+
+### Melody Motif Engine
+
+The Motif Engine replaces the previous one-to-one sampled-note transformation.
+
+It builds:
+
+- phrase A in steps 0...7;
+- related variation A' in steps 8...15;
+- one anchor pitch class;
+- one regional contour;
+- one regional rhythm template;
+- semantic attack roles: anchor, passing, climax, resolution.
+
+Available contours:
+
+- ascending;
+- descending;
+- arch;
+- valley;
+- pendulum;
+- repeated anchor.
+
+Regional attack counts per half:
+
+- Airy: 2 or 3;
+- Bright: 3 or 4;
+- Deep: 2 or 3;
+- Intense: 4 or 5.
+
+Regional rhythm templates:
+
+- Airy: `[1,4,7]`, `[0,3,6]`, `[2,5]`;
+- Bright: `[0,2,5,7]`, `[1,3,6]`, `[0,3,5,7]`;
+- Deep: `[0,4,7]`, `[2,5]`, `[1,4,6]`;
+- Intense: `[0,2,3,6,7]`, `[1,2,4,6]`, `[0,3,4,5,7]`.
+
+A' preserves the anchor and contour and may apply one deterministic variation kind:
+
+- internal pitch change;
+- internal one-step rhythm shift;
+- octave shift at the A' climax;
+- velocity accent.
+
+Additional rules:
+
+- stable degrees prefer root, third, fifth, then seventh when present;
+- source-note occurrence helps select the anchor;
+- Melody remains within MIDI 60...96;
+- no more than one octave jump is permitted per loop;
+- octave variation is available only to Bright and Intense selection sets;
+- large leaps are softened when not intentional;
+- repeated single-note halves are normalized with a scale-neighbor adjustment;
+- close simultaneous Bass conflicts are resolved by octave displacement or scale-neighbor choice;
+- Melody notes keep `timingOffsetSteps == nil`;
+- per-note duration does not exist in the current model, so Melody articulation is expressed through attack spacing and velocity.
+
+### Melody determinism
+
+The local FNV-1a 64-bit seed includes:
+
+- selected UUID strings in sorted order;
+- global root pitch class;
+- global scale raw value;
+- Jam region;
+- transformed Melody source-note step and MIDI values.
+
+Runtime randomness, `Hasher`, `Date`, and new UUID generation are not used.
+
+Raw `vibePosition` is not hashed. However, transformed Melody MIDI values depend on rounded register shift. Crossing a register-shift threshold can therefore change the seed and rebuild the motif even inside the same region. This is a current known behavior.
+
+### Groove selection
+
+The Vibe quadrant selects Airy, Bright, Deep, or Intense.
+
+Each region has three hard-coded 16-step variants. Variant index is derived from FNV-1a hashing of sorted selected UUID strings, so the same selected set and region produce the same pattern.
+
+Patterns can contain kick, snare, closed hat, open hat, and rim events with velocity.
+
+### Drum Kit resolution
+
+`JamView` owns UI selection and resolves a concrete kit before building the arrangement.
+
+Auto mapping:
+
+- Airy → Soft;
+- Bright → Club;
+- Deep → Break;
+- Intense → Metal.
+
+Manual kit selection persists while Vibe moves. Changes during playback are rendered through the same next-loop replacement path.
+
+### Playback update contract
+
+Jam playback is one native looping rendered buffer at 96 BPM. The visible transport advances with a local `ContinuousClock` task.
+
+While playing:
+
+- Vibe movement marks an arrangement change as pending;
+- photo selection changes mark an arrangement change as pending;
+- Drum Kit changes immediately send the latest arrangement to `MusicPlayer`, which owns debouncing and next-loop quantization;
+- only the latest replacement render remains valid;
+- prepared kit feedback clears at the next visible step 0.
+
+## Persistence
+
+`PhotoStore` is an actor and owns all disk state under Application Support:
+
+```text
+Dap/
+├── library.json
+└── Covers/
+    └── <UUID>.png
+```
+
+### Save contract
+
+1. create directories;
+2. write Cover PNG;
+3. prepend and newest-sort the updated library;
+4. atomically write `library.json`;
+5. remove the new Cover if the JSON write fails;
+6. publish memory state only after full persistence success.
+
+### Metadata patch contract
+
+Metadata updates read, modify, and atomically rewrite the library inside one actor turn. Only name and description change.
+
+### Current persistence gaps
+
+The app does not persist:
+
+- original Source Images;
+- Jam selection;
+- Vibe position;
+- Drum Kit selection;
+- Jam arrangements;
+- effects;
+- Gallery user ordering;
+- export history;
+- algorithm-version metadata or migrations.
+
+## Module ownership
+
+### `DapApp`
+
+Creates `AppRootView`.
 
 ### `AppRootView`
 
-Owns root presentation state, the selected root section, Capture presentation, root chrome, and the shared `PhotoLibraryViewModel` instance.
-
-It must not absorb photo processing, persistence, or audio rendering.
+Owns root section, Gallery path, Capture presentation, root chrome, and shared `PhotoLibraryViewModel` lifetime.
 
 ### `PhotoLibraryViewModel`
 
-The current shared application-state module for Gallery and Capture.
+Owns in-memory library items, Cover cache, import state, metadata task coordination, shared playback, and transient loop-prepared callback plumbing.
 
-It owns:
-
-- in-memory Photos;
-- in-memory Cover cache;
-- import and metadata-refinement state;
-- shared playback state;
-- coordination between processing, persistence, enrichment, and playback.
-
-Despite its name, it is not private to a single view. Do not create another owner for the same library state.
+Despite its name, it is shared by Gallery, Capture, Inspector, and Jam.
 
 ### `PhotoStore`
 
-Owns persisted library state under Application Support:
-
-- `library.json`;
-- Cover PNG files;
-- atomic writes;
-- metadata patches;
-- Cover-data loading;
-- serialized persistence through its actor.
-
-Callers should not reproduce its read-modify-write behavior.
+Owns library JSON, Cover files, serialized saves, metadata patches, and Cover loading.
 
 ### `PhotoMusicPipeline`
 
-Owns deterministic visual and musical derivation:
-
-- image normalization;
-- visual analysis;
-- sequence construction;
-- retro Cover generation;
-- tonal recoloring.
-
-It does not own persistence, UI state, metadata generation, or playback.
-
-### `PhotoMetadataGenerator`
-
-Owns best-effort visual classification, Foundation Models generation, sanitization, and graceful failure.
-
-It does not decide whether a Photo is saved.
+Owns deterministic image analysis, base Musical Sequence construction, Musical Identity, and Cover generation.
 
 ### `RetroCoverRenderer`
 
-Owns dithering, tonal palettes, recoloring, and pixel-level rendering. Keep this implementation local behind its small interface.
+Owns canonical pitch colors, tonal palettes, pattern halftone, Floyd-Steinberg analysis rendering, and pixel-level helpers.
+
+### `PhotoMetadataGenerator`
+
+Owns Vision classification, Foundation Models prompting, guided output, sanitization, and graceful failure.
 
 ### `MusicPlayer`
 
-Owns `AVAudioEngine`, note rendering, buffers, playback completion, and interruption details behind play and stop operations.
+Owns the audio graph, offline tonal and percussion rendering, role-based stems, Future Bass, sample playback, pumping, looping, scheduling, cancellation, and interruptions.
 
-### `CameraView` and `CameraController`
+### `MelodicSampleLibrary`
 
-`CameraView` owns presentation and capture interaction. `CameraController` hides `AVCaptureSession`, preview, rotation, and capture details.
+Owns Dap Analog Family sample loading, nearest-root lookup, and role playback ranges.
 
-Do not split the controller only because the file is large.
+### `DrumSampleLibrary`
+
+Owns drum sample loading, concrete kit mappings, and kit trims.
+
+### `CameraView`
+
+Owns Capture UI state and the user-facing creation/import flow.
+
+### `CameraController`
+
+Owns AVCaptureSession, device input, outputs, preview attachment, orientation, mirroring, flash capability, zoom, switching, capture, and sampled preview pitch color.
 
 ### `GalleryView`
 
-Owns Gallery layout and navigation to Photo Inspector. It does not own processing, persistence, metadata generation, or audio implementation.
+Owns grid presentation and UUID navigation to Inspector.
 
 ### `PhotoInspectorView`
 
-Owns the detail presentation for one Musical Photo. Effect and Jam actions remain placeholders until specified.
+Owns one-photo presentation and its current playback controls.
 
 ### `JamView`
 
-Currently a placeholder. Do not infer future architecture from it. Start with the smallest local Vibe vertical slice once specified.
+Owns transient photo selection, Vibe position, Drum Kit selection, selector presentation, playback state, pending feedback, and visible transport.
 
-## Ownership rules and seams
+### `JamArrangementBuilder`
 
-- Camera and PhotosPicker produce Source Image data.
-- Photo Creation transforms Source Image data into a Musical Photo.
-- `PhotoStore` persists and reloads the library.
-- Shared library state publishes Photos and coordinates user-facing operations.
-- Gallery browses Photos.
-- Photo Inspector acts on one existing Photo.
-- `MusicPlayer` renders Musical Sequences.
-- Jam owns Jam-specific state and references Photos.
-- Effects own audio transformation parameters, not Photo identity.
+Owns role assignment, global harmony, Vibe interpolation, Bass and Harmony transformation, Melody Motif Engine, and active-step attribution.
 
-Across feature seams, prefer stable IDs or small Sendable snapshots. Do not pass filesystem URLs, audio-engine internals, camera-session objects, or mutable persistence collections through views.
+### `JamGrooveLibrary`
 
-## Naming rules
+Owns groove-region classification, stable set hashing, and the twelve hard-coded percussion variants.
 
-Use:
+## Domain invariants
 
-- **Musical Photo** or **Photo** for the saved photo-derived object;
-- **Source Image** for raw imported or captured image data;
-- **Cover** for the generated visual;
-- **Musical Sequence** for playable note data;
-- **Effect** for an audio transformation;
-- **Jam** for the multi-photo session;
-- **Vibe** and **Studio** only as Jam modes;
-- **Photo Inspector** for the Photo detail surface.
+1. Every successfully persisted Musical Photo has one stable UUID.
+2. The essential Musical Photo and Cover persist before shared memory publishes the item.
+3. Metadata is optional and never changes the Cover or Musical Sequence.
+4. The original Source Image is not part of the persisted Musical Photo today.
+5. Gallery reads Covers from the shared in-memory cache, not from disk during view rendering.
+6. The persisted library is newest-first.
+7. One shared `MusicPlayer` arbitrates all playback.
+8. Starting a non-looping playback path stops the previous path.
+9. A running Jam loop receives replacement arrangements through latest-wins next-loop scheduling rather than a second engine.
+10. Capture acquires Source Images but does not own persisted library state.
+11. Inspector presents an existing Musical Photo and does not duplicate it.
+12. The root pitch class is the canonical source for pitch-color identity.
+13. Photo creation and Jam generation are deterministic for stable inputs and current algorithms.
+14. Jam references Musical Photos by stable UUID and does not mutate persisted sequences.
+15. Jam is transient and local in the current product.
+16. Only the photo assigned `.melody` supplies the current primary Melody note pool.
+17. All selected photos contribute to global Jam harmony.
+18. Melody and Harmony samples are role-specific Jam behavior; nil-role photo playback remains procedural.
+19. Drum Kit selection changes instrumentation, not the underlying regional groove pattern.
+20. Melody has no per-note duration or effective microtiming in the current model/runtime.
 
-Avoid:
+## Current intentional gaps and risks
 
-- `Pedal` for a Musical Photo;
-- `Pedalboard` for a Jam;
-- `Session` without a qualifier;
-- `Manager`, `Coordinator`, or `Service` when a precise domain name exists;
-- `Engine` unless the module encapsulates an actual runtime engine.
+The following are not implemented and must not be assumed to exist:
 
-Existing symbols such as `PhotoSound`, `ProcessedPhotoSound`, and `PhotoLibraryViewModel` may remain until an explicit rename. New product copy and documentation should use the domain language above.
+- audio effects;
+- persisted per-photo effects;
+- global Jam effects;
+- Studio mode;
+- saved Jam documents;
+- export of images, audio, MIDI, or animations;
+- Gallery selection, delete, share, grouping, and reordering;
+- direct Inspector-to-Jam insertion;
+- cloud sync;
+- multiplayer or collaboration;
+- remote services;
+- analytics;
+- a test target.
 
-## Architecture guardrails
+Current technical or musical risks:
 
-- Prefer a few deep modules with small interfaces over many shallow wrappers.
-- Preserve locality: behavior required to understand one operation should stay close together.
-- Apply the deletion test before extracting a module.
-- One adapter is a hypothetical seam; add an abstraction when two real implementations or a proven testing need make it real.
-- Do not add protocols solely for dependency injection.
-- Do not add a repository wrapper around `PhotoStore` without a concrete second persistence implementation.
-- Do not introduce a navigation coordinator while navigation remains small and concrete.
-- Do not split `CameraController`, `MusicPlayer`, or `RetroCoverRenderer` only to reduce file length.
-- Keep disk I/O, Vision, image processing, model generation, and audio rendering out of SwiftUI `body` evaluation.
-- Keep non-Sendable framework objects inside their owning modules and cross concurrency boundaries with Sendable values.
-- Avoid duplicated state that represents the same truth.
+- the latest Melody Motif Engine requires listening validation across all twelve grooves and varied photo sets;
+- Melody A/A' identity can change at rounded register-shift thresholds because transformed MIDI values enter the seed;
+- additional selected photos alter Melody context and seed but do not currently contribute equal Melody note material;
+- pumping is not circular across the loop boundary;
+- there is no per-note duration model for Melody articulation;
+- final output uses clamping rather than a dedicated limiter/master stage;
+- bundled audio contains assets not currently exercised by product behavior.
 
-## Current scope
+These are possible future tasks, not authorization to prebuild their architecture.
 
-- Gallery;
-- camera and Photos import;
-- deterministic photo-to-music creation;
-- progressive metadata;
-- Photo Inspector;
-- shared single-photo playback;
-- the first local Vibe slice when specified.
+## Naming
 
-## Deferred scope
+Use these product terms in new documentation and copy:
 
-Do not prebuild architecture for:
+- **Musical Photo** or **Photo**: the persisted photo-derived object;
+- **Source Image**: raw captured or imported image data;
+- **Cover**: generated four-tone visual;
+- **Musical Sequence**: deterministic playable note data;
+- **Musical Identity**: root, scale, BPM, profile, and tonal color;
+- **Jam**: the multi-photo music experience;
+- **Vibe**: the current XY Jam mode;
+- **Drum Kit**: the concrete Jam percussion sound set;
+- **Photo Inspector**: the detail screen;
+- **Studio**: a deferred explicit arrangement mode.
 
-- Studio;
-- multiplayer or Game Center synchronization;
-- remote collaboration;
-- cloud persistence;
-- graph-based Photo connections;
-- advanced arrangement timelines;
-- trained generative-music models;
-- generic plugin systems;
-- multiple persistence backends.
+Existing symbols such as `PhotoSound` and `PhotoLibraryViewModel` may remain. Do not perform broad renames without an explicit task.
 
-Deferred means the current code should not pay their architectural cost yet.
-
-## Decisions requiring a spec or ADR
+## Decisions that still require an explicit product specification
 
 Do not guess:
 
-- whether the original Source Image will be persisted;
-- whether Photo Effects are persisted;
-- whether Photo Effects influence Jam;
-- the Vibe coordinate-to-music mapping;
-- the persisted shape and lifecycle of a Jam;
-- behavior for missing or deleted Photos in a Jam;
-- multiplayer authority and disconnect behavior;
-- user-controlled Gallery ordering;
-- migration rules for future algorithm versions.
+- whether Source Images should be persisted;
+- whether future algorithm versions regenerate existing Musical Photos;
+- how algorithm-version migration should work;
+- whether effects belong to a Photo, Jam, or both;
+- whether effects are persisted;
+- whether Jam BPM becomes variable;
+- whether Vibe groove regions retain hard quadrant boundaries;
+- whether Melody should borrow note material from non-Melody photos;
+- whether Jam should support more than three photos and how extra roles behave;
+- whether the bundled Bass samples should replace or complement Future Bass;
+- whether Jam state is saved;
+- how deleted Photos affect future saved Jams;
+- how Gallery selection, grouping, and ordering should work;
+- what export formats and animation system are required;
+- what Studio means as an interaction and data model.
 
-## Change checklist
+## Documentation maintenance
 
-Before adding or moving code, answer:
+Update this file when any of these change:
 
-1. Which domain concept owns this behavior?
-2. Does the change improve locality?
-3. Is the proposed module deep or shallow?
-4. Is the seam real today or hypothetical?
-5. Does it preserve the invariants above?
-6. Is it authorized by current scope, a spec, or an ADR?
-7. Does its terminology match this glossary?
+- implemented product surface;
+- domain vocabulary;
+- persistence schema;
+- module ownership;
+- deterministic photo or Jam algorithms;
+- sample or kit mappings;
+- playback architecture;
+- Jam lifecycle;
+- an intentional gap becomes implemented.
 
-Update this file when domain language or invariants change. Do not use it as a changelog.
+Do not use this document for commit history. Keep it synchronized with the current repository state.
