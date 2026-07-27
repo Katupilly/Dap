@@ -47,6 +47,13 @@ final class MusicPlayer {
         var lowPassSample: Float = 0
     }
 
+    private enum KickDucking {
+        static let bassMinimumGain: Float = 0.72
+        static let harmonyMinimumGain: Float = 0.54
+        static let bassReleaseMilliseconds = 170.0
+        static let harmonyReleaseMilliseconds = 210.0
+    }
+
     nonisolated private static let tonalGain: Float = 0.16
     nonisolated private static let kickGain: Float = 0.70
     nonisolated private static let snareGain: Float = 0.58
@@ -284,10 +291,12 @@ final class MusicPlayer {
             left: [Float](repeating: 0, count: frameCount),
             right: [Float](repeating: 0, count: frameCount)
         )
+        var bassOutput = emptyRenderedAudio(frameCount: frameCount)
+        var harmonyOutput = emptyRenderedAudio(frameCount: frameCount)
         let bassNotes = sortedNotes.filter { $0.voiceRole == .bass }
         let didRenderFutureBass = renderFutureBassLine(
             bassNotes,
-            into: &output,
+            into: &bassOutput,
             samplesPerStep: samplesPerStep,
             gateSamples: gateSamples,
             sampleRate: sampleRate,
@@ -302,7 +311,7 @@ final class MusicPlayer {
                     if !didRenderFutureBass {
                         renderProceduralNote(
                             note,
-                            into: &output,
+                            into: &bassOutput,
                             wave: wave,
                             envelope: envelope,
                             samplesPerStep: samplesPerStep,
@@ -313,10 +322,25 @@ final class MusicPlayer {
                     continue
                 }
 
-                let didRenderSample = note.voiceRole.map {
-                    renderSampleBasedNote(
+                let didRenderSample: Bool
+                switch note.voiceRole {
+                case .bass:
+                    didRenderSample = false
+                case .harmony:
+                    didRenderSample = renderSampleBasedNote(
                         note,
-                        role: $0,
+                        role: .harmony,
+                        allNotes: sortedNotes,
+                        into: &harmonyOutput,
+                        samplesPerStep: samplesPerStep,
+                        gateSamples: gateSamples,
+                        sampleRate: sampleRate,
+                        loops: loops
+                    )
+                case .melody:
+                    didRenderSample = renderSampleBasedNote(
+                        note,
+                        role: .melody,
                         allNotes: sortedNotes,
                         into: &output,
                         samplesPerStep: samplesPerStep,
@@ -324,21 +348,70 @@ final class MusicPlayer {
                         sampleRate: sampleRate,
                         loops: loops
                     )
-                } ?? false
+                case nil:
+                    didRenderSample = false
+                }
 
                 if !didRenderSample {
-                    renderProceduralNote(
-                        note,
-                        into: &output,
-                        wave: wave,
-                        envelope: envelope,
-                        samplesPerStep: samplesPerStep,
-                        tonalFrameCount: tonalFrameCount,
-                        sampleRate: sampleRate
-                    )
+                    switch note.voiceRole {
+                    case .bass:
+                        renderProceduralNote(
+                            note,
+                            into: &bassOutput,
+                            wave: wave,
+                            envelope: envelope,
+                            samplesPerStep: samplesPerStep,
+                            tonalFrameCount: tonalFrameCount,
+                            sampleRate: sampleRate
+                        )
+                    case .harmony:
+                        renderProceduralNote(
+                            note,
+                            into: &harmonyOutput,
+                            wave: wave,
+                            envelope: envelope,
+                            samplesPerStep: samplesPerStep,
+                            tonalFrameCount: tonalFrameCount,
+                            sampleRate: sampleRate
+                        )
+                    case .melody, nil:
+                        renderProceduralNote(
+                            note,
+                            into: &output,
+                            wave: wave,
+                            envelope: envelope,
+                            samplesPerStep: samplesPerStep,
+                            tonalFrameCount: tonalFrameCount,
+                            sampleRate: sampleRate
+                        )
+                    }
                 }
             }
         }
+
+        let kickFrames = resolvedKickFrames(
+            from: percussion?.kickHits ?? [],
+            samplesPerStep: samplesPerStep,
+            frameCount: frameCount
+        )
+
+        if !kickFrames.isEmpty {
+            applyKickDucking(
+                to: &bassOutput,
+                kickFrames: kickFrames,
+                minimumGain: KickDucking.bassMinimumGain,
+                releaseSamples: millisecondsToSamples(KickDucking.bassReleaseMilliseconds, sampleRate: sampleRate)
+            )
+            applyKickDucking(
+                to: &harmonyOutput,
+                kickFrames: kickFrames,
+                minimumGain: KickDucking.harmonyMinimumGain,
+                releaseSamples: millisecondsToSamples(KickDucking.harmonyReleaseMilliseconds, sampleRate: sampleRate)
+            )
+        }
+
+        mix(layer: bassOutput, into: &output)
+        mix(layer: harmonyOutput, into: &output)
 
         if let percussion {
             let drumKit = DrumSampleLibrary.kit(for: percussion.kit)
@@ -788,6 +861,65 @@ final class MusicPlayer {
         return max(max(kickTail, snareTail), max(closedHatTail, max(openHatTail, rimTail)))
     }
 
+    nonisolated private static func emptyRenderedAudio(frameCount: Int) -> RenderedAudio {
+        RenderedAudio(
+            left: [Float](repeating: 0, count: frameCount),
+            right: [Float](repeating: 0, count: frameCount)
+        )
+    }
+
+    nonisolated private static func resolvedKickFrames(
+        from hits: [MusicPercussionHit],
+        samplesPerStep: Int,
+        frameCount: Int
+    ) -> [Int] {
+        Array(
+            Set(
+                hits.compactMap { hit in
+                    guard (0..<MusicSequence.steps).contains(hit.step) else { return nil }
+                    let frame = hit.step * samplesPerStep
+                    return frame < frameCount ? frame : nil
+                }
+            )
+        )
+        .sorted()
+    }
+
+    nonisolated private static func millisecondsToSamples(_ milliseconds: Double, sampleRate: Int) -> Int {
+        max(1, Int((milliseconds / 1_000.0 * Double(sampleRate)).rounded()))
+    }
+
+    nonisolated private static func applyKickDucking(
+        to samples: inout RenderedAudio,
+        kickFrames: [Int],
+        minimumGain: Float,
+        releaseSamples: Int
+    ) {
+        guard samples.left.count == samples.right.count, !samples.left.isEmpty else { return }
+
+        var gainEnvelope = Array(repeating: Float(1), count: samples.left.count)
+
+        for kickFrame in kickFrames {
+            for offset in 0..<releaseSamples {
+                let frame = kickFrame + offset
+
+                guard frame < gainEnvelope.count else {
+                    break
+                }
+
+                let progress = Float(offset) / Float(max(releaseSamples - 1, 1))
+                let easedProgress = 1 - pow(1 - progress, 2)
+                let gain = minimumGain + (1 - minimumGain) * easedProgress
+                gainEnvelope[frame] = min(gainEnvelope[frame], gain)
+            }
+        }
+
+        for index in gainEnvelope.indices {
+            samples.left[index] *= gainEnvelope[index]
+            samples.right[index] *= gainEnvelope[index]
+        }
+    }
+
     nonisolated private static func maxTailFrameCount(
         for hits: [MusicPercussionHit],
         samplesPerStep: Int,
@@ -1234,7 +1366,22 @@ final class MusicPlayer {
         samplesPerStep: Int,
         gateSamples: Int
     ) -> Int {
-        let noteEndFrame = note.step * samplesPerStep + gateSamples
+        let noteStartFrame = note.step * samplesPerStep
+
+        if role == .harmony {
+            let harmonyMinimumGate = Int(Double(samplesPerStep) * 0.75)
+            let harmonyTargetGate = max(gateSamples, harmonyMinimumGate)
+            let nextHarmonyStartFrame = allNotes
+                .first(where: { candidate in
+                    candidate.voiceRole == .harmony && candidate.step > note.step
+                })
+                .map({ $0.step * samplesPerStep })
+
+            let noteEndFrame = noteStartFrame + harmonyTargetGate
+            return nextHarmonyStartFrame.map { min(noteEndFrame, $0) } ?? noteEndFrame
+        }
+
+        let noteEndFrame = noteStartFrame + gateSamples
 
         guard role == .bass,
               let nextBassStartFrame = allNotes
@@ -1269,7 +1416,7 @@ final class MusicPlayer {
         case .bass:
             0.70
         case .harmony:
-            0.34
+            0.44
         case .melody:
             0.50
         }
