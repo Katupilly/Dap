@@ -15,7 +15,8 @@ struct JamView: View {
     private let arrangementBuilder = JamArrangementBuilder(bpm: Int(jamBPM))
 
     @State private var slotAssignments = JamSlotAssignments()
-    @State private var controlPanel: JamControlPanel = .none
+    @State private var selectedPanel: JamControlPanel = .none
+    @State private var isPanelPresented = false
     @State private var vibePosition = CGPoint(x: 0.5, y: 0.5)
     @State private var drumKitSelection: MusicDrumKitSelection = .auto
     @State private var isPhotoSelectorPresented = false
@@ -30,6 +31,10 @@ struct JamView: View {
     @State private var activeArrangement: JamArrangement?
     @State private var transportTask: Task<Void, Never>?
     @State private var appliedArrangementVersion = 0
+
+    private let panelRevealHeight: CGFloat = 254
+    private let panelDockGap: CGFloat = 14
+    private let bottomReserve: CGFloat = 168
 
     private var selectedSounds: [PhotoSound] {
         slotAssignments.allPhotoIDs.compactMap { id in
@@ -165,13 +170,11 @@ struct JamView: View {
         return Color(RetroCoverRenderer.tonalPalette(for: pitch).base)
     }
 
-    @Namespace private var controlNamespace
-
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .bottom) {
-                Color(uiColor: .systemBackground)
+        ZStack(alignment: .bottom) {
+            Color(uiColor: .systemBackground)
 
+            ScrollView {
                 VStack(spacing: 16) {
                     if selectedSounds.isEmpty {
                         emptyState
@@ -182,104 +185,207 @@ struct JamView: View {
                     if hasAnySelection {
                         sequencerAndStatus
                     }
-
-                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, hasAnySelection ? 168 : 16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    Color.clear.frame(height: 34)
-                }
+                .padding(.top, 84)
+                .padding(.bottom, bottomReserve)
+                .frame(maxWidth: .infinity)
+            }
+            .scrollIndicators(.hidden)
 
-                if controlPanel != .none {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(morphAnimation) { controlPanel = .none }
-                        }
-                        .transition(.opacity)
-                }
+            if isPanelPresented {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        closePanel()
+                    }
+                    .zIndex(1)
+            }
 
-                if hasAnySelection {
-                    JamFloatingDock(
-                        panel: $controlPanel,
-                        vibePosition: $vibePosition,
-                        onVibeChanged: {
-                            if isPlaying {
-                                hasPendingArrangementChanges = true
-                            }
-                        },
-                        morphAnimation: morphAnimation,
-                        namespace: controlNamespace
-                    )
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 76)
-                    .transition(.opacity)
+            if hasAnySelection {
+                panelLayer
+                    .zIndex(3)
 
-                    playbackButton
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 16)
-                        .transition(.opacity)
-                }
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .sensoryFeedback(.selection, trigger: appliedArrangementVersion)
-            .sheet(isPresented: $isPhotoSelectorPresented) {
-                JamPhotoSelectorSheet(
-                    sounds: library.items,
-                    coverDataByID: library.coverDataByID,
-                    selectedPhotoIDs: slotAssignments.allPhotoIDs,
-                    isPresented: $isPhotoSelectorPresented,
-                    onConfirmSelection: confirmPhotoSelection
-                )
-            }
-            .onAppear {
-                library.setTransientLoopUpdatePreparedHandler {
-                    handlePreparedDrumKitLoopUpdate()
-                }
-            }
-            .onDisappear {
-                library.clearTransientLoopUpdatePreparedHandler()
-                clearTransportAndPlayback()
-            }
-            .onChange(of: isActive) { _, isActive in
-                guard !isActive else { return }
-                clearTransportAndPlayback()
-            }
-            .onChange(of: library.items.map(\.id)) { _, itemIDs in
-                let validIDs = Set(itemIDs)
-                let playableIDs = Set(
-                    library.items.compactMap { sound in
-                        sound.sequence.notes.isEmpty ? nil : sound.id
+                JamDockBar(
+                    selectedPanel: $selectedPanel,
+                    isPanelPresented: $isPanelPresented,
+                    vibePosition: $vibePosition,
+                    onPanelToggle: { target in
+                        handlePanelToggle(target)
                     }
                 )
-                let previousAssignments = slotAssignments
-                let cleanedAssignments = slotAssignments.pruningInvalidIDs(
-                    validIDs: validIDs,
-                    playableIDs: playableIDs
-                )
+                .padding(.horizontal, 20)
+                .padding(.bottom, 82)
+                .zIndex(4)
 
-                guard cleanedAssignments != previousAssignments else { return }
+                playbackButton
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
+                    .zIndex(5)
+            }
+        }
+        .sensoryFeedback(.selection, trigger: appliedArrangementVersion)
+        .sheet(isPresented: $isPhotoSelectorPresented) {
+            JamPhotoSelectorSheet(
+                sounds: library.items,
+                coverDataByID: library.coverDataByID,
+                selectedPhotoIDs: slotAssignments.allPhotoIDs,
+                isPresented: $isPhotoSelectorPresented,
+                onConfirmSelection: confirmPhotoSelection
+            )
+        }
+        .onAppear {
+            library.setTransientLoopUpdatePreparedHandler {
+                handlePreparedDrumKitLoopUpdate()
+            }
+        }
+        .onDisappear {
+            library.clearTransientLoopUpdatePreparedHandler()
+            clearTransportAndPlayback()
+        }
+        .onChange(of: isActive) { _, isActive in
+            guard !isActive else { return }
+            clearTransportAndPlayback()
+        }
+        .onChange(of: library.items.map(\.id)) { _, itemIDs in
+            let validIDs = Set(itemIDs)
+            let playableIDs = Set(
+                library.items.compactMap { sound in
+                    sound.sequence.notes.isEmpty ? nil : sound.id
+                }
+            )
+            let previousAssignments = slotAssignments
+            let cleanedAssignments = slotAssignments.pruningInvalidIDs(
+                validIDs: validIDs,
+                playableIDs: playableIDs
+            )
 
-                if isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
+            guard cleanedAssignments != previousAssignments else { return }
+
+            if isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
+                hasPendingArrangementChanges = true
+            }
+
+            slotAssignments = cleanedAssignments
+        }
+        .onChange(of: library.isTransientPlaybackActive) { _, isActive in
+            guard !isActive, isPlaying else { return }
+            clearTransportState()
+        }
+    }
+
+    // MARK: - Panel presentation
+
+    @ViewBuilder
+    private var panelLayer: some View {
+        if isPanelPresented || selectedPanel != .none {
+            ZStack(alignment: .bottom) {
+                panelContent
+                    .opacity(isPanelPresented ? 1 : 0)
+                    .offset(y: isPanelPresented ? 0 : panelRevealHeight + panelDockGap)
+            }
+            .frame(width: 254, height: panelRevealHeight)
+            .clipped()
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 82 + 68 + panelDockGap)
+            .allowsHitTesting(isPanelPresented)
+        }
+    }
+
+    @ViewBuilder
+    private var panelContent: some View {
+        switch selectedPanel {
+        case .vibe:
+            vibePanelContent
+        case .effects:
+            effectsPanelContent
+        case .none:
+            Color.clear
+        }
+    }
+
+    private var vibePanelContent: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.secondary.opacity(0.10))
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            VibeControl(position: $vibePosition) {
+                if isPlaying {
                     hasPendingArrangementChanges = true
                 }
-
-                slotAssignments = cleanedAssignments
             }
-            .onChange(of: library.isTransientPlaybackActive) { _, isActive in
-                guard !isActive, isPlaying else { return }
-                clearTransportState()
+        }
+        .frame(width: 254, height: 254)
+        .accessibilityLabel("Vibe control")
+        .accessibilityValue(thumbnailLabel)
+    }
+
+    private var effectsPanelContent: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.secondary.opacity(0.10))
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            VStack(spacing: 8) {
+                Text("Effect Rack")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text("No effects yet")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text("Rack is empty")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(16)
+        }
+        .frame(width: 254, height: 254)
+        .accessibilityLabel("Effect Rack")
+        .accessibilityValue("Empty")
+    }
+
+    private func handlePanelToggle(_ target: JamControlPanel) {
+        if selectedPanel == target && isPanelPresented {
+            closePanel()
+        } else if selectedPanel != .none && isPanelPresented {
+            withAnimation(.easeOut(duration: 0.12)) {
+                selectedPanel = target
+            }
+        } else {
+            selectedPanel = target
+            withAnimation(panelRevealAnimation) {
+                isPanelPresented = true
             }
         }
     }
 
-    private var morphAnimation: Animation {
+    private func closePanel() {
+        withAnimation(panelRevealAnimation) {
+            isPanelPresented = false
+        } completion: {
+            if !isPanelPresented {
+                selectedPanel = .none
+            }
+        }
+    }
+
+    private var panelRevealAnimation: Animation {
         reduceMotion
-            ? .easeOut(duration: 0.16)
-            : .spring(response: 0.36, dampingFraction: 0.88)
+            ? .easeOut(duration: 0.15)
+            : .snappy(duration: 0.32, extraBounce: 0)
+    }
+
+    private var thumbnailLabel: String {
+        switch JamGrooveLibrary.region(for: vibePosition) {
+        case .airy: "Airy"
+        case .bright: "Bright"
+        case .deep: "Deep"
+        case .intense: "Intense"
+        }
     }
 
     private var emptyState: some View {
@@ -877,84 +983,32 @@ private struct JamSequencerAndStatus: View {
     }
 }
 
-private struct JamFloatingDock: View {
-    @Binding var panel: JamControlPanel
+private struct JamDockBar: View {
+    @Binding var selectedPanel: JamControlPanel
+    @Binding var isPanelPresented: Bool
     @Binding var vibePosition: CGPoint
-    let onVibeChanged: () -> Void
-    let morphAnimation: Animation
-    let namespace: Namespace.ID
+    let onPanelToggle: (JamControlPanel) -> Void
 
     private static let tileSize: CGFloat = 68
     private static let tileSpacing: CGFloat = 12
     private static let cornerRadius: CGFloat = 18
-    private static let maxVibePanelSize: CGFloat = 260
-    private static let effectsPanelSize: CGFloat = 220
 
     var body: some View {
-        GeometryReader { proxy in
-            let availableWidth = proxy.size.width
-            let vibePanelSize = resolvedVibePanelSize(availableWidth: availableWidth)
-            let dock = dockContent(vibePanelSize: vibePanelSize)
-
-            ZStack(alignment: .bottom) {
-                dock
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
+        HStack(spacing: Self.tileSpacing) {
+            vibeTileButton
+            effectsTileButton
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
-    @ViewBuilder
-    private func dockContent(vibePanelSize: CGFloat) -> some View {
-        switch panel {
-        case .vibe:
-            HStack(alignment: .bottom, spacing: Self.tileSpacing) {
-                vibePanel(size: vibePanelSize)
-                    .matchedGeometryEffect(id: JamDockID.vibe, in: namespace)
-                effectsTile
-                    .matchedGeometryEffect(id: JamDockID.effects, in: namespace)
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .animation(morphAnimation, value: panel)
-        case .effects:
-            HStack(alignment: .bottom, spacing: Self.tileSpacing) {
-                vibeTile
-                    .matchedGeometryEffect(id: JamDockID.vibe, in: namespace)
-                effectsPanel
-                    .matchedGeometryEffect(id: JamDockID.effects, in: namespace)
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .animation(morphAnimation, value: panel)
-        case .none:
-            HStack(spacing: Self.tileSpacing) {
-                vibeTile
-                    .matchedGeometryEffect(id: JamDockID.vibe, in: namespace)
-                effectsTile
-                    .matchedGeometryEffect(id: JamDockID.effects, in: namespace)
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .animation(morphAnimation, value: panel)
-        }
-    }
-
-    private func resolvedVibePanelSize(availableWidth: CGFloat) -> CGFloat {
-        let secondaryTileWidth = Self.tileSize
-        let horizontalMargins: CGFloat = 0
-        let availablePanelWidth = availableWidth
-            - secondaryTileWidth
-            - Self.tileSpacing
-            - horizontalMargins
-        let clamped = min(Self.maxVibePanelSize, availablePanelWidth)
-        return max(160, clamped)
-    }
-
-    private var vibeTile: some View {
+    private var vibeTileButton: some View {
         Button {
-            withAnimation(morphAnimation) { panel = .vibe }
+            onPanelToggle(.vibe)
         } label: {
             VibeDockTile(
                 position: vibePosition,
-                cornerRadius: Self.cornerRadius
+                cornerRadius: Self.cornerRadius,
+                isActive: selectedPanel == .vibe && isPanelPresented
             )
         }
         .buttonStyle(.plain)
@@ -963,65 +1017,18 @@ private struct JamFloatingDock: View {
         .accessibilityValue(thumbnailLabel)
     }
 
-    private var effectsTile: some View {
+    private var effectsTileButton: some View {
         Button {
-            withAnimation(morphAnimation) { panel = .effects }
+            onPanelToggle(.effects)
         } label: {
-            EffectsDockTile(cornerRadius: Self.cornerRadius)
+            EffectsDockTile(
+                cornerRadius: Self.cornerRadius,
+                isActive: selectedPanel == .effects && isPanelPresented
+            )
         }
         .buttonStyle(.plain)
         .frame(width: Self.tileSize, height: Self.tileSize)
         .accessibilityLabel("Effects")
-        .accessibilityValue("Empty")
-    }
-
-    private func vibePanel(size: CGFloat) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(Color.secondary.opacity(0.10))
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
-            VibeControl(position: $vibePosition) {
-                onVibeChanged()
-            }
-        }
-        .frame(width: size, height: size)
-        .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
-        .onTapGesture(count: 2) {
-            withAnimation(morphAnimation) { panel = .none }
-        }
-        .accessibilityLabel("Vibe control")
-        .accessibilityValue(thumbnailLabel)
-    }
-
-    private var effectsPanel: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(Color.secondary.opacity(0.10))
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
-            VStack(spacing: 8) {
-                Text("Effect Rack")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text("No effects yet")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text("Rack is empty")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .padding(16)
-        }
-        .frame(width: Self.effectsPanelSize, height: 140)
-        .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
-        .onTapGesture(count: 2) {
-            withAnimation(morphAnimation) { panel = .none }
-        }
-        .accessibilityLabel("Effect Rack")
         .accessibilityValue("Empty")
     }
 
@@ -1035,19 +1042,15 @@ private struct JamFloatingDock: View {
     }
 }
 
-private enum JamDockID {
-    static let vibe = "jamDock.vibe"
-    static let effects = "jamDock.effects"
-}
-
 private struct VibeDockTile: View {
     let position: CGPoint
     let cornerRadius: CGFloat
+    var isActive: Bool = false
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.secondary.opacity(0.10))
+                .fill(Color.secondary.opacity(isActive ? 0.16 : 0.10))
 
             VStack(spacing: 3) {
                 ZStack {
@@ -1077,18 +1080,19 @@ private struct VibeDockTile: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(Color.white.opacity(isActive ? 0.22 : 0.10), lineWidth: 1)
         }
     }
 }
 
 private struct EffectsDockTile: View {
     let cornerRadius: CGFloat
+    var isActive: Bool = false
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.secondary.opacity(0.10))
+                .fill(Color.secondary.opacity(isActive ? 0.16 : 0.10))
 
             VStack(spacing: 3) {
                 Image(systemName: "slider.horizontal.3")
@@ -1103,7 +1107,7 @@ private struct EffectsDockTile: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(Color.white.opacity(isActive ? 0.22 : 0.10), lineWidth: 1)
         }
     }
 }
@@ -1127,13 +1131,7 @@ private struct VibeControl: View {
             )
 
             ZStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(Color.secondary.opacity(0.07))
-
                 quadrantHighlights
-
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
 
                 crosshair
 
@@ -1220,7 +1218,7 @@ private struct VibeControl: View {
             LinearGradient(colors: [.clear, Color.white.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomLeading)
             LinearGradient(colors: [.clear, Color.white.opacity(0.03)], startPoint: .topTrailing, endPoint: .bottomTrailing)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var cornerLabels: some View {
