@@ -39,6 +39,11 @@ final class PhotoLibraryViewModel {
     /// UUID of the currently-playing sound, nil if nothing is playing.
     private(set) var playingID: UUID?
 
+    /// True while a transient Jam-style loop is playing.
+    /// Independent of `playingID` (which stays nil for loop playback)
+    /// so callers can react to natural end or interruption.
+    private(set) var isTransientPlaybackActive = false
+
     // MARK: Private
 
     private let player = MusicPlayer()
@@ -49,6 +54,7 @@ final class PhotoLibraryViewModel {
     init() {
         player.onPlaybackFinished = { [weak self] in
             self?.playingID = nil
+            self?.isTransientPlaybackActive = false
         }
     }
 
@@ -244,8 +250,10 @@ final class PhotoLibraryViewModel {
         if playingID == sound.id {
             player.stop()
             playingID = nil
+            isTransientPlaybackActive = false
         } else {
             player.stop()
+            isTransientPlaybackActive = false
             player.play(sequence: sound.sequence)
             playingID = sound.id
         }
@@ -255,6 +263,7 @@ final class PhotoLibraryViewModel {
     func stopPlayback() {
         player.stop()
         playingID = nil
+        isTransientPlaybackActive = false
     }
 
     func playTransientSequence(
@@ -264,11 +273,13 @@ final class PhotoLibraryViewModel {
     ) {
         if loops {
             playingID = nil
+            isTransientPlaybackActive = true
             player.play(sequence: sequence, percussion: percussion, loops: true)
             return
         }
 
         stopPlayback()
+        isTransientPlaybackActive = true
         player.play(sequence: sequence, percussion: percussion, loops: loops)
     }
 

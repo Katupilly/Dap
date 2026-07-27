@@ -164,6 +164,10 @@ struct JamView: View {
                     selectedSoundIDs = filtered
                 }
             }
+            .onChange(of: library.isTransientPlaybackActive) { _, isActive in
+                guard !isActive, isPlaying else { return }
+                clearTransportState()
+            }
             .onChange(of: selectedSoundIDs) { _, newValue in
                 let validIDs = newValue.filter { id in
                     library.items.contains(where: { $0.id == id })
@@ -411,6 +415,19 @@ struct JamView: View {
         if clearPending {
             hasPendingArrangementChanges = false
         }
+    }
+
+    /// Clears only the Jam's local transport/UI state.
+    /// Use when the underlying player has already been stopped
+    /// externally (e.g. audio interruption) and we must not call `player.stop()` again.
+    private func clearTransportState() {
+        cancelTransportTask()
+        clearDrumKitPendingFeedback()
+        activeArrangement = nil
+        currentStep = nil
+        activeSoundIDs = []
+        isPlaying = false
+        hasPendingArrangementChanges = false
     }
 
     private func cancelTransportTask() {
