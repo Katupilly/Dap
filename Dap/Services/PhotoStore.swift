@@ -128,6 +128,50 @@ actor PhotoStore {
 
     enum UpdateMetadataError: Error { case notFound }
 
+    func delete(id: UUID) throws -> [PhotoSound] {
+        let libURL = try libraryURL()
+        let fm = FileManager.default
+
+        guard fm.fileExists(atPath: libURL.path) else {
+            throw DeleteError.notFound
+        }
+
+        let data = try Data(contentsOf: libURL)
+        var library = try JSONDecoder().decode([PhotoSound].self, from: data)
+
+        guard let index = library.firstIndex(where: { $0.id == id }) else {
+            throw DeleteError.notFound
+        }
+
+        let removed = library.remove(at: index)
+        let coverURL = try coversDirectory().appendingPathComponent(removed.coverFilename)
+        let stashedCoverURL = coverURL.appendingPathExtension("deleting")
+        let hadCover = fm.fileExists(atPath: coverURL.path)
+
+        if hadCover {
+            try? fm.removeItem(at: stashedCoverURL)
+            try fm.moveItem(at: coverURL, to: stashedCoverURL)
+        }
+
+        do {
+            let jsonData = try JSONEncoder().encode(library)
+            try jsonData.write(to: libURL, options: .atomic)
+        } catch {
+            if hadCover, fm.fileExists(atPath: stashedCoverURL.path) {
+                try? fm.moveItem(at: stashedCoverURL, to: coverURL)
+            }
+            throw error
+        }
+
+        if hadCover {
+            try? fm.removeItem(at: stashedCoverURL)
+        }
+
+        return library
+    }
+
+    enum DeleteError: Error { case notFound }
+
     // MARK: - Cover data cache
 
     /// Loads cover PNG data for an array of sounds into a dictionary keyed by UUID.
