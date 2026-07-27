@@ -156,8 +156,9 @@ struct JamArrangementBuilder {
         ]
 
         var previousMIDINote: Int?
+        let totalCount = sampledNotes.count
 
-        return sampledNotes.map { note in
+        return sampledNotes.enumerated().map { index, note in
             let originalPitchClass = PitchClass(normalizing: note.midiNote).rawValue
             let chosenPitchClass = preferredBassPitchClass(
                 for: originalPitchClass,
@@ -171,15 +172,26 @@ struct JamArrangementBuilder {
             )
             previousMIDINote = targetMIDINote
 
+            let timingOffset = bassTimingOffsetSteps(
+                for: note.step,
+                noteIndex: index,
+                totalCount: totalCount
+            )
+
             return MusicNote(
                 step: note.step,
                 row: row(for: targetMIDINote),
                 midiNote: targetMIDINote,
                 velocity: transformedVelocity(
                     note.velocity,
-                    multiplier: 0.70,
+                    multiplier: bassVelocityMultiplier(
+                        for: note.step,
+                        noteIndex: index
+                    ),
                     role: .bass
-                )
+                ),
+                voiceRole: .bass,
+                timingOffsetSteps: timingOffset == 0 ? nil : timingOffset
             )
         }
     }
@@ -221,7 +233,8 @@ struct JamArrangementBuilder {
                     note.velocity,
                     multiplier: 0.55,
                     role: .harmony
-                )
+                ),
+                voiceRole: .harmony
             )
         }
     }
@@ -255,7 +268,8 @@ struct JamArrangementBuilder {
                     note.velocity,
                     multiplier: 0.75,
                     role: .melody
-                )
+                ),
+                voiceRole: .melody
             )
         }
     }
@@ -273,6 +287,44 @@ struct JamArrangementBuilder {
         case .melody:
             return min(1.0, max(0.0, sourceVelocity * multiplier))
         }
+    }
+
+    private func bassTimingOffsetSteps(
+        for step: Int,
+        noteIndex: Int,
+        totalCount: Int
+    ) -> Float {
+        guard step > 0 else { return 0 }
+
+        let isStructuredPickup = totalCount >= 3 && noteIndex > 0 && noteIndex < totalCount - 1 && step % 8 == 3
+        let proposedOffset: Float
+        if isStructuredPickup {
+            proposedOffset = -0.04
+        } else if step % 4 == 2 {
+            proposedOffset = 0.06
+        } else {
+            proposedOffset = 0
+        }
+
+        let clampedOffset = min(0.08, max(-0.06, proposedOffset))
+        let latestOffset = Float(MusicSequence.steps - 1 - step) + 0.999
+        return min(clampedOffset, latestOffset)
+    }
+
+    private func bassVelocityMultiplier(for step: Int, noteIndex: Int) -> Float {
+        let base: Float = 0.70
+        let accent: Float
+        if step % 8 == 0 {
+            accent = 1.12
+        } else if step % 4 == 2 {
+            accent = 0.94
+        } else if noteIndex.isMultiple(of: 2) {
+            accent = 1.04
+        } else {
+            accent = 0.90
+        }
+
+        return base * accent
     }
 
     private func effectiveDensity(for role: JamRole, sourceCount: Int, vibePosition: CGPoint) -> Double {

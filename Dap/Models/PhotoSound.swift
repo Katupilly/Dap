@@ -84,6 +84,12 @@ struct MusicHarmony: Codable, Sendable, Equatable {
     }
 }
 
+enum MusicVoiceRole: String, Codable, Sendable {
+    case bass
+    case harmony
+    case melody
+}
+
 // MARK: - Music Note
 
 struct MusicNote: Codable, Sendable, Equatable, Identifiable {
@@ -91,6 +97,8 @@ struct MusicNote: Codable, Sendable, Equatable, Identifiable {
     let row: Int
     let midiNote: Int
     let velocity: Float
+    var voiceRole: MusicVoiceRole? = nil
+    var timingOffsetSteps: Float? = nil
 
     var id: String { "\(step)-\(row)" }
 }

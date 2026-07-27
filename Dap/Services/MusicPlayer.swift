@@ -27,6 +27,27 @@ final class MusicPlayer {
         case closedHat
     }
 
+    private enum MelodicVoiceFade {
+        static let bassMilliseconds = 30.0
+        static let harmonyMilliseconds = 80.0
+        static let melodyMilliseconds = 45.0
+    }
+
+    private struct FutureBassEvent {
+        let midiNote: Int
+        let velocity: Float
+        let startFrame: Int
+        let musicalEndFrame: Int
+    }
+
+    private struct FutureBassState {
+        var sawPhase = 0.0
+        var trianglePhase = 0.0
+        var subPhase = 0.0
+        var lowPassSample: Float = 0
+    }
+
+    nonisolated private static let tonalGain: Float = 0.16
     nonisolated private static let kickGain: Float = 0.70
     nonisolated private static let snareGain: Float = 0.58
     nonisolated private static let closedHatGain: Float = 0.35
@@ -241,6 +262,14 @@ final class MusicPlayer {
         let wave           = waveformTable(sequence.soundProfile.waveform, size: 512)
         let envelope       = envelopeTable(length: gateSamples)
         let tonalFrameCount = samplesPerStep * MusicSequence.steps
+        let sortedNotes = sequence.notes.sorted(by: byNoteOrder)
+        let maximumMelodicFrameCount = maximumSampleBasedFrameCount(
+            for: sortedNotes,
+            samplesPerStep: samplesPerStep,
+            gateSamples: gateSamples,
+            sampleRate: sampleRate,
+            tonalFrameCount: tonalFrameCount
+        )
         let maximumPercussionFrameCount = percussion.map {
             let drumKit = DrumSampleLibrary.kit(for: $0.kit)
             return reservedPercussionFrameCount(
@@ -250,24 +279,63 @@ final class MusicPlayer {
                 drumKit: drumKit
             )
         } ?? 0
-        let frameCount     = loops ? tonalFrameCount : max(tonalFrameCount, maximumPercussionFrameCount)
+        let frameCount     = loops ? tonalFrameCount : max(maximumMelodicFrameCount, maximumPercussionFrameCount)
         var output         = RenderedAudio(
             left: [Float](repeating: 0, count: frameCount),
             right: [Float](repeating: 0, count: frameCount)
         )
-        let byStep         = Dictionary(grouping: sequence.notes, by: \.step)
+        let bassNotes = sortedNotes.filter { $0.voiceRole == .bass }
+        let didRenderFutureBass = renderFutureBassLine(
+            bassNotes,
+            into: &output,
+            samplesPerStep: samplesPerStep,
+            gateSamples: gateSamples,
+            sampleRate: sampleRate,
+            loops: loops,
+            tonalFrameCount: tonalFrameCount
+        )
+        let byStep         = Dictionary(grouping: sortedNotes, by: \.step)
 
         for step in 0..<MusicSequence.steps {
             for note in byStep[step] ?? [] {
-                let freq  = 440.0 * pow(2, Double(note.midiNote - 69) / 12)
-                let phInc = freq * Double(wave.count) / Double(sampleRate)
-                for s in 0..<gateSamples {
-                    let index = step * samplesPerStep + s
-                    guard index < tonalFrameCount else { continue }
-                    let ph = Int(Double(s) * phInc) % wave.count
-                    let sample = wave[ph] * envelope[s] * note.velocity * 0.16
-                    output.left[index] += sample
-                    output.right[index] += sample
+                if note.voiceRole == .bass {
+                    if !didRenderFutureBass {
+                        renderProceduralNote(
+                            note,
+                            into: &output,
+                            wave: wave,
+                            envelope: envelope,
+                            samplesPerStep: samplesPerStep,
+                            tonalFrameCount: tonalFrameCount,
+                            sampleRate: sampleRate
+                        )
+                    }
+                    continue
+                }
+
+                let didRenderSample = note.voiceRole.map {
+                    renderSampleBasedNote(
+                        note,
+                        role: $0,
+                        allNotes: sortedNotes,
+                        into: &output,
+                        samplesPerStep: samplesPerStep,
+                        gateSamples: gateSamples,
+                        sampleRate: sampleRate,
+                        loops: loops
+                    )
+                } ?? false
+
+                if !didRenderSample {
+                    renderProceduralNote(
+                        note,
+                        into: &output,
+                        wave: wave,
+                        envelope: envelope,
+                        samplesPerStep: samplesPerStep,
+                        tonalFrameCount: tonalFrameCount,
+                        sampleRate: sampleRate
+                    )
                 }
             }
         }
@@ -388,6 +456,302 @@ final class MusicPlayer {
                 loops: loops
             )
         }
+    }
+
+    nonisolated private static func maximumSampleBasedFrameCount(
+        for notes: [MusicNote],
+        samplesPerStep: Int,
+        gateSamples: Int,
+        sampleRate: Int,
+        tonalFrameCount: Int
+    ) -> Int {
+        var maximumFrameCount = tonalFrameCount
+
+        for note in notes {
+            guard let role = note.voiceRole,
+                  role != .bass,
+                  let resolvedSample = MelodicSampleLibrary.resolvedSample(for: role, midiNote: note.midiNote) else {
+                continue
+            }
+
+            let ratio = playbackRatio(
+                targetMIDINote: resolvedSample.targetMIDINote,
+                rootMIDINote: resolvedSample.sample.rootMIDINote,
+                sourceSampleRate: resolvedSample.sample.sampleRate,
+                outputSampleRate: Double(sampleRate)
+            )
+            let naturalFrameCount = renderedSampleFrameCount(sample: resolvedSample.sample, ratio: ratio)
+            let endFrame = effectiveMelodicEndFrame(
+                for: note,
+                role: role,
+                allNotes: notes,
+                samplesPerStep: samplesPerStep,
+                gateSamples: gateSamples
+            )
+            let noteStartFrame = note.step * samplesPerStep
+            let musicalFrameCount = max(0, endFrame - noteStartFrame)
+            let fadeFrameCount = fadeFrameCount(for: role, sampleRate: sampleRate)
+            let truncatedFrameCount = naturalFrameCount > musicalFrameCount
+                ? min(naturalFrameCount, musicalFrameCount + fadeFrameCount)
+                : naturalFrameCount
+
+            maximumFrameCount = max(maximumFrameCount, noteStartFrame + truncatedFrameCount)
+        }
+
+        return maximumFrameCount
+    }
+
+    nonisolated private static func renderFutureBassLine(
+        _ notes: [MusicNote],
+        into output: inout RenderedAudio,
+        samplesPerStep: Int,
+        gateSamples: Int,
+        sampleRate: Int,
+        loops: Bool,
+        tonalFrameCount: Int
+    ) -> Bool {
+        guard !notes.isEmpty else { return false }
+
+        let bassGateSamples = max(gateSamples, Int((Double(samplesPerStep) * 0.96).rounded()))
+        let releaseFrameCount = fadeFrameCount(for: .bass, sampleRate: sampleRate)
+        let events = notes.compactMap {
+            futureBassEvent(
+                for: $0,
+                samplesPerStep: samplesPerStep,
+                gateSamples: bassGateSamples,
+                tonalFrameCount: tonalFrameCount
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.startFrame != rhs.startFrame { return lhs.startFrame < rhs.startFrame }
+            return lhs.midiNote < rhs.midiNote
+        }
+
+        guard !events.isEmpty else { return false }
+
+        var state = FutureBassState()
+        var previousEvent: FutureBassEvent?
+
+        for index in events.indices {
+            let event = events[index]
+            let nextStartFrame = index + 1 < events.count ? events[index + 1].startFrame : .max
+            let hasIncomingLegato = previousEvent.map { event.startFrame < $0.musicalEndFrame } ?? false
+            let hasOutgoingLegato = nextStartFrame < event.musicalEndFrame
+            let segmentEndFrame = hasOutgoingLegato
+                ? nextStartFrame
+                : min(event.musicalEndFrame + releaseFrameCount, nextStartFrame, tonalFrameCount)
+
+            guard segmentEndFrame > event.startFrame else {
+                previousEvent = event
+                continue
+            }
+
+            renderFutureBassEvent(
+                event,
+                previousMIDINote: hasIncomingLegato ? previousEvent?.midiNote : nil,
+                into: &output,
+                state: &state,
+                sampleRate: sampleRate,
+                segmentEndFrame: segmentEndFrame,
+                hasIncomingLegato: hasIncomingLegato,
+                loops: loops
+            )
+
+            previousEvent = event
+        }
+
+        return true
+    }
+
+    nonisolated private static func futureBassEvent(
+        for note: MusicNote,
+        samplesPerStep: Int,
+        gateSamples: Int,
+        tonalFrameCount: Int
+    ) -> FutureBassEvent? {
+        let startFrame = bassStartFrame(
+            step: note.step,
+            timingOffsetSteps: note.timingOffsetSteps ?? 0,
+            samplesPerStep: samplesPerStep,
+            tonalFrameCount: tonalFrameCount
+        )
+        guard startFrame < tonalFrameCount else { return nil }
+
+        let musicalEndFrame = min(tonalFrameCount, startFrame + gateSamples)
+        return FutureBassEvent(
+            midiNote: note.midiNote,
+            velocity: note.velocity,
+            startFrame: startFrame,
+            musicalEndFrame: musicalEndFrame
+        )
+    }
+
+    nonisolated private static func renderFutureBassEvent(
+        _ event: FutureBassEvent,
+        previousMIDINote: Int?,
+        into output: inout RenderedAudio,
+        state: inout FutureBassState,
+        sampleRate: Int,
+        segmentEndFrame: Int,
+        hasIncomingLegato: Bool,
+        loops: Bool
+    ) {
+        let attackFrames = max(1, Int((0.003 * Double(sampleRate)).rounded()))
+        let decayFrames = max(1, Int((0.180 * Double(sampleRate)).rounded()))
+        let releaseFrames = max(1, Int((0.080 * Double(sampleRate)).rounded()))
+        let filterDecayFrames = max(1, Int((0.220 * Double(sampleRate)).rounded()))
+        let glideFrames = max(1, Int((0.085 * Double(sampleRate)).rounded()))
+        let sustainLevel: Float = 0.60
+        let filterBaseCutoff = 650.0
+        let filterAttackCutoff = 1500.0
+        let loopFrameCount = output.left.count
+        let startMIDINote = previousMIDINote ?? event.midiNote
+
+        for frame in event.startFrame..<segmentEndFrame {
+            let localFrame = frame - event.startFrame
+            let midiNote: Double
+            if hasIncomingLegato, localFrame < glideFrames {
+                let progress = smoothstep(Double(localFrame) / Double(glideFrames))
+                midiNote = Double(startMIDINote) + Double(event.midiNote - startMIDINote) * progress
+            } else {
+                midiNote = Double(event.midiNote)
+            }
+
+            let frequency = 440.0 * pow(2.0, (midiNote - 69.0) / 12.0)
+            let subSample = advanceSinePhase(state: &state.subPhase, frequency: frequency, sampleRate: sampleRate)
+            let sawSample = advanceSawPhase(state: &state.sawPhase, frequency: frequency, sampleRate: sampleRate)
+            let triangleSample = advanceTrianglePhase(state: &state.trianglePhase, frequency: frequency, sampleRate: sampleRate)
+
+            let rawSample = subSample * 0.50 + sawSample * 0.35 + triangleSample * 0.15
+            let envelope = futureBassEnvelope(
+                localFrame: localFrame,
+                noteEndLocalFrame: max(0, event.musicalEndFrame - event.startFrame),
+                segmentLength: segmentEndFrame - event.startFrame,
+                attackFrames: attackFrames,
+                decayFrames: decayFrames,
+                sustainLevel: sustainLevel,
+                releaseFrames: releaseFrames,
+                hasIncomingLegato: hasIncomingLegato
+            )
+            let cutoff = futureBassCutoff(
+                localFrame: localFrame,
+                decayFrames: filterDecayFrames,
+                baseCutoff: filterBaseCutoff,
+                attackCutoff: filterAttackCutoff,
+                hasIncomingLegato: hasIncomingLegato
+            )
+            let filteredSample = lowPass(
+                input: rawSample,
+                cutoff: cutoff,
+                sampleRate: sampleRate,
+                state: &state.lowPassSample
+            )
+            let saturatedSample = Float(tanh(Double(filteredSample) * 1.45))
+            let renderedSample = saturatedSample * envelope * event.velocity * 0.70
+            let destinationFrame = loops ? frame % loopFrameCount : frame
+
+            guard destinationFrame < output.left.count else { break }
+            output.left[destinationFrame] += renderedSample
+            output.right[destinationFrame] += renderedSample
+        }
+    }
+
+    nonisolated private static func bassStartFrame(
+        step: Int,
+        timingOffsetSteps: Float,
+        samplesPerStep: Int,
+        tonalFrameCount: Int
+    ) -> Int {
+        let clampedOffset = min(0.08, max(-0.06, timingOffsetSteps))
+        let boundedOffset = step == 0 ? max(0, clampedOffset) : clampedOffset
+        let relativeStep = Double(step) + Double(boundedOffset)
+        let startFrame = Int((relativeStep * Double(samplesPerStep)).rounded())
+        return min(max(0, startFrame), max(0, tonalFrameCount - 1))
+    }
+
+    nonisolated private static func futureBassEnvelope(
+        localFrame: Int,
+        noteEndLocalFrame: Int,
+        segmentLength: Int,
+        attackFrames: Int,
+        decayFrames: Int,
+        sustainLevel: Float,
+        releaseFrames: Int,
+        hasIncomingLegato: Bool
+    ) -> Float {
+        let releaseStartFrame = min(segmentLength, noteEndLocalFrame)
+
+        if localFrame >= releaseStartFrame {
+            let releaseProgress = Float(localFrame - releaseStartFrame) / Float(max(1, releaseFrames))
+            return max(0, sustainLevel * (1 - releaseProgress))
+        }
+
+        if hasIncomingLegato {
+            return sustainLevel
+        }
+
+        if localFrame < attackFrames {
+            return Float(localFrame) / Float(max(1, attackFrames))
+        }
+
+        let decayProgress = Float(localFrame - attackFrames) / Float(max(1, decayFrames))
+        return max(sustainLevel, 1 - (1 - sustainLevel) * min(1, decayProgress))
+    }
+
+    nonisolated private static func futureBassCutoff(
+        localFrame: Int,
+        decayFrames: Int,
+        baseCutoff: Double,
+        attackCutoff: Double,
+        hasIncomingLegato: Bool
+    ) -> Double {
+        guard !hasIncomingLegato else { return baseCutoff }
+        let progress = min(1.0, Double(localFrame) / Double(max(1, decayFrames)))
+        return attackCutoff - (attackCutoff - baseCutoff) * progress
+    }
+
+    nonisolated private static func lowPass(
+        input: Float,
+        cutoff: Double,
+        sampleRate: Int,
+        state: inout Float
+    ) -> Float {
+        let alpha = Float(exp(-2.0 * Double.pi * cutoff / Double(sampleRate)))
+        state = (1 - alpha) * input + alpha * state
+        return state
+    }
+
+    nonisolated private static func advanceSawPhase(
+        state: inout Double,
+        frequency: Double,
+        sampleRate: Int
+    ) -> Float {
+        state = (state + frequency / Double(sampleRate)).truncatingRemainder(dividingBy: 1.0)
+        return Float(state * 2.0 - 1.0)
+    }
+
+    nonisolated private static func advanceTrianglePhase(
+        state: inout Double,
+        frequency: Double,
+        sampleRate: Int
+    ) -> Float {
+        state = (state + frequency / Double(sampleRate)).truncatingRemainder(dividingBy: 1.0)
+        return Float(1.0 - 4.0 * abs(state - 0.5))
+    }
+
+    nonisolated private static func advanceSinePhase(
+        state: inout Double,
+        frequency: Double,
+        sampleRate: Int
+    ) -> Float {
+        state += 2.0 * Double.pi * frequency / Double(sampleRate)
+        state.formTruncatingRemainder(dividingBy: 2.0 * Double.pi)
+        return Float(sin(state))
+    }
+
+    nonisolated private static func smoothstep(_ value: Double) -> Double {
+        let clamped = min(1.0, max(0.0, value))
+        return clamped * clamped * (3.0 - 2.0 * clamped)
     }
 
     nonisolated private static func reservedPercussionFrameCount(
@@ -753,6 +1117,172 @@ final class MusicPlayer {
         }
     }
 
+    nonisolated private static func renderProceduralNote(
+        _ note: MusicNote,
+        into output: inout RenderedAudio,
+        wave: [Float],
+        envelope: [Float],
+        samplesPerStep: Int,
+        tonalFrameCount: Int,
+        sampleRate: Int
+    ) {
+        let frequency = 440.0 * pow(2, Double(note.midiNote - 69) / 12)
+        let phaseIncrement = frequency * Double(wave.count) / Double(sampleRate)
+
+        for sampleOffset in 0..<envelope.count {
+            let frameIndex = note.step * samplesPerStep + sampleOffset
+            guard frameIndex < tonalFrameCount else { continue }
+
+            let phaseIndex = Int(Double(sampleOffset) * phaseIncrement) % wave.count
+            let sample = wave[phaseIndex] * envelope[sampleOffset] * note.velocity * tonalGain
+            output.left[frameIndex] += sample
+            output.right[frameIndex] += sample
+        }
+    }
+
+    nonisolated private static func renderSampleBasedNote(
+        _ note: MusicNote,
+        role: MusicVoiceRole,
+        allNotes: [MusicNote],
+        into output: inout RenderedAudio,
+        samplesPerStep: Int,
+        gateSamples: Int,
+        sampleRate: Int,
+        loops: Bool
+    ) -> Bool {
+        guard role != .bass else { return false }
+        guard let resolvedSample = MelodicSampleLibrary.resolvedSample(for: role, midiNote: note.midiNote) else {
+            return false
+        }
+
+        let sample = resolvedSample.sample
+        let ratio = playbackRatio(
+            targetMIDINote: resolvedSample.targetMIDINote,
+            rootMIDINote: sample.rootMIDINote,
+            sourceSampleRate: sample.sampleRate,
+            outputSampleRate: Double(sampleRate)
+        )
+        guard ratio > 0 else { return false }
+
+        let roleGain = melodicRoleGain(for: role)
+        let startFrame = note.step * samplesPerStep
+        let endFrame = effectiveMelodicEndFrame(
+            for: note,
+            role: role,
+            allNotes: allNotes,
+            samplesPerStep: samplesPerStep,
+            gateSamples: gateSamples
+        )
+        let fadeFrameCount = fadeFrameCount(for: role, sampleRate: sampleRate)
+        let fadeStartOffset = max(0, endFrame - startFrame)
+        let loopFrameCount = output.left.count
+
+        var localFrame = 0
+        while true {
+            let sourcePosition = Double(localFrame) * ratio
+            let sampleIndex = Int(sourcePosition)
+            guard sampleIndex < sample.frameCount else { break }
+
+            let destinationFrame: Int
+            if loops {
+                destinationFrame = (startFrame + localFrame) % loopFrameCount
+            } else {
+                destinationFrame = startFrame + localFrame
+                guard destinationFrame < loopFrameCount else { break }
+            }
+
+            if localFrame >= fadeStartOffset + fadeFrameCount {
+                break
+            }
+
+            let sampleValue = interpolatedSampleValue(in: sample.samples, at: sourcePosition)
+            var gain = roleGain * note.velocity
+
+            if localFrame >= fadeStartOffset {
+                let fadeProgress = Float(localFrame - fadeStartOffset) / Float(max(1, fadeFrameCount))
+                gain *= max(0, 1 - fadeProgress)
+            }
+
+            let renderedSample = sampleValue * gain
+            output.left[destinationFrame] += renderedSample
+            output.right[destinationFrame] += renderedSample
+            localFrame += 1
+        }
+
+        return true
+    }
+
+    nonisolated private static func playbackRatio(
+        targetMIDINote: Int,
+        rootMIDINote: Int,
+        sourceSampleRate: Double,
+        outputSampleRate: Double
+    ) -> Double {
+        let pitchRatio = pow(2.0, Double(targetMIDINote - rootMIDINote) / 12.0)
+        return pitchRatio * (sourceSampleRate / outputSampleRate)
+    }
+
+    nonisolated private static func renderedSampleFrameCount(sample: MelodicSample, ratio: Double) -> Int {
+        guard ratio > 0, sample.frameCount > 1 else { return sample.frameCount }
+        return max(1, Int(ceil(Double(sample.frameCount - 1) / ratio)))
+    }
+
+    nonisolated private static func effectiveMelodicEndFrame(
+        for note: MusicNote,
+        role: MusicVoiceRole,
+        allNotes: [MusicNote],
+        samplesPerStep: Int,
+        gateSamples: Int
+    ) -> Int {
+        let noteEndFrame = note.step * samplesPerStep + gateSamples
+
+        guard role == .bass,
+              let nextBassStartFrame = allNotes
+                .first(where: { candidate in
+                    candidate.voiceRole == .bass &&
+                    (candidate.step > note.step ||
+                     (candidate.step == note.step && candidate.midiNote != note.midiNote))
+                })
+                .map({ $0.step * samplesPerStep }) else {
+            return noteEndFrame
+        }
+
+        return min(noteEndFrame, nextBassStartFrame)
+    }
+
+    nonisolated private static func fadeFrameCount(for role: MusicVoiceRole, sampleRate: Int) -> Int {
+        let milliseconds: Double
+        switch role {
+        case .bass:
+            milliseconds = MelodicVoiceFade.bassMilliseconds
+        case .harmony:
+            milliseconds = MelodicVoiceFade.harmonyMilliseconds
+        case .melody:
+            milliseconds = MelodicVoiceFade.melodyMilliseconds
+        }
+
+        return max(1, Int((milliseconds / 1_000.0 * Double(sampleRate)).rounded()))
+    }
+
+    nonisolated private static func melodicRoleGain(for role: MusicVoiceRole) -> Float {
+        switch role {
+        case .bass:
+            0.70
+        case .harmony:
+            0.34
+        case .melody:
+            0.50
+        }
+    }
+
+    nonisolated private static func interpolatedSampleValue(in samples: [Float], at position: Double) -> Float {
+        let lowerIndex = Int(position)
+        guard lowerIndex < samples.count else { return 0 }
+        let upperIndex = min(samples.count - 1, lowerIndex + 1)
+        let fraction = Float(position - Double(lowerIndex))
+        return samples[lowerIndex] * (1 - fraction) + samples[upperIndex] * fraction
+    }
+
     nonisolated private static func clamp(_ samples: inout [Float]) {
         for index in samples.indices {
             samples[index] = max(-0.92, min(0.92, samples[index]))
@@ -776,6 +1306,12 @@ final class MusicPlayer {
         case .square:   (0..<size).map { $0 < size / 2 ? 1 : -1 }
         case .triangle: (0..<size).map { Float(1 - 4 * abs(Double($0) / Double(size) - 0.5)) }
         }
+    }
+
+    nonisolated private static func byNoteOrder(_ lhs: MusicNote, _ rhs: MusicNote) -> Bool {
+        if lhs.step != rhs.step { return lhs.step < rhs.step }
+        if lhs.row != rhs.row { return lhs.row < rhs.row }
+        return lhs.midiNote < rhs.midiNote
     }
 
     nonisolated private static func envelopeTable(length: Int) -> [Float] {
