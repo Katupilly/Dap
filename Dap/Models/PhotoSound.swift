@@ -84,6 +84,12 @@ struct MusicHarmony: Codable, Sendable, Equatable {
     }
 }
 
+enum MusicVoiceRole: String, Codable, Sendable {
+    case bass
+    case harmony
+    case melody
+}
+
 // MARK: - Music Note
 
 struct MusicNote: Codable, Sendable, Equatable, Identifiable {
@@ -91,16 +97,81 @@ struct MusicNote: Codable, Sendable, Equatable, Identifiable {
     let row: Int
     let midiNote: Int
     let velocity: Float
+    var voiceRole: MusicVoiceRole? = nil
+    var timingOffsetSteps: Float? = nil
 
     var id: String { "\(step)-\(row)" }
 }
 
 // MARK: - Music Sequence
 
+struct MusicPercussionHit: Sendable, Equatable {
+    let step: Int
+    let velocity: Float
+
+    init(step: Int, velocity: Float) {
+        self.step = step
+        self.velocity = min(max(velocity, 0), 1)
+    }
+}
+
+enum MusicDrumKitSelection: String, CaseIterable, Sendable, Equatable {
+    case auto
+    case soft
+    case club
+    case breakbeat
+    case metal
+}
+
+extension MusicDrumKitSelection {
+    var displayName: String {
+        switch self {
+        case .auto:
+            "Auto"
+        case .soft:
+            "Soft"
+        case .club:
+            "Club"
+        case .breakbeat:
+            "Break"
+        case .metal:
+            "Metal"
+        }
+    }
+}
+
+enum MusicDrumKit: Sendable, Equatable {
+    case soft
+    case club
+    case breakbeat
+    case metal
+}
+
+enum MusicRimStyle: Sendable, Equatable {
+    case soft
+    case main
+    case hard
+}
+
+struct MusicRimHit: Sendable, Equatable {
+    let step: Int
+    let velocity: Float
+    let style: MusicRimStyle
+
+    init(step: Int, velocity: Float, style: MusicRimStyle) {
+        self.step = step
+        self.velocity = min(max(velocity, 0), 1)
+        self.style = style
+    }
+}
+
 struct MusicPercussionPattern: Equatable, Sendable {
-    let kickSteps: Set<Int>
-    let snareSteps: Set<Int>
-    let closedHatSteps: Set<Int>
+    let kit: MusicDrumKit
+    let kickHits: [MusicPercussionHit]
+    let snareHits: [MusicPercussionHit]
+    let closedHatHits: [MusicPercussionHit]
+    let openHatHits: [MusicPercussionHit]
+    let rimHits: [MusicRimHit]
 }
 
 struct MusicSequence: Codable, Sendable, Equatable {

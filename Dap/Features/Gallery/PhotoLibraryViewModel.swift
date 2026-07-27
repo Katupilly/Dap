@@ -248,12 +248,26 @@ final class PhotoLibraryViewModel {
         percussion: MusicPercussionPattern? = nil,
         loops: Bool = false
     ) {
+        if loops {
+            playingID = nil
+            player.play(sequence: sequence, percussion: percussion, loops: true)
+            return
+        }
+
         stopPlayback()
         player.play(sequence: sequence, percussion: percussion, loops: loops)
     }
 
     func stopTransientPlayback() {
         stopPlayback()
+    }
+
+    func setTransientLoopUpdatePreparedHandler(_ handler: @escaping () -> Void) {
+        player.onLoopUpdatePrepared = handler
+    }
+
+    func clearTransientLoopUpdatePreparedHandler() {
+        player.onLoopUpdatePrepared = nil
     }
 
     // MARK: - Errors

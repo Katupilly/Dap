@@ -40,7 +40,8 @@ struct JamArrangementBuilder {
 
     func build(
         sounds: [PhotoSound],
-        vibePosition: CGPoint
+        vibePosition: CGPoint,
+        drumKit: MusicDrumKit
     ) -> JamArrangement? {
         let assignedSounds = assignRoles(to: sounds)
         guard let melodySound = assignedSounds.first(where: { $0.role == .melody }) else {
@@ -51,25 +52,62 @@ struct JamArrangementBuilder {
         let registerShift = Int(preset.registerBias.rounded())
         let harmony = globalHarmony(for: assignedSounds.map { $0.sound })
         let melodyProfile = melodySound.sound.sequence.soundProfile
+        let region = JamGrooveLibrary.region(for: vibePosition)
+        let percussion = grooveLibrary.pattern(
+            for: vibePosition,
+            soundIDs: sounds.map(\.id),
+            drumKit: drumKit
+        )
 
         var activeStepsBySoundID: [UUID: Set<Int>] = [:]
 
-        let notes = assignedSounds.flatMap { assignedSound in
-            let notes = buildNotes(
-                for: assignedSound,
-                harmony: harmony,
-                registerShift: registerShift,
-                vibePosition: vibePosition
-            )
+        var notes: [MusicNote] = []
+        let selectedSoundIDs = assignedSounds.map(\.sound.id)
 
-            if !notes.isEmpty {
-                activeStepsBySoundID[assignedSound.sound.id] = Set(notes.map(\.step))
+        for assignedSound in assignedSounds {
+            let sourceNotes = sortedNotes(from: assignedSound.sound.sequence.notes)
+            guard !sourceNotes.isEmpty else { continue }
+
+            let builtNotes: [MusicNote]
+            switch assignedSound.role {
+            case .bass:
+                builtNotes = buildBassNotes(
+                    from: sourceNotes,
+                    harmony: harmony,
+                    registerShift: registerShift,
+                    vibePosition: vibePosition
+                )
+            case .harmony:
+                builtNotes = buildHarmonyNotes(
+                    from: sourceNotes,
+                    harmony: harmony,
+                    registerShift: registerShift,
+                    vibePosition: vibePosition
+                )
+            case .melody:
+                builtNotes = buildMelodyNotes(
+                    from: sourceNotes,
+                    harmony: harmony,
+                    registerShift: registerShift,
+                    density: effectiveDensity(
+                        for: .melody,
+                        sourceCount: sourceNotes.count,
+                        vibePosition: vibePosition
+                    ),
+                    region: region,
+                    percussion: percussion,
+                    accompanimentNotes: notes,
+                    selectedSoundIDs: selectedSoundIDs
+                )
             }
 
-            return notes
+            if !builtNotes.isEmpty {
+                activeStepsBySoundID[assignedSound.sound.id] = Set(builtNotes.map(\.step))
+                notes.append(contentsOf: builtNotes)
+            }
         }
 
-        .sorted {
+        notes.sort {
             if $0.step != $1.step { return $0.step < $1.step }
             if $0.row != $1.row { return $0.row < $1.row }
             return $0.midiNote < $1.midiNote
@@ -90,50 +128,12 @@ struct JamArrangementBuilder {
                 waveform: melodyProfile.waveform
             )
         )
-        let percussion = grooveLibrary.pattern(
-            for: vibePosition,
-            soundIDs: sounds.map(\.id)
-        )
 
         return JamArrangement(
             sequence: sequence,
             activeStepsBySoundID: activeStepsBySoundID,
             percussion: percussion
         )
-    }
-
-    private func buildNotes(
-        for assignedSound: AssignedSound,
-        harmony: GlobalHarmony,
-        registerShift: Int,
-        vibePosition: CGPoint
-    ) -> [MusicNote] {
-        let sourceNotes = sortedNotes(from: assignedSound.sound.sequence.notes)
-        guard !sourceNotes.isEmpty else { return [] }
-
-        switch assignedSound.role {
-        case .bass:
-            return buildBassNotes(
-                from: sourceNotes,
-                harmony: harmony,
-                registerShift: registerShift,
-                vibePosition: vibePosition
-            )
-        case .harmony:
-            return buildHarmonyNotes(
-                from: sourceNotes,
-                harmony: harmony,
-                registerShift: registerShift,
-                vibePosition: vibePosition
-            )
-        case .melody:
-            return buildMelodyNotes(
-                from: sourceNotes,
-                harmony: harmony,
-                registerShift: registerShift,
-                vibePosition: vibePosition
-            )
-        }
     }
 
     private func buildBassNotes(
@@ -154,8 +154,9 @@ struct JamArrangementBuilder {
         ]
 
         var previousMIDINote: Int?
+        let totalCount = sampledNotes.count
 
-        return sampledNotes.map { note in
+        return sampledNotes.enumerated().map { index, note in
             let originalPitchClass = PitchClass(normalizing: note.midiNote).rawValue
             let chosenPitchClass = preferredBassPitchClass(
                 for: originalPitchClass,
@@ -169,15 +170,26 @@ struct JamArrangementBuilder {
             )
             previousMIDINote = targetMIDINote
 
+            let timingOffset = bassTimingOffsetSteps(
+                for: note.step,
+                noteIndex: index,
+                totalCount: totalCount
+            )
+
             return MusicNote(
                 step: note.step,
                 row: row(for: targetMIDINote),
                 midiNote: targetMIDINote,
                 velocity: transformedVelocity(
                     note.velocity,
-                    multiplier: 0.70,
+                    multiplier: bassVelocityMultiplier(
+                        for: note.step,
+                        noteIndex: index
+                    ),
                     role: .bass
-                )
+                ),
+                voiceRole: .bass,
+                timingOffsetSteps: timingOffset == 0 ? nil : timingOffset
             )
         }
     }
@@ -219,7 +231,8 @@ struct JamArrangementBuilder {
                     note.velocity,
                     multiplier: 0.55,
                     role: .harmony
-                )
+                ),
+                voiceRole: .harmony
             )
         }
     }
@@ -228,34 +241,89 @@ struct JamArrangementBuilder {
         from sourceNotes: [MusicNote],
         harmony: GlobalHarmony,
         registerShift: Int,
-        vibePosition: CGPoint
+        density: Double,
+        region: JamRegion,
+        percussion: MusicPercussionPattern,
+        accompanimentNotes: [MusicNote],
+        selectedSoundIDs: [UUID]
     ) -> [MusicNote] {
-        let sampledNotes = sampledNotes(
+        let transformedSourceNotes = melodySourceNotes(
             from: sourceNotes,
-            density: effectiveDensity(for: .melody, sourceCount: sourceNotes.count, vibePosition: vibePosition)
+            harmony: harmony,
+            registerShift: registerShift
+        )
+        let scalePitchClasses = harmony.scale.degrees.map { (harmony.rootPitchClass + $0) % 12 }
+        let seed = stableMelodySeed(
+            selectedSoundIDs: selectedSoundIDs,
+            harmony: harmony,
+            region: region,
+            transformedSourceNotes: transformedSourceNotes
+        )
+        let template = adjustedMelodyTemplate(
+            melodyTemplate(for: region, seed: seed),
+            region: region,
+            density: density
         )
 
-        return sampledNotes.map { note in
-            let shiftedTarget = min(108, max(48, note.midiNote + registerShift))
-            let scaleMIDINote = nearestScaleMIDINote(
-                to: shiftedTarget,
-                rootPitchClass: harmony.rootPitchClass,
-                scale: harmony.scale,
-                range: 48...108
-            )
-            let targetMIDINote = min(108, max(48, scaleMIDINote))
+        guard !template.isEmpty else { return [] }
 
-            return MusicNote(
-                step: note.step,
-                row: row(for: targetMIDINote),
-                midiNote: targetMIDINote,
-                velocity: transformedVelocity(
-                    note.velocity,
-                    multiplier: 0.75,
-                    role: .melody
-                )
-            )
-        }
+        let anchorPitchClass = melodyAnchorPitchClass(
+            harmony: harmony,
+            transformedSourceNotes: transformedSourceNotes
+        )
+        let contour = melodyContour(for: region, seed: seed)
+        let anchorMIDINote = melodyAnchorMIDINote(
+            anchorPitchClass: anchorPitchClass,
+            harmony: harmony,
+            transformedSourceNotes: transformedSourceNotes,
+            registerShift: registerShift,
+            region: region
+        )
+        let primaryOffsets = melodyContourOffsets(for: contour, count: template.count)
+        let secondarySteps = variedMelodyTemplate(
+            from: template,
+            region: region,
+            seed: seed,
+            kickSteps: Set(percussion.kickHits.map(\.step))
+        )
+        let variationKind = melodyVariationKind(for: region, seed: seed)
+        let secondaryOffsets = variedMelodyOffsets(
+            from: primaryOffsets,
+            variationKind: variationKind,
+            seed: seed
+        )
+
+        let primaryHalf = buildMelodyHalf(
+            relativeSteps: template,
+            contourOffsets: primaryOffsets,
+            halfOffset: 0,
+            anchorMIDINote: anchorMIDINote,
+            anchorPitchClass: anchorPitchClass,
+            harmony: harmony,
+            scalePitchClasses: scalePitchClasses,
+            transformedSourceNotes: transformedSourceNotes,
+            accompanimentNotes: accompanimentNotes,
+            region: region,
+            variationKind: nil,
+            octaveJumpUsed: false
+        )
+
+        let secondaryHalf = buildMelodyHalf(
+            relativeSteps: secondarySteps,
+            contourOffsets: secondaryOffsets,
+            halfOffset: 8,
+            anchorMIDINote: anchorMIDINote,
+            anchorPitchClass: anchorPitchClass,
+            harmony: harmony,
+            scalePitchClasses: scalePitchClasses,
+            transformedSourceNotes: transformedSourceNotes,
+            accompanimentNotes: accompanimentNotes + primaryHalf.notes,
+            region: region,
+            variationKind: variationKind,
+            octaveJumpUsed: primaryHalf.usedOctaveJump
+        )
+
+        return primaryHalf.notes + secondaryHalf.notes
     }
 
     private func transformedVelocity(
@@ -271,6 +339,44 @@ struct JamArrangementBuilder {
         case .melody:
             return min(1.0, max(0.0, sourceVelocity * multiplier))
         }
+    }
+
+    private func bassTimingOffsetSteps(
+        for step: Int,
+        noteIndex: Int,
+        totalCount: Int
+    ) -> Float {
+        guard step > 0 else { return 0 }
+
+        let isStructuredPickup = totalCount >= 3 && noteIndex > 0 && noteIndex < totalCount - 1 && step % 8 == 3
+        let proposedOffset: Float
+        if isStructuredPickup {
+            proposedOffset = -0.04
+        } else if step % 4 == 2 {
+            proposedOffset = 0.06
+        } else {
+            proposedOffset = 0
+        }
+
+        let clampedOffset = min(0.08, max(-0.06, proposedOffset))
+        let latestOffset = Float(MusicSequence.steps - 1 - step) + 0.999
+        return min(clampedOffset, latestOffset)
+    }
+
+    private func bassVelocityMultiplier(for step: Int, noteIndex: Int) -> Float {
+        let base: Float = 0.70
+        let accent: Float
+        if step % 8 == 0 {
+            accent = 1.12
+        } else if step % 4 == 2 {
+            accent = 0.94
+        } else if noteIndex.isMultiple(of: 2) {
+            accent = 1.04
+        } else {
+            accent = 0.90
+        }
+
+        return base * accent
     }
 
     private func effectiveDensity(for role: JamRole, sourceCount: Int, vibePosition: CGPoint) -> Double {
@@ -482,6 +588,729 @@ struct JamArrangementBuilder {
         } ?? min(range.upperBound, max(range.lowerBound, midiNote))
     }
 
+    private func melodySourceNotes(
+        from sourceNotes: [MusicNote],
+        harmony: GlobalHarmony,
+        registerShift: Int
+    ) -> [MelodySourceNote] {
+        var seen: Set<String> = []
+        let transformed = sourceNotes.compactMap { note -> MelodySourceNote? in
+            let shiftedTarget = min(96, max(60, note.midiNote + registerShift))
+            let snappedMIDINote = nearestScaleMIDINote(
+                to: shiftedTarget,
+                rootPitchClass: harmony.rootPitchClass,
+                scale: harmony.scale,
+                range: 60...96
+            )
+            let key = "\(note.step)-\(snappedMIDINote)"
+            guard seen.insert(key).inserted else { return nil }
+
+            return MelodySourceNote(
+                step: note.step,
+                midiNote: snappedMIDINote,
+                velocity: transformedVelocity(
+                    note.velocity,
+                    multiplier: 0.75,
+                    role: .melody
+                )
+            )
+        }
+
+        if transformed.isEmpty {
+            return [
+                MelodySourceNote(
+                    step: 0,
+                    midiNote: nearestScaleMIDINote(
+                        to: 78 + registerShift,
+                        rootPitchClass: harmony.rootPitchClass,
+                        scale: harmony.scale,
+                        range: 60...96
+                    ),
+                    velocity: 0.72
+                )
+            ]
+        }
+
+        return transformed
+    }
+
+    private func stableMelodySeed(
+        selectedSoundIDs: [UUID],
+        harmony: GlobalHarmony,
+        region: JamRegion,
+        transformedSourceNotes: [MelodySourceNote]
+    ) -> UInt64 {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+
+        func feed(byte: UInt8) {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+
+        func feed(string: String) {
+            for byte in string.utf8 {
+                feed(byte: byte)
+            }
+            feed(byte: 0xFF)
+        }
+
+        func feed(int: Int) {
+            var value = UInt64(bitPattern: Int64(int))
+            for _ in 0..<8 {
+                feed(byte: UInt8(truncatingIfNeeded: value))
+                value >>= 8
+            }
+        }
+
+        for uuidString in selectedSoundIDs.map(\.uuidString).sorted() {
+            feed(string: uuidString)
+        }
+
+        feed(int: harmony.rootPitchClass)
+        feed(string: harmony.scale.rawValue)
+        feed(string: region.seedLabel)
+
+        for note in transformedSourceNotes {
+            feed(int: note.step)
+            feed(int: note.midiNote)
+        }
+
+        return hash
+    }
+
+    private func melodyAnchorPitchClass(
+        harmony: GlobalHarmony,
+        transformedSourceNotes: [MelodySourceNote]
+    ) -> Int {
+        let sourceCounts = transformedSourceNotes.reduce(into: [Int: Int]()) { counts, note in
+            counts[PitchClass(normalizing: note.midiNote).rawValue, default: 0] += 1
+        }
+        let candidates = stableMelodyPitchClasses(harmony: harmony)
+
+        if let chosen = candidates.max(by: { lhs, rhs in
+            let lhsScore = sourceCounts[lhs, default: 0] * 10 - stablePitchPriority(for: lhs, harmony: harmony)
+            let rhsScore = sourceCounts[rhs, default: 0] * 10 - stablePitchPriority(for: rhs, harmony: harmony)
+            if lhsScore != rhsScore { return lhsScore < rhsScore }
+            return lhs > rhs
+        }) {
+            return chosen
+        }
+
+        return transformedSourceNotes.first.map { PitchClass(normalizing: $0.midiNote).rawValue }
+            ?? harmony.rootPitchClass
+    }
+
+    private func stableMelodyPitchClasses(harmony: GlobalHarmony) -> [Int] {
+        let root = harmony.rootPitchClass
+        let degrees = harmony.scale.degrees
+        var pitchClasses = [root]
+
+        if degrees.contains(4) { pitchClasses.append((root + 4) % 12) }
+        if degrees.contains(3) { pitchClasses.append((root + 3) % 12) }
+        if degrees.contains(7) { pitchClasses.append((root + 7) % 12) }
+        if degrees.contains(10) { pitchClasses.append((root + 10) % 12) }
+
+        var unique: [Int] = []
+        for pitchClass in pitchClasses where !unique.contains(pitchClass) {
+            unique.append(pitchClass)
+        }
+        return unique
+    }
+
+    private func stablePitchPriority(for pitchClass: Int, harmony: GlobalHarmony) -> Int {
+        let root = harmony.rootPitchClass
+        let minorThird = (root + 3) % 12
+        let majorThird = (root + 4) % 12
+        let fifth = (root + 7) % 12
+        let seventh = (root + 10) % 12
+
+        if pitchClass == root { return 0 }
+        if pitchClass == minorThird || pitchClass == majorThird { return 1 }
+        if pitchClass == fifth { return 2 }
+        if pitchClass == seventh { return 3 }
+        return 4
+    }
+
+    private func melodyContour(for region: JamRegion, seed: UInt64) -> MelodyContour {
+        let contours: [MelodyContour]
+        switch region {
+        case .airy:
+            contours = [.arch, .valley, .pendulum]
+        case .bright:
+            contours = [.ascending, .repeatedAnchor, .arch]
+        case .deep:
+            contours = [.descending, .valley, .pendulum]
+        case .intense:
+            contours = [.ascending, .repeatedAnchor, .pendulum]
+        }
+
+        return contours[deterministicIndex(seed: seed, upperBound: contours.count)]
+    }
+
+    private func melodyTemplates(for region: JamRegion) -> [[Int]] {
+        switch region {
+        case .airy:
+            [[1, 4, 7], [0, 3, 6], [2, 5]]
+        case .bright:
+            [[0, 2, 5, 7], [1, 3, 6], [0, 3, 5, 7]]
+        case .deep:
+            [[0, 4, 7], [2, 5], [1, 4, 6]]
+        case .intense:
+            [[0, 2, 3, 6, 7], [1, 2, 4, 6], [0, 3, 4, 5, 7]]
+        }
+    }
+
+    private func melodyTemplate(for region: JamRegion, seed: UInt64) -> [Int] {
+        let templates = melodyTemplates(for: region)
+        return templates[deterministicIndex(seed: seed >> 1, upperBound: templates.count)]
+    }
+
+    private func adjustedMelodyTemplate(
+        _ template: [Int],
+        region: JamRegion,
+        density: Double
+    ) -> [Int] {
+        let targetCount: Int
+        switch region {
+        case .airy:
+            targetCount = density > 0.55 ? 3 : 2
+        case .bright:
+            targetCount = density > 0.68 ? 4 : 3
+        case .deep:
+            targetCount = density > 0.48 ? 3 : 2
+        case .intense:
+            targetCount = density > 0.78 ? 5 : 4
+        }
+
+        guard template.count > targetCount else { return template }
+
+        var adjusted = template
+        while adjusted.count > targetCount {
+            let removalIndex = min(max(1, adjusted.count / 2), adjusted.count - 2)
+            adjusted.remove(at: removalIndex)
+        }
+        return adjusted
+    }
+
+    private func melodyContourOffsets(for contour: MelodyContour, count: Int) -> [Int] {
+        switch (contour, count) {
+        case (.ascending, 2): [0, 1]
+        case (.ascending, 3): [0, 1, 2]
+        case (.ascending, 4): [0, 1, 2, 1]
+        case (.ascending, _): [0, 1, 2, 3, 1]
+
+        case (.descending, 2): [1, 0]
+        case (.descending, 3): [2, 1, 0]
+        case (.descending, 4): [2, 1, 0, 0]
+        case (.descending, _): [3, 2, 1, 0, 0]
+
+        case (.arch, 2): [0, 1]
+        case (.arch, 3): [0, 2, 0]
+        case (.arch, 4): [0, 1, 2, 0]
+        case (.arch, _): [0, 1, 3, 1, 0]
+
+        case (.valley, 2): [1, 0]
+        case (.valley, 3): [1, -1, 0]
+        case (.valley, 4): [1, 0, -1, 0]
+        case (.valley, _): [2, 1, 0, 1, 0]
+
+        case (.pendulum, 2): [0, 1]
+        case (.pendulum, 3): [0, 1, 0]
+        case (.pendulum, 4): [0, 1, 0, -1]
+        case (.pendulum, _): [0, 1, 0, -1, 0]
+
+        case (.repeatedAnchor, 2): [0, 0]
+        case (.repeatedAnchor, 3): [0, 1, 0]
+        case (.repeatedAnchor, 4): [0, 1, 0, 2]
+        case (.repeatedAnchor, _): [0, 1, 0, 2, 0]
+        }
+    }
+
+    private func melodyAnchorMIDINote(
+        anchorPitchClass: Int,
+        harmony: GlobalHarmony,
+        transformedSourceNotes: [MelodySourceNote],
+        registerShift: Int,
+        region: JamRegion
+    ) -> Int {
+        let preferredCenter = min(96, max(60, regionMelodyCenter(for: region) + registerShift / 2))
+        let sourceCandidates = transformedSourceNotes
+            .map(\.midiNote)
+            .filter { PitchClass(normalizing: $0).rawValue == anchorPitchClass }
+
+        if let bestSource = sourceCandidates.min(by: {
+            abs($0 - preferredCenter) < abs($1 - preferredCenter)
+        }) {
+            return bestSource
+        }
+
+        let fallback = nearestScaleMIDINote(
+            to: preferredCenter,
+            rootPitchClass: harmony.rootPitchClass,
+            scale: harmony.scale,
+            range: 60...96
+        )
+        return centeredMIDINote(
+            from: fallback,
+            preferredCenter: preferredCenter,
+            previousMIDINote: nil,
+            range: 60...96
+        )
+    }
+
+    private func regionMelodyCenter(for region: JamRegion) -> Int {
+        switch region {
+        case .airy:
+            81
+        case .bright:
+            84
+        case .deep:
+            74
+        case .intense:
+            82
+        }
+    }
+
+    private func variedMelodyTemplate(
+        from template: [Int],
+        region: JamRegion,
+        seed: UInt64,
+        kickSteps: Set<Int>
+    ) -> [Int] {
+        guard template.count >= 3, seed.isMultiple(of: 4) else { return template }
+
+        var varied = template
+        let candidateIndices = Array(1..<(template.count - 1))
+        guard !candidateIndices.isEmpty else { return template }
+
+        let selectedIndex = candidateIndices[deterministicIndex(seed: seed >> 3, upperBound: candidateIndices.count)]
+        let preferredDirection: Int
+        switch region {
+        case .airy, .deep:
+            preferredDirection = template[selectedIndex] < 5 ? 1 : -1
+        case .bright, .intense:
+            preferredDirection = kickSteps.contains(template[selectedIndex] + 8) ? -1 : 1
+        }
+
+        let shiftedStep = template[selectedIndex] + preferredDirection
+        guard (0..<8).contains(shiftedStep), !template.contains(shiftedStep) else {
+            return template
+        }
+
+        varied[selectedIndex] = shiftedStep
+        return varied.sorted()
+    }
+
+    private func melodyVariationKind(for region: JamRegion, seed: UInt64) -> MelodyVariationKind {
+        let kinds: [MelodyVariationKind]
+        switch region {
+        case .airy, .deep:
+            kinds = [.pitchChange, .rhythmShift, .velocityAccent]
+        case .bright, .intense:
+            kinds = [.pitchChange, .rhythmShift, .octaveShift, .velocityAccent]
+        }
+        return kinds[deterministicIndex(seed: seed >> 2, upperBound: kinds.count)]
+    }
+
+    private func variedMelodyOffsets(
+        from offsets: [Int],
+        variationKind: MelodyVariationKind,
+        seed: UInt64
+    ) -> [Int] {
+        guard variationKind == .pitchChange, offsets.count >= 3 else {
+            return offsets
+        }
+
+        var varied = offsets
+        let targetIndex = min(max(1, offsets.count / 2), offsets.count - 2)
+        let direction = ((seed >> 5) & 1) == 0 ? 1 : -1
+        varied[targetIndex] += direction
+        return varied
+    }
+
+    private func buildMelodyHalf(
+        relativeSteps: [Int],
+        contourOffsets: [Int],
+        halfOffset: Int,
+        anchorMIDINote: Int,
+        anchorPitchClass: Int,
+        harmony: GlobalHarmony,
+        scalePitchClasses: [Int],
+        transformedSourceNotes: [MelodySourceNote],
+        accompanimentNotes: [MusicNote],
+        region: JamRegion,
+        variationKind: MelodyVariationKind?,
+        octaveJumpUsed: Bool
+    ) -> MelodyHalfResult {
+        let sourceCandidatesByPitchClass = Dictionary(grouping: transformedSourceNotes.map(\.midiNote)) {
+            PitchClass(normalizing: $0).rawValue
+        }
+        var notes: [MusicNote] = []
+        var previousMIDINote: Int?
+        var usedOctaveJump = octaveJumpUsed
+
+        for index in relativeSteps.indices {
+            let relativeStep = relativeSteps[index]
+            let step = halfOffset + relativeStep
+            let attackRole = melodyAttackRole(for: index, attackCount: relativeSteps.count)
+            let targetMIDINote = moveScaleSteps(
+                from: anchorMIDINote,
+                steps: contourOffsets[min(index, contourOffsets.count - 1)],
+                scalePitchClasses: scalePitchClasses,
+                range: 60...96
+            )
+            let desiredPitchClass = PitchClass(normalizing: targetMIDINote).rawValue
+            var resolvedMIDINote = melodyMIDINote(
+                desiredPitchClass: desiredPitchClass,
+                targetMIDINote: targetMIDINote,
+                anchorMIDINote: anchorMIDINote,
+                anchorPitchClass: anchorPitchClass,
+                attackRole: attackRole,
+                sourceCandidatesByPitchClass: sourceCandidatesByPitchClass,
+                previousMIDINote: previousMIDINote,
+                harmony: harmony
+            )
+            resolvedMIDINote = resolveMelodyConflict(
+                resolvedMIDINote,
+                step: step,
+                harmony: harmony,
+                accompanimentNotes: accompanimentNotes,
+                preferredAnchorMIDINote: anchorMIDINote
+            )
+
+            if variationKind == .octaveShift,
+               !usedOctaveJump,
+               attackRole == .climax,
+               let octaveShifted = octaveShiftedMIDINote(
+                from: resolvedMIDINote,
+                preferredDirection: region == .intense ? 1 : ((resolvedMIDINote <= 84) ? 1 : -1),
+                range: 60...96
+               ) {
+                resolvedMIDINote = octaveShifted
+                usedOctaveJump = true
+            }
+
+            if let previousMIDINote,
+               abs(resolvedMIDINote - previousMIDINote) > 7,
+               let softened = softenedMelodyLeap(
+                from: previousMIDINote,
+                to: resolvedMIDINote,
+                harmony: harmony
+               ) {
+                resolvedMIDINote = softened
+            }
+
+            let velocity = melodyVelocity(
+                baseVelocity: transformedSourceNotes[min(index, transformedSourceNotes.count - 1)].velocity,
+                attackRole: attackRole,
+                region: region,
+                variationKind: variationKind,
+                attackIndex: index,
+                attackCount: relativeSteps.count
+            )
+
+            notes.append(
+                MusicNote(
+                    step: step,
+                    row: row(for: resolvedMIDINote),
+                    midiNote: resolvedMIDINote,
+                    velocity: velocity,
+                    voiceRole: .melody,
+                    timingOffsetSteps: nil
+                )
+            )
+            previousMIDINote = resolvedMIDINote
+        }
+
+        return normalizedMelodyHalf(
+            notes,
+            contourOffsets: contourOffsets,
+            anchorMIDINote: anchorMIDINote,
+            harmony: harmony,
+            accompanimentNotes: accompanimentNotes,
+            region: region,
+            usedOctaveJump: usedOctaveJump
+        )
+    }
+
+    private func melodyMIDINote(
+        desiredPitchClass: Int,
+        targetMIDINote: Int,
+        anchorMIDINote: Int,
+        anchorPitchClass: Int,
+        attackRole: MelodyAttackRole,
+        sourceCandidatesByPitchClass: [Int: [Int]],
+        previousMIDINote: Int?,
+        harmony: GlobalHarmony
+    ) -> Int {
+        let stablePitchClasses = stableMelodyPitchClasses(harmony: harmony)
+        let effectivePitchClass: Int
+        switch attackRole {
+        case .anchor, .resolution:
+            effectivePitchClass = stablePitchClasses.contains(desiredPitchClass) ? desiredPitchClass : anchorPitchClass
+        case .passing, .climax:
+            effectivePitchClass = desiredPitchClass
+        }
+
+        let sourceCandidates = sourceCandidatesByPitchClass[effectivePitchClass] ?? []
+        let scaleCandidates = scaleMIDINotes(for: effectivePitchClass, in: 60...96)
+        let allCandidates = Array(Set(sourceCandidates + scaleCandidates)).sorted()
+
+        return allCandidates.min { lhs, rhs in
+            let lhsScore = melodyCandidateScore(
+                lhs,
+                targetMIDINote: targetMIDINote,
+                anchorMIDINote: anchorMIDINote,
+                sourceCandidates: sourceCandidates,
+                previousMIDINote: previousMIDINote,
+                attackRole: attackRole,
+                harmony: harmony
+            )
+            let rhsScore = melodyCandidateScore(
+                rhs,
+                targetMIDINote: targetMIDINote,
+                anchorMIDINote: anchorMIDINote,
+                sourceCandidates: sourceCandidates,
+                previousMIDINote: previousMIDINote,
+                attackRole: attackRole,
+                harmony: harmony
+            )
+            if lhsScore != rhsScore { return lhsScore < rhsScore }
+            return lhs < rhs
+        } ?? anchorMIDINote
+    }
+
+    private func melodyCandidateScore(
+        _ candidate: Int,
+        targetMIDINote: Int,
+        anchorMIDINote: Int,
+        sourceCandidates: [Int],
+        previousMIDINote: Int?,
+        attackRole: MelodyAttackRole,
+        harmony: GlobalHarmony
+    ) -> Int {
+        var score = abs(candidate - targetMIDINote) * 4
+
+        if sourceCandidates.contains(candidate) {
+            score -= 5
+        }
+
+        if let previousMIDINote {
+            let leap = abs(candidate - previousMIDINote)
+            if leap > 5 {
+                score += (leap - 5) * 3
+            }
+        }
+
+        if attackRole == .anchor || attackRole == .resolution {
+            score += abs(candidate - anchorMIDINote)
+        }
+
+        if !stableMelodyPitchClasses(harmony: harmony).contains(PitchClass(normalizing: candidate).rawValue),
+           attackRole != .passing {
+            score += 4
+        }
+
+        return score
+    }
+
+    private func resolveMelodyConflict(
+        _ midiNote: Int,
+        step: Int,
+        harmony: GlobalHarmony,
+        accompanimentNotes: [MusicNote],
+        preferredAnchorMIDINote: Int
+    ) -> Int {
+        let bassNotesAtStep = accompanimentNotes.filter { $0.voiceRole == .bass && $0.step == step }
+        let conflicts = bassNotesAtStep.filter {
+            PitchClass(normalizing: $0.midiNote).rawValue == PitchClass(normalizing: midiNote).rawValue &&
+            abs($0.midiNote - midiNote) < 12
+        }
+
+        guard !conflicts.isEmpty else { return midiNote }
+
+        let octaveCandidates = [midiNote + 12, midiNote - 12].filter { (60...96).contains($0) }
+        if let octaveCandidate = octaveCandidates.max(by: { lhs, rhs in
+            accompanimentDistanceScore(lhs, to: bassNotesAtStep) < accompanimentDistanceScore(rhs, to: bassNotesAtStep)
+        }) {
+            return octaveCandidate
+        }
+
+        let scalePitchClasses = harmony.scale.degrees.map { (harmony.rootPitchClass + $0) % 12 }
+        let neighboringCandidates = [-1, 1].map {
+            moveScaleSteps(
+                from: midiNote,
+                steps: $0,
+                scalePitchClasses: scalePitchClasses,
+                range: 60...96
+            )
+        }
+        if let neighboringCandidate = neighboringCandidates.max(by: { lhs, rhs in
+            accompanimentDistanceScore(lhs, to: bassNotesAtStep) < accompanimentDistanceScore(rhs, to: bassNotesAtStep)
+        }), accompanimentDistanceScore(neighboringCandidate, to: bassNotesAtStep) > accompanimentDistanceScore(midiNote, to: bassNotesAtStep) {
+            return neighboringCandidate
+        }
+
+        return centeredMIDINote(
+            from: midiNote,
+            preferredCenter: preferredAnchorMIDINote,
+            previousMIDINote: nil,
+            range: 60...96
+        )
+    }
+
+    private func accompanimentDistanceScore(_ midiNote: Int, to bassNotes: [MusicNote]) -> Int {
+        bassNotes.map { abs($0.midiNote - midiNote) }.min() ?? 0
+    }
+
+    private func octaveShiftedMIDINote(
+        from midiNote: Int,
+        preferredDirection: Int,
+        range: ClosedRange<Int>
+    ) -> Int? {
+        let upward = midiNote + 12
+        let downward = midiNote - 12
+
+        if preferredDirection >= 0, range.contains(upward) { return upward }
+        if preferredDirection < 0, range.contains(downward) { return downward }
+        if range.contains(upward) { return upward }
+        if range.contains(downward) { return downward }
+        return nil
+    }
+
+    private func softenedMelodyLeap(
+        from previousMIDINote: Int,
+        to midiNote: Int,
+        harmony: GlobalHarmony
+    ) -> Int? {
+        let direction = midiNote > previousMIDINote ? 1 : -1
+        let scalePitchClasses = harmony.scale.degrees.map { (harmony.rootPitchClass + $0) % 12 }
+        let softened = moveScaleSteps(
+            from: previousMIDINote,
+            steps: direction,
+            scalePitchClasses: scalePitchClasses,
+            range: 60...96
+        )
+        return softened == previousMIDINote ? nil : softened
+    }
+
+    private func melodyVelocity(
+        baseVelocity: Float,
+        attackRole: MelodyAttackRole,
+        region: JamRegion,
+        variationKind: MelodyVariationKind?,
+        attackIndex: Int,
+        attackCount: Int
+    ) -> Float {
+        let roleMultiplier: Float
+        switch attackRole {
+        case .anchor:
+            roleMultiplier = 1.08
+        case .passing:
+            roleMultiplier = 0.82
+        case .climax:
+            roleMultiplier = region == .intense ? 1.18 : 1.12
+        case .resolution:
+            roleMultiplier = 0.96
+        }
+
+        var velocity = baseVelocity * roleMultiplier
+        if variationKind == .velocityAccent, attackIndex == max(0, attackCount - 2) {
+            velocity *= 1.08
+        }
+
+        return min(0.94, max(0.48, velocity))
+    }
+
+    private func normalizedMelodyHalf(
+        _ notes: [MusicNote],
+        contourOffsets: [Int],
+        anchorMIDINote: Int,
+        harmony: GlobalHarmony,
+        accompanimentNotes: [MusicNote],
+        region: JamRegion,
+        usedOctaveJump: Bool
+    ) -> MelodyHalfResult {
+        guard !notes.isEmpty else {
+            return MelodyHalfResult(notes: [], usedOctaveJump: usedOctaveJump)
+        }
+
+        let uniqueMIDINotes = Set(notes.map(\.midiNote))
+        guard uniqueMIDINotes.count == 1, contourOffsets.count > 1 else {
+            return MelodyHalfResult(notes: notes, usedOctaveJump: usedOctaveJump)
+        }
+
+        let scalePitchClasses = harmony.scale.degrees.map { (harmony.rootPitchClass + $0) % 12 }
+        let adjustmentIndex = min(max(1, notes.count / 2), notes.count - 1)
+        let adjustedMIDINote = moveScaleSteps(
+            from: notes[adjustmentIndex].midiNote,
+            steps: region == .deep ? -1 : 1,
+            scalePitchClasses: scalePitchClasses,
+            range: 60...96
+        )
+        let resolvedMIDINote = resolveMelodyConflict(
+            adjustedMIDINote,
+            step: notes[adjustmentIndex].step,
+            harmony: harmony,
+            accompanimentNotes: accompanimentNotes,
+            preferredAnchorMIDINote: anchorMIDINote
+        )
+
+        var adjustedNotes = notes
+        adjustedNotes[adjustmentIndex] = MusicNote(
+            step: notes[adjustmentIndex].step,
+            row: row(for: resolvedMIDINote),
+            midiNote: resolvedMIDINote,
+            velocity: notes[adjustmentIndex].velocity,
+            voiceRole: .melody,
+            timingOffsetSteps: nil
+        )
+        return MelodyHalfResult(notes: adjustedNotes, usedOctaveJump: usedOctaveJump)
+    }
+
+    private func melodyAttackRole(for index: Int, attackCount: Int) -> MelodyAttackRole {
+        if index == 0 { return .anchor }
+        if index == attackCount - 1 { return .resolution }
+        if index == max(1, attackCount / 2) { return .climax }
+        return .passing
+    }
+
+    private func moveScaleSteps(
+        from midiNote: Int,
+        steps: Int,
+        scalePitchClasses: [Int],
+        range: ClosedRange<Int>
+    ) -> Int {
+        guard steps != 0 else {
+            return min(range.upperBound, max(range.lowerBound, midiNote))
+        }
+
+        var currentMIDINote = min(range.upperBound, max(range.lowerBound, midiNote))
+        let direction = steps > 0 ? 1 : -1
+
+        for _ in 0..<abs(steps) {
+            var candidate = currentMIDINote + direction
+            while range.contains(candidate) {
+                if scalePitchClasses.contains(PitchClass(normalizing: candidate).rawValue) {
+                    currentMIDINote = candidate
+                    break
+                }
+                candidate += direction
+            }
+        }
+
+        return min(range.upperBound, max(range.lowerBound, currentMIDINote))
+    }
+
+    private func scaleMIDINotes(for pitchClass: Int, in range: ClosedRange<Int>) -> [Int] {
+        range.filter { PitchClass(normalizing: $0).rawValue == pitchClass }
+    }
+
+    private func deterministicIndex(seed: UInt64, upperBound: Int) -> Int {
+        guard upperBound > 0 else { return 0 }
+        return Int(seed % UInt64(upperBound))
+    }
+
     private func interpolatedPreset(for position: CGPoint) -> VibePreset {
         let x = min(max(position.x, 0), 1)
         let y = min(max(position.y, 0), 1)
@@ -545,6 +1374,55 @@ private struct VibePreset {
     let density: Double
     let registerBias: Double
     let gate: Double
+}
+
+private struct MelodySourceNote {
+    let step: Int
+    let midiNote: Int
+    let velocity: Float
+}
+
+private struct MelodyHalfResult {
+    let notes: [MusicNote]
+    let usedOctaveJump: Bool
+}
+
+private enum MelodyContour {
+    case ascending
+    case descending
+    case arch
+    case valley
+    case pendulum
+    case repeatedAnchor
+}
+
+private enum MelodyVariationKind {
+    case pitchChange
+    case rhythmShift
+    case octaveShift
+    case velocityAccent
+}
+
+private enum MelodyAttackRole {
+    case anchor
+    case passing
+    case climax
+    case resolution
+}
+
+private extension JamRegion {
+    var seedLabel: String {
+        switch self {
+        case .airy:
+            "airy"
+        case .bright:
+            "bright"
+        case .deep:
+            "deep"
+        case .intense:
+            "intense"
+        }
+    }
 }
 
 private let airyPreset = VibePreset(density: 0.40, registerBias: 7, gate: 0.72)

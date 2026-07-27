@@ -1,771 +1,521 @@
 # AGENTS.md
 
-## Project Overview
+## Purpose
 
-Dap is an experimental iOS application that transforms photos into musical material.
+This file defines how coding agents should work inside DapNext.
 
-The application focuses on four primary experiences:
+Read `CONTEXT.md` before changing code. It records the current product surface, domain language, module ownership, deterministic algorithms, audio contracts, and known gaps. The repository remains the final source of truth whenever documentation and code disagree.
 
-* Capture or import photos.
-* Browse saved photos in the Gallery.
-* Inspect and modify the musical properties of a photo.
-* Combine multiple photos inside Jam sessions.
+Task-specific user instructions take precedence over this file.
 
-The project is in an early product-development stage. Optimize for clarity, iteration speed, native platform behavior, and low maintenance cost.
+## Product posture
 
-Do not optimize for hypothetical scale.
+Dap is an experimental iOS app that turns captured or imported images into deterministic Musical Photos and combines up to three of them in a lightweight Jam.
 
----
+Optimize for:
 
-## Core Principles
+- clear product behavior;
+- distinctive visual and sonic character;
+- small, reversible changes;
+- native iOS behavior;
+- low maintenance cost;
+- fast iteration by a small team.
 
-1. Prefer the smallest implementation that correctly supports the current product requirement.
-2. Use native Apple frameworks whenever they provide an adequate solution.
-3. Keep the number of files, layers, abstractions, and dependencies low.
-4. Maintain a single source of truth for every piece of application state.
-5. Implement working vertical slices before creating generalized infrastructure.
-6. Preserve existing behavior unless the task explicitly requests a change.
-7. Do not introduce visual or architectural decisions that were not requested.
-8. Avoid speculative work for future features.
-9. Make code understandable to a small product team.
-10. Prefer direct code over clever code.
+Do not optimize for hypothetical scale, enterprise layering, or feature systems that do not exist yet.
 
----
+## Technical baseline
 
-## Platform and Technology
+- iOS 26.0+
+- Swift 6
+- SwiftUI
+- Observation with `@Observable`
+- AVFoundation and AVAudioEngine
+- AVFoundation camera APIs
+- PhotosUI
+- Vision
+- Foundation Models
+- Core Graphics and UIKit image primitives where required
+- Metal shader for the Capture lava lamp
+- local JSON and PNG persistence in Application Support
+- bundled WAV resources for Jam melodic voices and percussion
+- no third-party dependencies
+- one application target
+- no test target in the current project
 
-* Platform: iOS
-* UI framework: SwiftUI
-* Language: Swift
-* Architecture: pragmatic MVVM
-* Audio: AVFoundation and AVAudioEngine
-* Photo access: PhotosUI and PhotoKit when necessary
-* Camera: native Apple camera APIs
-* On-device generation: Foundation Models framework
-* Persistence: simple local persistence appropriate to the current data model
+Do not add a dependency without explicit approval.
 
-Use UIKit only when SwiftUI cannot reasonably deliver the required behavior or performance.
+## Default working method
 
-Do not introduce third-party dependencies unless explicitly approved.
+1. Read `CONTEXT.md`.
+2. Check `git status --short` before editing.
+3. Inspect the smallest set of files that owns the requested behavior.
+4. Identify the existing source of truth for state, navigation, persistence, image processing, arrangement, or audio rendering.
+5. Make the smallest coherent change.
+6. Inspect the final diff and repository status.
+7. Report exactly what changed, what was preserved, what validation ran, and what risk remains.
 
----
+Prefer a local fix over a refactor. Refactor only when the current structure directly prevents the requested behavior.
 
-## Architecture
+## Validation policy
 
-Use a lightweight feature-oriented structure.
+Do not run builds, tests, Xcode, simulators, previews, profiling, or other slow validation unless the user explicitly requests it.
 
-Recommended baseline:
+Default validation is:
+
+- inspect the edited code;
+- inspect `git diff`;
+- run `git diff --check` when useful;
+- inspect `git status --short`;
+- inspect `project.pbxproj` only when files or resources were added, removed, renamed, or moved.
+
+Do not create a test target or add tests unless explicitly requested.
+
+Never claim that code compiles, runs, or sounds correct when the corresponding build, runtime check, or listening test was not performed.
+
+## Git policy
+
+Do not commit, amend, merge, rebase, push, create a branch, delete a branch, or alter Git history unless explicitly requested.
+
+Never discard unrelated user changes. Preserve modified and untracked files outside the task scope.
+
+When editing `project.pbxproj`, make the smallest manual change and inspect the diff carefully.
+
+## Change discipline
+
+- Preserve existing behavior unless the task explicitly changes it.
+- Do not redesign adjacent flows while implementing a local request.
+- Do not add speculative infrastructure for future features.
+- Avoid opportunistic renames, formatting sweeps, and unrelated cleanup.
+- Do not move files merely to satisfy an idealized architecture.
+- Keep diffs reviewable.
+- Reuse existing domain types and services before creating new ones.
+- Prefer concrete implementations over protocols created only for dependency injection.
+- Prefer private helpers or local subviews before adding files.
+- Add a file only when it creates a real feature boundary or materially improves locality.
+- Do not split large files solely because they are large.
+
+## Current source tree and ownership
 
 ```text
 Dap/
 ├── App/
 │   ├── DapApp.swift
 │   └── AppRootView.swift
-│
 ├── Features/
-│   ├── Gallery/
 │   ├── Capture/
-│   ├── Inspector/
+│   │   ├── CameraView.swift
+│   │   └── DapLavaLamp.metal
+│   ├── Gallery/
+│   │   ├── GalleryView.swift
+│   │   ├── PhotoInspectorView.swift
+│   │   └── PhotoLibraryViewModel.swift
 │   └── Jam/
-│
-├── Shared/
-│   ├── Models/
-│   ├── Audio/
-│   ├── ImageProcessing/
-│   ├── Persistence/
-│   └── Components/
-│
-└── Resources/
+│       ├── JamView.swift
+│       ├── JamArrangementBuilder.swift
+│       └── JamGrooveLibrary.swift
+├── Models/
+│   └── PhotoSound.swift
+├── Services/
+│   ├── DrumSampleLibrary.swift
+│   ├── MelodicSampleLibrary.swift
+│   ├── MusicPlayer.swift
+│   ├── PhotoMetadataGenerator.swift
+│   ├── PhotoMusicPipeline.swift
+│   ├── PhotoStore.swift
+│   └── RetroCoverRenderer.swift
+├── Resources/
+│   └── Audio/
+│       ├── DapAnalogFamily/
+│       └── Drums/
+├── Assets.xcassets
+└── Info.plist
 ```
 
-This structure is a guideline, not a requirement to create empty folders or placeholder files.
+### `AppRootView`
 
-Only create a directory when it contains code that is currently needed.
+Owns application-level presentation only:
 
----
+- Gallery/Jam section selection;
+- Gallery navigation path;
+- Capture presentation;
+- root chrome;
+- the single shared `PhotoLibraryViewModel` lifetime.
 
-## MVVM Guidelines
+Do not move processing, persistence, camera, arrangement, or audio rendering into this view.
 
-Use MVVM pragmatically.
+### `PhotoLibraryViewModel`
 
-A feature may contain:
+This is the shared application state for Gallery, Capture, Inspector, and Jam. It owns:
 
-```text
-FeatureView.swift
-FeatureViewModel.swift
-FeatureModel.swift
-```
+- loaded `PhotoSound` items;
+- in-memory Cover PNG data;
+- single and batch import state;
+- progressive metadata tasks;
+- the single `MusicPlayer` instance;
+- single-photo and transient Jam playback coordination;
+- the callback that informs Jam when a replacement loop has been scheduled.
 
-Not every screen requires a ViewModel.
+Do not create another library owner, Cover cache, or playback engine.
 
-Keep state directly in a SwiftUI View when:
+### `PhotoStore`
 
-* The state is local to the presentation.
-* The logic is small.
-* The state does not need to be shared.
-* Extracting it would only add indirection.
+Owns all persisted library I/O. It is an actor and serializes saves and metadata updates.
 
-Create a ViewModel when:
+Callers must not reproduce its read-modify-write logic or access Cover files directly from SwiftUI views.
 
-* The screen coordinates meaningful business logic.
-* The state has multiple transitions.
-* The logic interacts with persistence, audio, image processing, or Foundation Models.
-* The logic should survive view reconstruction.
-* The View has become difficult to understand.
+### `PhotoMusicPipeline`
 
-Do not create ViewModels that merely rename properties or forward method calls.
+Owns deterministic conversion from Source Image data to:
 
----
+- normalized image data in memory;
+- visual analysis;
+- musical sequence;
+- tonal identity;
+- generated pattern-halftone Cover.
 
-## State Management
+Keep this work outside SwiftUI `body` evaluation and off the main actor.
 
-Every state must have one clear owner.
+### `RetroCoverRenderer`
 
-Do not mirror the same state across multiple Views or ViewModels.
+Owns:
 
-Prefer:
+- canonical pitch colors;
+- four-tone palettes;
+- clustered-dot pattern-halftone rendering;
+- legacy Floyd-Steinberg rendering used for tone analysis;
+- low-level pixel operations.
 
-* Value state for local UI state.
-* `@Observable` models for shared mutable feature state.
-* Bindings when a child View needs to mutate state owned by its parent.
-* Derived properties for values that can be calculated from existing state.
+Do not duplicate palette or pitch-color mappings elsewhere.
 
-Avoid synchronization code between duplicated state, including unnecessary `onChange` callbacks.
+### `PhotoMetadataGenerator`
 
-Do not create global state unless the value is truly application-wide.
+Owns best-effort metadata enrichment using Vision and Foundation Models.
 
-Navigation state should have one explicit owner.
+Metadata generation must remain optional. Failure must not invalidate a successfully persisted Musical Photo.
 
----
+### `MusicPlayer`
 
-## Navigation
+Owns:
 
-Keep navigation native and predictable.
+- the single AVAudioEngine graph;
+- offline stereo rendering;
+- playback scheduling and interruption handling;
+- one-shot and native looping playback;
+- debounced latest-wins loop replacement with `.interruptsAtLoop`;
+- procedural Gallery/Inspector synthesis;
+- procedural Future Bass rendering;
+- sample-based Harmony and Melody rendering;
+- sampled percussion rendering and procedural fallbacks;
+- kick-driven ducking for Bass and Harmony;
+- final output clamping.
 
-Prefer:
+Views and builders may provide musical values, but they must not construct an audio graph, load samples, or render audio.
 
-* `NavigationStack`
-* Typed navigation paths
-* Native sheets
-* Native full-screen covers
-* Native tab or segmented navigation when appropriate
+### `MelodicSampleLibrary`
 
-Do not build custom navigation infrastructure unless the product requirement cannot be achieved with native APIs.
+Owns bundled Dap Analog Family sample lookup, octave wrapping, nearest-root selection, and sample loading.
 
-Do not create:
+Do not perform bundle lookup or sample decoding in SwiftUI or `JamArrangementBuilder`.
 
-* Coordinators
-* Routers
-* Navigation orchestrators
-* Navigation service protocols
+### `DrumSampleLibrary`
 
-A custom navigation abstraction requires explicit approval.
+Owns bundled drum sample loading and the concrete Soft, Club, Break, and Metal kit mappings and trims.
 
-When changing navigation:
+Do not duplicate sample paths, kit composition, or trim values in UI code.
 
-1. Preserve existing screen behavior.
-2. Preserve back navigation.
-3. Preserve interactive gestures where possible.
-4. Verify the visibility of headers, controls, and bottom chrome.
-5. Avoid duplicated route and presentation state.
+### `CameraView` and `CameraController`
 
----
+`CameraView` owns Capture presentation and user-facing state. `CameraController` owns AVCaptureSession configuration, rotation, mirroring, flash capability, zoom, camera switching, capture, and live pitch-color sampling.
 
-## SwiftUI Guidelines
+Do not split `CameraController` simply because the file is large. Split only when a real independent interface appears.
 
-Prefer straightforward SwiftUI composition.
+### `GalleryView` and `PhotoInspectorView`
 
-A View should communicate its structure clearly.
+Gallery owns browsing and UUID navigation. Inspector owns presentation and playback actions for one existing Musical Photo.
 
-Extract a subview when:
+Neither view owns persistence, image processing, metadata generation, arrangement, or audio rendering.
 
-* It represents a meaningful visual component.
-* It is reused.
-* It has independent state or behavior.
-* Extraction substantially improves readability.
+### Jam modules
 
-Do not split Views into many tiny files solely to reduce line count.
+- `JamView` owns local selection, Vibe position, manual/Auto Drum Kit selection, visible transport, pending-state feedback, and Jam playback intent.
+- `JamArrangementBuilder` owns deterministic role assignment, global harmony, Vibe interpolation, Bass/Harmony transformations, and the Melody Motif Engine.
+- `JamGrooveLibrary` owns Jam-region classification, stable groove-variant selection, and the twelve hard-coded percussion patterns.
 
-Prefer private computed Views or private subviews in the same file for small, screen-specific elements.
+Keep these boundaries intact unless a requested behavior proves they are wrong.
 
-Avoid unnecessary:
+## State-management rules
 
-* `AnyView`
-* Type erasure
-* Preference keys
-* Geometry readers
-* Custom layout systems
-* Environment values
-* View modifiers with only one usage
-* Wrapper components around native controls
+Every state value needs one clear owner.
 
-Use these tools only when they solve a demonstrated requirement.
+Use:
 
----
-
-## Design Fidelity
-
-The supplied design and requested behavior are the source of truth.
-
-Do not modify the visual direction without approval.
-
-Do not add unrequested:
-
-* Blur
-* Gradients
-* Shadows
-* Materials
-* Animations
-* Haptics
-* Transitions
-* Decorative backgrounds
-* Floating controls
-* Glass effects
-* Additional labels
-* Additional navigation elements
-
-Do not reinterpret wireframes as permission to redesign the screen.
-
-When a design detail is unspecified, prefer a simple native presentation.
-
-Preserve existing spacing, hierarchy, interaction, and animation unless the task explicitly changes them.
-
----
-
-## Animation
-
-Use native SwiftUI animation APIs.
-
-Animations should:
-
-* Communicate state changes.
-* Preserve spatial continuity.
-* Avoid delaying interaction.
-* Respect Reduce Motion.
-* Remain deterministic and easy to understand.
-
-Do not add animation purely for decoration.
-
-For hero transitions or matched geometry:
-
-* Keep one clear source and one clear destination.
-* Avoid duplicate matched geometry identifiers.
-* Keep transition state owned by the nearest common ancestor.
-* Do not use delayed state synchronization as a layout fix.
-* Verify tap, back button, and interactive-dismiss paths separately.
-
-Do not replace an existing transition with a different implementation unless requested.
-
----
-
-## Accessibility
-
-All interactive controls must have appropriate accessibility labels.
-
-Add hints only when the action is not evident from the label.
-
-Consider:
-
-* VoiceOver
-* Dynamic Type
-* Reduce Motion
-* Sufficient tap targets
-* Logical focus order
-* Button traits
-* Selected states
-
-Accessibility must not require a parallel UI implementation.
-
-Prefer native controls because they provide better accessibility behavior by default.
-
----
-
-## Feature Boundaries
-
-### Gallery
-
-Gallery owns:
-
-* Displaying saved photos.
-* Photo grouping and ordering.
-* Navigation to the Photo Inspector.
-* Import entry points when present in the approved flow.
-
-Gallery should not own:
-
-* Audio synthesis.
-* Foundation Models prompts.
-* Jam session coordination.
-* Effect-processing internals.
-
-### Capture
-
-Capture owns:
-
-* Camera presentation.
-* Photo capture.
-* Photo import when part of the approved flow.
-* Capture-specific controls and state.
-* Preparing a captured image for the next application step.
-
-Capture should not duplicate Gallery persistence logic.
-
-### Photo Inspector
-
-Photo Inspector owns:
-
-* Displaying one selected photo.
-* Displaying its musical identity.
-* Previewing playback.
-* Managing effects associated with that photo.
-* Actions related specifically to that photo.
-
-Photo-specific effects belong to the photo.
-
-They should not automatically become global Jam effects.
-
-### Jam
-
-Jam owns:
-
-* Combining multiple photos.
-* Session-level playback.
-* Session-level musical coordination.
-* Global Jam effects.
-* Vibe and Studio presentation when implemented.
-
-Implement Vibe before Studio unless the task explicitly says otherwise.
-
-Do not implement multiplayer, collaboration, advanced canvases, or speculative session infrastructure before those features are requested.
-
----
-
-## Music and Audio
-
-Keep deterministic music generation separate from presentation code.
-
-Views must not contain:
-
-* Pixel analysis.
-* Scale-selection algorithms.
-* MIDI generation.
-* Audio graph construction.
-* Playback scheduling logic.
-
-Audio ownership must be explicit.
-
-Avoid multiple independent playback engines unless the feature requires them.
-
-Playback state should clearly represent states such as:
-
-```swift
-enum PlaybackState {
-    case stopped
-    case playing
-    case paused
-}
-```
-
-Do not introduce a generalized audio framework for a single concrete playback flow.
-
-Prefer concrete services such as:
-
-```swift
-@Observable
-final class PhotoPlaybackEngine {
-    // Concrete implementation
-}
-```
-
-Do not create protocols solely for dependency injection.
-
----
-
-## Image Processing
-
-Image processing must remain outside SwiftUI View bodies.
-
-Do not perform expensive image work synchronously during rendering.
-
-Image-processing operations should:
-
-* Accept explicit inputs.
-* Produce explicit outputs.
-* Avoid hidden global state.
-* Preserve orientation correctly.
-* Avoid repeated full-resolution decoding.
-* Support cancellation when the operation may outlive the screen.
-
-Do not create a complex processing pipeline before multiple processing stages actually require one.
-
----
-
-## Foundation Models
-
-Use Foundation Models for tasks where generative interpretation adds meaningful product value.
-
-Appropriate examples include:
-
-* Generating a playful photo name.
-* Generating a short musical description.
-* Interpreting visual mood into constrained metadata.
-* Producing labels or creative text from deterministic musical results.
-
-Do not rely on Foundation Models for deterministic application rules.
-
-Deterministic logic should remain responsible for:
-
-* Pitch selection.
-* Scale calculation.
-* MIDI timing.
-* Playback scheduling.
-* Persistence identifiers.
-* File paths.
-* Data migrations.
-* Core navigation.
-
-Foundation Models output must be treated as optional and fallible.
-
-Always provide a usable fallback when generation:
-
-* Is unavailable.
-* Fails.
-* Is cancelled.
-* Produces invalid output.
-* Takes longer than the current flow permits.
-
-Do not create multiple abstraction layers around a single Foundation Models session.
-
-A concrete service is preferred.
-
----
-
-## Persistence
-
-Use the simplest persistence mechanism that safely supports the current data.
-
-Requirements:
-
-* Data ownership must be clear.
-* Writes must avoid leaving corrupted partial files.
-* Models should have an explicit version when persisted long-term.
-* Missing optional data should degrade gracefully.
-* UI rendering must not perform repeated disk access.
-
-Do not introduce:
-
-* Repository layers
-* Database abstractions
-* Cloud synchronization
-* Migration frameworks
-* Generic storage protocols
-
-unless the current feature explicitly requires them.
-
-Do not create persistence infrastructure for unimplemented future models.
-
----
-
-## Concurrency
-
-Use Swift concurrency where asynchronous work is real.
-
-Prefer:
-
-* `async` functions
-* Structured concurrency
-* Task cancellation
-* Main-actor UI state
-* Actors only for genuinely shared mutable state
-
-Do not add concurrency to synchronous operations without a concrete reason.
-
-Do not create actors as architectural decoration.
+- `@State` for local presentation and interaction state;
+- `@Binding` for child mutation of parent-owned state;
+- `@Observable` for shared mutable feature state;
+- derived properties instead of mirrored state;
+- stable UUIDs at feature boundaries.
 
 Avoid:
 
-* Detached tasks without clear ownership
-* Fire-and-forget tasks
-* Unstructured background work
-* Duplicated tasks triggered by View reconstruction
-* Manual dispatch queues when Swift concurrency is sufficient
+- duplicated playback state;
+- copied library arrays as independent truth;
+- synchronization chains built from multiple `onChange` handlers;
+- global singletons for UI state;
+- additional environment objects when direct injection already works.
 
-UI state mutations must occur on the appropriate actor.
+Jam selection, Vibe position, Drum Kit selection, transport, and pending feedback remain local to `JamView` until Jam persistence is explicitly specified.
 
----
+## Navigation rules
 
-## Error Handling
+Use native SwiftUI navigation and presentation:
 
-Handle errors at the level where the application can make a meaningful decision.
+- `NavigationStack`;
+- typed values in navigation paths;
+- `.sheet`;
+- `.fullScreenCover`;
+- native toolbar items;
+- the current Gallery/Jam section switcher.
 
-The user-facing UI should distinguish between:
+Do not introduce coordinators, routers, route protocols, navigation services, or an application flow state machine.
 
-* Empty state
-* Loading state
-* Recoverable failure
-* Unavailable resource
-* Permanent unsupported condition
+Preserve these contracts unless explicitly changed:
 
-Do not silently swallow errors that affect visible behavior.
+- Gallery and Jam are root sections.
+- Capture is presented full-screen from the Gallery root.
+- Photo Inspector is reached through the Gallery UUID path.
+- Root chrome is hidden while Inspector is pushed.
+- Leaving Jam stops transient Jam playback.
 
-Do not expose raw internal error descriptions directly to users.
+## SwiftUI and design rules
 
-Debug logs should provide enough context to identify:
+The requested design and existing Figma direction are the visual source of truth.
 
-* The operation
-* The affected model identifier
-* The failure category
+Do not add unrequested:
 
-Avoid noisy logging inside frequently recomputed SwiftUI code.
+- gradients;
+- glass;
+- blur;
+- shadows;
+- haptics;
+- animations;
+- labels;
+- navigation controls;
+- decorative backgrounds;
+- custom gestures.
 
----
+When a visual detail is unspecified, preserve the existing component or use the simplest native treatment.
 
-## Testing Policy
+Extract a subview when it represents a meaningful component, owns independent behavior, is reused, or substantially improves readability. Do not create many tiny files solely to reduce line count.
 
-Do not add automated tests unless explicitly requested.
+Avoid `AnyView`, preference keys, custom layout systems, and type erasure unless the requirement demands them.
 
-Do not create:
+Use UIKit only where SwiftUI does not adequately expose the required platform behavior.
 
-* Test targets
-* Test fixtures
-* Mock services
-* Snapshot tests
-* UI tests
-* Test-only protocols
-* Testing documentation
+## Interaction and animation rules
 
-unless the task specifically requires them.
+Animation must explain a state transition, preserve continuity, or provide direct feedback.
 
-A deterministic or high-risk domain rule may justify suggesting tests, but do not implement them without approval.
+- Respect Reduce Motion.
+- Keep durations short and interactions responsive.
+- Avoid delayed state changes used as layout fixes.
+- Keep one owner for animation state.
+- Preserve the Gallery-to-Inspector zoom transition unless explicitly changed.
+- Preserve Jam's next-loop application contract for updates made during playback.
+- Preserve the `Next bar` pending feedback semantics for Drum Kit changes.
 
-Do not restructure production code solely to make it testable when tests are not part of the task.
+Haptics should mark meaningful discrete boundaries, not continuous Vibe movement.
 
----
+## Accessibility
 
-## Validation
+Interactive controls must have usable labels and adequate hit targets.
 
-Validation must be proportional to the change.
+Preserve or add:
 
-For normal implementation work:
+- VoiceOver labels and values;
+- selected and disabled states;
+- Reduce Motion behavior;
+- logical focus order;
+- native control semantics where possible.
 
-1. Build the application.
-2. Resolve compiler errors and warnings introduced by the change.
-3. Run the affected flow in the Simulator when possible.
-4. Check for obvious runtime failures.
-5. Report the exact visual or interaction points that require designer validation.
+Do not create a parallel accessibility-only interface.
 
-For visual changes, verify:
+## Concurrency and performance
 
-* Layout
-* Safe areas
-* Navigation chrome
-* Bottom controls
-* Loading states
-* Empty states
-* Back navigation
-* Sheet dismissal
-* Interactive gestures
-* Reduce Motion behavior when relevant
+- UI-facing mutable state stays on `@MainActor`.
+- Persistence stays inside the `PhotoStore` actor.
+- Heavy image processing, Vision work, and audio rendering stay off-main.
+- Cross concurrency boundaries with `Sendable` values.
+- Keep AVCapture objects inside `CameraController`.
+- Never perform disk reads, bundle audio decoding, or full-resolution image decoding inside a SwiftUI `body`.
+- Cancel work that can outlive its screen or be replaced by newer work.
+- Guard asynchronous render and metadata results against stale completions.
 
-Do not create additional validation documents.
+Do not mark new types `@unchecked Sendable` unless framework ownership is contained and the safety reasoning is explicit.
 
-Do not claim a flow was visually verified when it was only compiled.
+## Music and tonal identity rules
 
-Clearly distinguish:
+The same persisted root pitch class must drive:
 
-* Build verification
-* Simulator verification
-* Device verification
-* Designer verification
+- `MusicHarmony.rootPitchClass`;
+- the persisted Cover palette;
+- Inspector background identity.
 
----
+Use `PitchClass` and `RetroCoverRenderer.tonalPalette(for:)` as the canonical mapping. Do not create another note-color table.
 
-## Prohibited Patterns
+The live Capture lava lamp is provisional and may differ from the final Cover because Capture samples live camera color while the persisted pipeline uses weighted analysis of the normalized image.
 
-Do not introduce the following unless explicitly requested:
+Preserve deterministic behavior for the same stable inputs and current algorithm. Random-looking choices must use stable seeds, not runtime randomness, `Hasher`, `Date`, or newly generated UUIDs.
 
-* Clean Architecture
-* VIPER
-* Coordinators
-* Interactors
-* Use cases
-* Orchestrators
-* Repository patterns
-* Service locators
-* Dependency-injection containers
-* Generic feature frameworks
-* Event buses
-* Redux-style global stores
-* Protocols with only one conforming type
-* Factories with only one product
-* Builders for simple models
-* Generic persistence layers
-* Premature modularization
-* Speculative caching
-* Speculative multiplayer infrastructure
-* Placeholder architecture for future features
+Do not put photo analysis, sequence generation, Jam arrangement, groove selection, sample loading, or audio rendering in views.
 
-Do not add a new abstraction merely because it may become useful later.
+## Audio rules
 
----
+`MusicNote.voiceRole` separates transient Jam voices from persisted single-photo notes:
 
-## Code Changes
+- persisted Gallery/Inspector notes normally have `voiceRole == nil` and use the legacy procedural waveform path;
+- Jam Bass notes use `.bass` and the procedural Future Bass renderer;
+- Jam Harmony notes use `.harmony` and Dap Analog Family samples;
+- Jam Melody notes use `.melody` and Dap Analog Family samples.
 
-Keep changes focused on the requested task.
+When a role-specific sample is unavailable, preserve the existing procedural fallback and keep it routed through the same semantic stem.
 
-Do not:
+Preserve these current audio contracts unless explicitly changed:
 
-* Refactor unrelated code.
-* Rename unrelated symbols.
-* Reformat entire files.
-* Move files without a concrete need.
-* Replace working APIs solely based on personal preference.
-* Delete existing functionality that is outside the task.
-* Introduce unrelated visual changes.
-* Change product copy without approval.
-* Add new dependencies without approval.
+- stereo 44,100 Hz output;
+- one shared engine and player node;
+- loop frame count fixed to one 16-step bar;
+- Bass and Harmony duck from actual kick-hit frames;
+- Melody is not ducked;
+- percussion is mixed after tonal stems;
+- final output is clamped, without a general limiter or mastering graph.
 
-Before editing, identify the smallest set of files required.
+Do not add an effects graph, mixer-node architecture, sampler graph, SoundFont runtime, or generic audio plugin system without an explicit specification.
 
-When an existing implementation is flawed, prefer a localized correction before a broad rewrite.
+## Audio resource rules
 
----
+Bundled audio is loaded by exact folder and filename contracts.
 
-## File Creation
+- `DapAnalogFamily` and `Drums` are folder resources in the app target.
+- Current loaders require 44,100 Hz assets.
+- Melodic assets are expected to be mono.
+- Drum assets may be mono or stereo.
 
-Every new file must have a current purpose.
+When adding, removing, renaming, or moving audio resources:
 
-Do not create:
+1. update the corresponding sample library;
+2. verify the folder resource remains in `PBXResourcesBuildPhase`;
+3. inspect `project.pbxproj`;
+4. do not silently alter existing kit mappings or trims.
 
-* Empty folders
-* Placeholder files
-* Future-facing protocols
-* Documentation for features that do not exist
-* Duplicate models
-* Convenience files containing a single trivial extension
-* Separate files for tiny private subviews
+Do not expose unused sample assets as product behavior merely because they are bundled.
 
-Prefer adding a small amount of related code to an existing feature file when that remains readable.
+## Jam rules
 
----
+Current Jam is a local Vibe experience, not a generic music workstation.
 
-## Working With the Designer
+Preserve these contracts unless a new specification changes them:
 
-The designer is actively validating the product during implementation.
+- select one to three Musical Photos;
+- assign roles deterministically by register, note count, and UUID;
+- one photo becomes Melody;
+- two photos become Bass and Melody;
+- three photos become Bass, Harmony, and Melody;
+- build one 16-step arrangement at fixed 96 BPM;
+- derive one global pentatonic harmony from all selected photos;
+- interpolate density, register bias, and gate between Airy, Bright, Deep, and Intense;
+- choose one of three deterministic grooves per region;
+- support Auto, Soft, Club, Break, and Metal Drum Kit selections;
+- resolve Auto as Airy→Soft, Bright→Club, Deep→Break, Intense→Metal;
+- schedule live replacements through the shared `MusicPlayer` and apply them at the next loop boundary.
 
-When completing a task, report:
+### Melody ownership contract
 
-1. What changed.
-2. Which files changed.
-3. Which state owns the new behavior.
-4. Any behavior intentionally preserved.
-5. What was validated technically.
-6. What still requires visual validation.
+The Musical Photo assigned `.melody` is the primary source of Melody pitch material.
 
-When a decision materially affects UX, explain the tradeoff before choosing a complex solution.
+All selected photos currently influence:
 
-Examples include:
+- global root and scale;
+- role assignment;
+- the sorted UUID portion of the Melody seed;
+- Bass and Harmony accompaniment.
 
-* Changing navigation behavior.
-* Removing interactive dismissal.
-* Replacing a native control.
-* Changing animation structure.
-* Moving actions between screens.
-* Changing whether data is saved automatically.
-* Changing the ownership of photo or Jam effects.
+They do not currently contribute equal note pools to the Melody. Do not combine all selected note pools without an explicit musical specification and listening validation.
 
-Do not make product decisions silently.
+### Melody Motif Engine contract
 
----
+The current Motif Engine:
 
-## Implementation Style
+- transforms the `.melody` photo's notes through register shift and global-scale snap;
+- derives a stable FNV-1a seed;
+- chooses an anchor, contour, regional rhythm template, and attack roles;
+- builds an A phrase in steps 0...7 and an A' variation in steps 8...15;
+- supports ascending, descending, arch, valley, pendulum, and repeated-anchor contours;
+- permits pitch, rhythm, octave, or velocity variation;
+- limits Melody to MIDI 60...96;
+- avoids close Bass conflicts where possible;
+- does not use per-note duration or Melody microtiming.
 
-Write code as a senior iOS developer working closely with a product designer.
+Do not replace this with unconstrained random note selection or a Foundation Model.
 
-The implementation should be:
+The seed currently includes transformed source-note step and MIDI values. Because transformed MIDI depends on rounded register shift, a Vibe movement can indirectly change the motif at register thresholds even though raw XY coordinates are not hashed. Treat this as a known current behavior, not as guaranteed continuous morphing.
 
-* Small
-* Direct
-* Native
-* Readable
-* Focused
-* Easy to remove or change
-* Appropriate for the current product stage
+Do not prebuild Studio, graph connections, timelines, saved Jam documents, multiplayer, collaboration, or plugin architecture.
 
-Prefer concrete names tied to the product domain.
+## Persistence rules
 
-Good:
+Current persistence is deliberately simple:
 
-```swift
-PhotoInspectorView
-JamSession
-PhotoPlaybackEngine
-GalleryViewModel
-CapturedPhoto
-GlobalJamEffects
-```
+- `Application Support/Dap/library.json`;
+- `Application Support/Dap/Covers/<UUID>.png`.
 
-Avoid vague infrastructure names:
+A Musical Photo is considered created only after the essential object and Cover are persisted successfully.
 
-```swift
-Manager
-Handler
-Coordinator
-Processor
-Helper
-Orchestrator
-EngineServiceProvider
-```
+The original Source Image is not currently persisted. Jam arrangements, selections, Vibe state, Drum Kit selection, and effects are not persisted.
 
-Use comments only when they explain a non-obvious constraint or product decision.
+Do not add Core Data, SwiftData, CloudKit, a repository layer, migrations, or multiple stores without an explicit product requirement.
 
-Do not comment code that is already self-explanatory.
+## Foundation Models rules
 
----
+Use Foundation Models only where generative interpretation provides user value.
 
-## Completion Format
+Current approved use is progressive photo naming and description after the deterministic Musical Photo has already been saved.
 
-At the end of an implementation task, provide a concise report using this structure:
+Do not use a model to replace deterministic requirements such as:
 
-```text
-Implemented
-- Summary of the completed behavior.
+- saving the photo;
+- choosing the persisted UUID;
+- generating the Cover;
+- constructing the base Musical Sequence;
+- assigning Jam roles;
+- generating grooves or melodic motifs;
+- reproducing a Jam arrangement.
 
-Files changed
-- Path/File.swift
-- Path/OtherFile.swift
+Always handle model unavailability and generation failure without blocking the core flow.
 
-State ownership
-- Identify the source of truth.
+## Prohibited patterns
 
-Preserved behavior
-- List important behavior that was intentionally kept unchanged.
+Do not introduce without explicit approval:
 
-Validation
-- Build:
-- Simulator:
-- Device:
-- Visual review:
+- coordinators, routers, orchestrators, use-case layers, or repositories;
+- protocols with one concrete implementation solely for abstraction;
+- generic audio, effects, plugin, or processing frameworks;
+- third-party packages;
+- duplicate state owners;
+- speculative persistence models;
+- empty placeholder folders;
+- automatic commits;
+- broad rewrites for a local bug;
+- tests or build pipelines not requested by the user.
 
-Notes
-- Relevant limitations or product decisions.
-```
+## Completion report
 
-Do not include a long narrative unless the change requires deeper explanation.
+At the end of an implementation task, report:
 
----
+1. files changed;
+2. behavior implemented;
+3. important architectural or musical decisions;
+4. validation actually performed;
+5. unresolved issues, assumptions, or listening risks;
+6. whether a build, test, simulator run, profiling session, commit, or push was intentionally not performed.
 
-## Final Rule
-
-This project should remain smaller than the problem it solves.
-
-When choosing between two valid implementations, prefer the one with:
-
-* Fewer concepts
-* Fewer files
-* Fewer state owners
-* Fewer synchronization points
-* Fewer dependencies
-* More native platform behavior
-
-Complexity must be earned by a concrete product requirement.
+Be precise. Do not present assumptions or unperformed listening checks as verified facts.
