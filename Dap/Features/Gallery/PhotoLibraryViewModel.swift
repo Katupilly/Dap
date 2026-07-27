@@ -262,6 +262,14 @@ final class PhotoLibraryViewModel {
         stopPlayback()
     }
 
+    func setTransientLoopUpdatePreparedHandler(_ handler: @escaping () -> Void) {
+        player.onLoopUpdatePrepared = handler
+    }
+
+    func clearTransientLoopUpdatePreparedHandler() {
+        player.onLoopUpdatePrepared = nil
+    }
+
     // MARK: - Errors
 
     enum ImportError: LocalizedError {

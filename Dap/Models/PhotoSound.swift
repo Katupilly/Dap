@@ -107,6 +107,38 @@ struct MusicPercussionHit: Sendable, Equatable {
     }
 }
 
+enum MusicDrumKitSelection: String, CaseIterable, Sendable, Equatable {
+    case auto
+    case soft
+    case club
+    case breakbeat
+    case metal
+}
+
+extension MusicDrumKitSelection {
+    var displayName: String {
+        switch self {
+        case .auto:
+            "Auto"
+        case .soft:
+            "Soft"
+        case .club:
+            "Club"
+        case .breakbeat:
+            "Break"
+        case .metal:
+            "Metal"
+        }
+    }
+}
+
+enum MusicDrumKit: Sendable, Equatable {
+    case soft
+    case club
+    case breakbeat
+    case metal
+}
+
 enum MusicRimStyle: Sendable, Equatable {
     case soft
     case main
@@ -126,6 +158,7 @@ struct MusicRimHit: Sendable, Equatable {
 }
 
 struct MusicPercussionPattern: Equatable, Sendable {
+    let kit: MusicDrumKit
     let kickHits: [MusicPercussionHit]
     let snareHits: [MusicPercussionHit]
     let closedHatHits: [MusicPercussionHit]

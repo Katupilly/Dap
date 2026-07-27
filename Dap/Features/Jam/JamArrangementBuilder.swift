@@ -40,7 +40,8 @@ struct JamArrangementBuilder {
 
     func build(
         sounds: [PhotoSound],
-        vibePosition: CGPoint
+        vibePosition: CGPoint,
+        drumKit: MusicDrumKit
     ) -> JamArrangement? {
         let assignedSounds = assignRoles(to: sounds)
         guard let melodySound = assignedSounds.first(where: { $0.role == .melody }) else {
@@ -92,7 +93,8 @@ struct JamArrangementBuilder {
         )
         let percussion = grooveLibrary.pattern(
             for: vibePosition,
-            soundIDs: sounds.map(\.id)
+            soundIDs: sounds.map(\.id),
+            drumKit: drumKit
         )
 
         return JamArrangement(

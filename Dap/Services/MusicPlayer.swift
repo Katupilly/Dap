@@ -52,6 +52,9 @@ final class MusicPlayer {
     /// NOT called when stop() is invoked directly by the ViewModel.
     var onPlaybackFinished: (() -> Void)?
 
+    /// Called after a loop update has been scheduled for the next loop boundary.
+    var onLoopUpdatePrepared: (() -> Void)?
+
     // MARK: Init / deinit
 
     init() {
@@ -193,6 +196,7 @@ final class MusicPlayer {
                 options: [.loops, .interruptsAtLoop],
                 completionHandler: nil
             )
+            self.onLoopUpdatePrepared?()
             self.pendingLoopTask = nil
         }
     }
@@ -237,9 +241,9 @@ final class MusicPlayer {
         let wave           = waveformTable(sequence.soundProfile.waveform, size: 512)
         let envelope       = envelopeTable(length: gateSamples)
         let tonalFrameCount = samplesPerStep * MusicSequence.steps
-        let drumKit        = DrumSampleLibrary.defaultKit()
         let maximumPercussionFrameCount = percussion.map {
-            reservedPercussionFrameCount(
+            let drumKit = DrumSampleLibrary.kit(for: $0.kit)
+            return reservedPercussionFrameCount(
                 for: $0,
                 samplesPerStep: samplesPerStep,
                 sampleRate: sampleRate,
@@ -269,6 +273,7 @@ final class MusicPlayer {
         }
 
         if let percussion {
+            let drumKit = DrumSampleLibrary.kit(for: percussion.kit)
             renderPercussion(
                 percussion,
                 into: &output,
@@ -300,7 +305,7 @@ final class MusicPlayer {
             if let sample = drumKit.kick {
                 mix(
                     sample: sample,
-                    gain: kickGain * hit.velocity,
+                    gain: kickGain * drumKit.kickTrim * hit.velocity,
                     startFrame: hit.step * samplesPerStep,
                     into: &output,
                     loops: loops
@@ -321,7 +326,7 @@ final class MusicPlayer {
             if let sample = drumKit.snare {
                 mix(
                     sample: sample,
-                    gain: snareGain * hit.velocity,
+                    gain: snareGain * drumKit.snareTrim * hit.velocity,
                     startFrame: hit.step * samplesPerStep,
                     into: &output,
                     loops: loops
@@ -343,6 +348,7 @@ final class MusicPlayer {
                 hits: pattern.openHatHits.sorted(by: byStep),
                 closedHatHits: pattern.closedHatHits.sorted(by: byStep),
                 sample: openHatSample,
+                gain: openHatGain * drumKit.openHatTrim,
                 samplesPerStep: samplesPerStep,
                 sampleRate: sampleRate,
                 loops: loops,
@@ -355,7 +361,7 @@ final class MusicPlayer {
             if let sample = drumKit.closedHat {
                 mix(
                     sample: sample,
-                    gain: closedHatGain * hit.velocity,
+                    gain: closedHatGain * drumKit.closedHatTrim * hit.velocity,
                     startFrame: hit.step * samplesPerStep,
                     into: &output,
                     loops: loops
@@ -485,6 +491,7 @@ final class MusicPlayer {
         hits: [MusicPercussionHit],
         closedHatHits: [MusicPercussionHit],
         sample: DrumSample,
+        gain: Float,
         samplesPerStep: Int,
         sampleRate: Int,
         loops: Bool,
@@ -503,7 +510,7 @@ final class MusicPlayer {
             )
             mix(
                 sample: sample,
-                gain: openHatGain * hit.velocity,
+                gain: gain * hit.velocity,
                 startFrame: voice.startFrame,
                 into: &voice.audio,
                 loops: loops

@@ -1,20 +1,28 @@
 import CoreGraphics
 import Foundation
 
+enum JamRegion: Sendable, Equatable {
+    case airy
+    case bright
+    case deep
+    case intense
+}
+
 struct JamGrooveLibrary {
     func pattern(
         for vibePosition: CGPoint,
-        soundIDs: [UUID]
+        soundIDs: [UUID],
+        drumKit: MusicDrumKit
     ) -> MusicPercussionPattern {
-        let style = grooveStyle(for: vibePosition)
-        let variants = patterns(for: style)
+        let region = Self.region(for: vibePosition)
+        let variants = patterns(for: region, drumKit: drumKit)
         let variantIndex = Int(
             stableSeed(for: soundIDs) % UInt64(variants.count)
         )
         return variants[variantIndex]
     }
 
-    private func grooveStyle(for vibePosition: CGPoint) -> JamGrooveStyle {
+    static func region(for vibePosition: CGPoint) -> JamRegion {
         let x = min(max(vibePosition.x, 0), 1)
         let y = min(max(vibePosition.y, 0), 1)
 
@@ -47,11 +55,12 @@ struct JamGrooveLibrary {
         return hash
     }
 
-    private func patterns(for style: JamGrooveStyle) -> [MusicPercussionPattern] {
-        switch style {
+    private func patterns(for region: JamRegion, drumKit: MusicDrumKit) -> [MusicPercussionPattern] {
+        switch region {
         case .airy:
             return [
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.96), hit(8, 0.72)],
                     snareHits: [hit(4, 0.84), hit(12, 0.88)],
                     closedHatHits: [hit(2, 0.62), hit(6, 0.42), hit(10, 0.58), hit(14, 0.46)],
@@ -59,6 +68,7 @@ struct JamGrooveLibrary {
                     rimHits: []
                 ),
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.94), hit(7, 0.68), hit(10, 0.74)],
                     snareHits: [hit(4, 0.82), hit(12, 0.86)],
                     closedHatHits: [hit(3, 0.56), hit(9, 0.62), hit(13, 0.44)],
@@ -66,6 +76,7 @@ struct JamGrooveLibrary {
                     rimHits: []
                 ),
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.95), hit(11, 0.66)],
                     snareHits: [hit(4, 0.84), hit(12, 0.88)],
                     closedHatHits: [hit(2, 0.60), hit(6, 0.40), hit(10, 0.52)],
@@ -76,6 +87,7 @@ struct JamGrooveLibrary {
         case .bright:
             return [
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 1.00), hit(4, 0.90), hit(8, 0.96), hit(12, 0.90)],
                     snareHits: [hit(4, 0.90), hit(12, 0.94)],
                     closedHatHits: [hit(0, 0.80), hit(2, 0.48), hit(4, 0.74), hit(6, 0.52), hit(8, 0.82), hit(10, 0.50), hit(12, 0.76), hit(14, 0.54)],
@@ -83,6 +95,7 @@ struct JamGrooveLibrary {
                     rimHits: []
                 ),
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.99), hit(4, 0.88), hit(8, 0.95), hit(12, 0.88), hit(14, 0.68)],
                     snareHits: [hit(4, 0.88), hit(12, 0.92)],
                     closedHatHits: [hit(1, 0.42), hit(3, 0.72), hit(6, 0.48), hit(8, 0.78), hit(11, 0.50), hit(14, 0.70)],
@@ -90,6 +103,7 @@ struct JamGrooveLibrary {
                     rimHits: [rim(10, 0.42, .main)]
                 ),
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.99), hit(4, 0.88), hit(8, 0.96), hit(12, 0.90)],
                     snareHits: [hit(4, 0.89), hit(12, 0.95)],
                     closedHatHits: [hit(1, 0.44), hit(3, 0.74), hit(5, 0.42), hit(7, 0.78), hit(9, 0.48), hit(11, 0.68), hit(13, 0.46)],
@@ -100,6 +114,7 @@ struct JamGrooveLibrary {
         case .deep:
             return [
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.98), hit(10, 0.74)],
                     snareHits: [hit(4, 0.92), hit(12, 0.94)],
                     closedHatHits: [hit(2, 0.46), hit(6, 0.58), hit(11, 0.42)],
@@ -107,6 +122,7 @@ struct JamGrooveLibrary {
                     rimHits: [rim(3, 0.28, .soft)]
                 ),
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.96), hit(7, 0.68), hit(13, 0.72)],
                     snareHits: [hit(8, 0.94)],
                     closedHatHits: [hit(1, 0.40), hit(4, 0.54), hit(10, 0.48), hit(14, 0.60)],
@@ -114,6 +130,7 @@ struct JamGrooveLibrary {
                     rimHits: [rim(6, 0.34, .main), rim(15, 0.30, .soft)]
                 ),
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.98), hit(3, 0.66), hit(10, 0.76)],
                     snareHits: [hit(4, 0.90), hit(12, 0.96)],
                     closedHatHits: [hit(2, 0.44), hit(6, 0.56), hit(9, 0.36), hit(14, 0.62)],
@@ -124,6 +141,7 @@ struct JamGrooveLibrary {
         case .intense:
             return [
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.98), hit(3, 0.70), hit(8, 0.94), hit(10, 0.68), hit(14, 0.74)],
                     snareHits: [hit(4, 0.90), hit(12, 0.96)],
                     closedHatHits: [
@@ -135,6 +153,7 @@ struct JamGrooveLibrary {
                     rimHits: [rim(15, 0.50, .hard)]
                 ),
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.96), hit(2, 0.72), hit(6, 0.68), hit(8, 0.92), hit(11, 0.70), hit(14, 0.76)],
                     snareHits: [hit(4, 0.88), hit(12, 0.95)],
                     closedHatHits: [hit(0, 0.74), hit(2, 0.62), hit(3, 0.40), hit(5, 0.58), hit(6, 0.70), hit(8, 0.76), hit(10, 0.68), hit(11, 0.42), hit(13, 0.56), hit(15, 0.72)],
@@ -142,6 +161,7 @@ struct JamGrooveLibrary {
                     rimHits: [rim(7, 0.44, .hard)]
                 ),
                 MusicPercussionPattern(
+                    kit: drumKit,
                     kickHits: [hit(0, 0.99), hit(2, 0.74), hit(5, 0.66), hit(8, 0.94), hit(10, 0.72), hit(13, 0.68)],
                     snareHits: [hit(4, 0.90), hit(7, 0.58), hit(12, 0.94)],
                     closedHatHits: [
@@ -163,11 +183,4 @@ struct JamGrooveLibrary {
     private func rim(_ step: Int, _ velocity: Float, _ style: MusicRimStyle) -> MusicRimHit {
         MusicRimHit(step: step, velocity: velocity, style: style)
     }
-}
-
-private enum JamGrooveStyle {
-    case airy
-    case bright
-    case deep
-    case intense
 }

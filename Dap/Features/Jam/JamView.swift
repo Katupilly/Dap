@@ -16,9 +16,14 @@ struct JamView: View {
 
     @State private var selectedSoundIDs: [UUID] = []
     @State private var vibePosition = CGPoint(x: 0.5, y: 0.5)
+    @State private var drumKitSelection: MusicDrumKitSelection = .auto
     @State private var isPhotoSelectorPresented = false
     @State private var isPlaying = false
     @State private var hasPendingArrangementChanges = false
+    @State private var isDrumKitChangePending = false
+    @State private var isPreparedDrumKitChangePending = false
+    @State private var isDrumKitPendingIndicatorPulsing = false
+    @State private var drumKitConfirmationPulseTrigger = 0
     @State private var currentStep: Int?
     @State private var activeSoundIDs: Set<UUID> = []
     @State private var activeArrangement: JamArrangement?
@@ -93,6 +98,10 @@ struct JamView: View {
         return transportStatusTitle
     }
 
+    private var drumKitControlTitle: String {
+        "Drum Kit · \(drumKitSelection.displayName)"
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -104,6 +113,7 @@ struct JamView: View {
                     } else {
                         selectedPhotoPreview
                         transportStrip
+                        drumKitControl
 
                         VibeControl(position: $vibePosition) {
                             if isPlaying {
@@ -131,7 +141,13 @@ struct JamView: View {
                     onConfirmSelection: confirmPhotoSelection
                 )
             }
+            .onAppear {
+                library.setTransientLoopUpdatePreparedHandler {
+                    handlePreparedDrumKitLoopUpdate()
+                }
+            }
             .onDisappear {
+                library.clearTransientLoopUpdatePreparedHandler()
                 clearTransportAndPlayback()
             }
             .onChange(of: isActive) { _, isActive in
@@ -226,6 +242,82 @@ struct JamView: View {
         .accessibilityLabel(transportStatusAccessibilityLabel)
     }
 
+    private var drumKitControl: some View {
+        Menu {
+            ForEach(MusicDrumKitSelection.allCases, id: \.self) { selection in
+                Button {
+                    selectDrumKit(selection)
+                } label: {
+                    drumKitMenuItemLabel(for: selection)
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(drumKitControlTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+
+                if isDrumKitChangePending {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .frame(width: 5, height: 5)
+                            .opacity(reduceMotion ? 0.7 : (isDrumKitPendingIndicatorPulsing ? 0.9 : 0.45))
+                            .accessibilityHidden(true)
+
+                        Text("Next bar")
+                            .font(.caption2.weight(.medium))
+                    }
+                    .foregroundStyle(.white.opacity(0.65))
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .opacity.combined(with: .scale(scale: 0.94))
+                    )
+                }
+
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .opacity(0.72)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
+            .foregroundStyle(.white)
+            .glassEffect(
+                .regular
+                    .tint(
+                        Color(
+                            red: 26.0 / 255.0,
+                            green: 26.0 / 255.0,
+                            blue: 30.0 / 255.0
+                        )
+                        .opacity(0.78)
+                    )
+                    .interactive(true),
+                in: Capsule()
+            )
+            .contentShape(.interaction, Capsule())
+            .phaseAnimator([false, true, false], trigger: drumKitConfirmationPulseTrigger) { content, phase in
+                content
+                    .scaleEffect(reduceMotion ? 1 : (phase ? 1.025 : 1))
+                    .opacity(reduceMotion && phase ? 0.92 : 1)
+            } animation: { phase in
+                phase ? .easeInOut(duration: 0.09) : .easeInOut(duration: 0.09)
+            }
+            .animation(.easeInOut(duration: 0.18), value: isDrumKitChangePending)
+            .animation(
+                reduceMotion
+                    ? nil
+                    : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                value: isDrumKitPendingIndicatorPulsing
+            )
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("Drum Kit, \(drumKitSelection.displayName)")
+        .accessibilityValue(isDrumKitChangePending ? "Changes next bar" : "Active")
+    }
+
     private var playbackButton: some View {
         Button {
             switch playbackAction {
@@ -265,6 +357,19 @@ struct JamView: View {
         }
     }
 
+    private func selectDrumKit(_ selection: MusicDrumKitSelection) {
+        guard selection != drumKitSelection else { return }
+        drumKitSelection = selection
+
+        guard isPlaying else {
+            clearDrumKitPendingFeedback()
+            return
+        }
+
+        beginDrumKitPendingFeedback()
+        sendCurrentArrangementToPlayer()
+    }
+
     private func startPlaybackIfPossible() {
         cancelTransportTask()
 
@@ -281,11 +386,13 @@ struct JamView: View {
         updateStepState(step: 0, arrangement: arrangement)
         isPlaying = true
         hasPendingArrangementChanges = false
+        clearDrumKitPendingFeedback()
         startTransportLoop()
     }
 
     private func clearTransportAndPlayback(clearPending: Bool = true) {
         cancelTransportTask()
+        clearDrumKitPendingFeedback()
         library.stopTransientPlayback()
         activeArrangement = nil
         currentStep = nil
@@ -319,6 +426,7 @@ struct JamView: View {
                 if step == 0 {
                     if hasPendingArrangementChanges {
                         guard let nextArrangement = buildArrangement() else {
+                            clearDrumKitPendingFeedback()
                             clearTransportAndPlayback()
                             break
                         }
@@ -332,8 +440,10 @@ struct JamView: View {
                         hasPendingArrangementChanges = false
                         appliedArrangementVersion += 1
                         updateStepState(step: 0, arrangement: nextArrangement)
+                        finishDrumKitPendingFeedbackIfNeeded()
                     } else if let activeArrangement {
                         updateStepState(step: 0, arrangement: activeArrangement)
+                        finishDrumKitPendingFeedbackIfNeeded()
                     } else {
                         clearTransportAndPlayback()
                         break
@@ -369,10 +479,93 @@ struct JamView: View {
     }
 
     private func buildArrangement() -> JamArrangement? {
-        arrangementBuilder.build(
+        let region = JamGrooveLibrary.region(for: vibePosition)
+        let drumKit = resolvedDrumKit(selection: drumKitSelection, region: region)
+
+        return arrangementBuilder.build(
             sounds: playableSelectedSounds,
-            vibePosition: vibePosition
+            vibePosition: vibePosition,
+            drumKit: drumKit
         )
+    }
+
+    private func sendCurrentArrangementToPlayer() {
+        guard let arrangement = buildArrangement() else {
+            clearDrumKitPendingFeedback()
+            clearTransportAndPlayback()
+            return
+        }
+
+        hasPendingArrangementChanges = false
+        isPreparedDrumKitChangePending = false
+        activeArrangement = arrangement
+
+        library.playTransientSequence(
+            arrangement.sequence,
+            percussion: arrangement.percussion,
+            loops: true
+        )
+    }
+
+    private func beginDrumKitPendingFeedback() {
+        isPreparedDrumKitChangePending = false
+        isDrumKitChangePending = true
+        if !reduceMotion {
+            isDrumKitPendingIndicatorPulsing = true
+        }
+    }
+
+    private func handlePreparedDrumKitLoopUpdate() {
+        guard isDrumKitChangePending else { return }
+        isPreparedDrumKitChangePending = true
+    }
+
+    private func finishDrumKitPendingFeedbackIfNeeded() {
+        guard isDrumKitChangePending, isPreparedDrumKitChangePending else { return }
+        clearDrumKitPendingFeedback()
+        drumKitConfirmationPulseTrigger += 1
+    }
+
+    private func clearDrumKitPendingFeedback() {
+        isDrumKitChangePending = false
+        isPreparedDrumKitChangePending = false
+        isDrumKitPendingIndicatorPulsing = false
+    }
+
+    private func resolvedDrumKit(
+        selection: MusicDrumKitSelection,
+        region: JamRegion
+    ) -> MusicDrumKit {
+        switch selection {
+        case .auto:
+            switch region {
+            case .airy:
+                .soft
+            case .bright:
+                .club
+            case .deep:
+                .breakbeat
+            case .intense:
+                .metal
+            }
+        case .soft:
+            .soft
+        case .club:
+            .club
+        case .breakbeat:
+            .breakbeat
+        case .metal:
+            .metal
+        }
+    }
+
+    @ViewBuilder
+    private func drumKitMenuItemLabel(for selection: MusicDrumKitSelection) -> some View {
+        if selection == drumKitSelection {
+            Label(selection.displayName, systemImage: "checkmark")
+        } else {
+            Text(selection.displayName)
+        }
     }
 }
 
