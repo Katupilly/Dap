@@ -154,6 +154,16 @@ struct JamView: View {
                 guard !isActive else { return }
                 clearTransportAndPlayback()
             }
+            .onChange(of: library.items.map(\.id)) { _, itemIDs in
+                let validIDs = Set(itemIDs)
+                let filtered = selectedSoundIDs.filter(validIDs.contains)
+                if filtered != selectedSoundIDs {
+                    if isPlaying {
+                        hasPendingArrangementChanges = true
+                    }
+                    selectedSoundIDs = filtered
+                }
+            }
             .onChange(of: selectedSoundIDs) { _, newValue in
                 let validIDs = newValue.filter { id in
                     library.items.contains(where: { $0.id == id })
