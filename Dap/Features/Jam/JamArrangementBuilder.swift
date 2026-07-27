@@ -260,7 +260,11 @@ struct JamArrangementBuilder {
             transformedSourceNotes: transformedSourceNotes
         )
         let template = adjustedMelodyTemplate(
-            melodyTemplate(for: region, seed: seed),
+            photoConditionedMelodyTemplate(
+                for: region,
+                seed: seed,
+                transformedSourceNotes: transformedSourceNotes
+            ),
             region: region,
             density: density
         )
@@ -760,9 +764,89 @@ struct JamArrangementBuilder {
         }
     }
 
-    private func melodyTemplate(for region: JamRegion, seed: UInt64) -> [Int] {
+    /// Aggregates source-note attack positions into a 0..7 weight map.
+    /// Both halves of the 16-step grid fold onto the same 8 positions,
+    /// so a photo whose activity sits in steps 8..15 still influences selection.
+    private func photoRhythmSignature(
+        from sourceNotes: [MelodySourceNote]
+    ) -> [Int: Double] {
+        var weights: [Int: Double] = [:]
+        for note in sourceNotes where (0..<16).contains(note.step) {
+            weights[note.step % 8, default: 0] += 1
+        }
+        return weights
+    }
+
+    /// Selects one of the region's hard-coded rhythm templates by scoring how
+    /// well it covers the photo's rhythmic activity. Falls back to the
+    /// legacy seed-based index when no signature is available.
+    private func photoConditionedMelodyTemplate(
+        for region: JamRegion,
+        seed: UInt64,
+        transformedSourceNotes: [MelodySourceNote]
+    ) -> [Int] {
         let templates = melodyTemplates(for: region)
-        return templates[deterministicIndex(seed: seed >> 1, upperBound: templates.count)]
+        let legacyIndex = deterministicIndex(seed: seed >> 1, upperBound: templates.count)
+
+        let signature = photoRhythmSignature(from: transformedSourceNotes)
+        let totalWeight = signature.values.reduce(0, +)
+        guard totalWeight > 0 else {
+            return templates[legacyIndex]
+        }
+
+        let scored = templates.enumerated().map { (index, template) -> (index: Int, score: Double) in
+            (index, templateScore(template: template, signature: signature, totalWeight: totalWeight))
+        }
+        let bestScore = scored.map(\.score).max() ?? 0
+        let tied = scored.filter { $0.score == bestScore }
+        if tied.count == 1 {
+            return templates[tied[0].index]
+        }
+        if let legacyAmongTied = tied.first(where: { $0.index == legacyIndex }) {
+            return templates[legacyAmongTied.index]
+        }
+        let tieIndex = deterministicIndex(
+            seed: seed >> 3,
+            upperBound: tied.count
+        )
+        return templates[tied[tieIndex].index]
+    }
+
+    private func templateScore(
+        template: [Int],
+        signature: [Int: Double],
+        totalWeight: Double
+    ) -> Double {
+        var coveredWeight: Double = 0
+        var exactMatches = 0
+        var proximityMatches = 0
+        for step in template {
+            if let weight = signature[step] {
+                coveredWeight += weight
+                exactMatches += 1
+            } else if hasAdjacentPhotoStep(step, in: signature) {
+                proximityMatches += 1
+            }
+        }
+        let coverage = coveredWeight / totalWeight
+        let precision = Double(exactMatches) / Double(template.count)
+        let proximity = Double(proximityMatches) / Double(template.count)
+        return coverage * 0.60 + precision * 0.30 + proximity * 0.10
+    }
+
+    /// True when at least one of the steps at circular distance 1 from
+    /// `step` (in an 8-step loop) has a non-zero photo weight.
+    private func hasAdjacentPhotoStep(
+        _ step: Int,
+        in signature: [Int: Double]
+    ) -> Bool {
+        for offset in [-1, 1] {
+            var neighbor = step + offset
+            if neighbor < 0 { neighbor = 7 }
+            if neighbor > 7 { neighbor = 0 }
+            if signature[neighbor] != nil { return true }
+        }
+        return false
     }
 
     private func adjustedMelodyTemplate(
