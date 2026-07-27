@@ -19,11 +19,12 @@ struct JamArrangementBuilder {
         }
 
         switch orderedSounds.count {
-        case 3:
+        case 3...5:
+            let harmonyIndex = (orderedSounds.count - 1) / 2
             return [
                 AssignedSound(sound: orderedSounds[0], role: .bass),
-                AssignedSound(sound: orderedSounds[1], role: .harmony),
-                AssignedSound(sound: orderedSounds[2], role: .melody),
+                AssignedSound(sound: orderedSounds[harmonyIndex], role: .harmony),
+                AssignedSound(sound: orderedSounds[orderedSounds.count - 1], role: .melody),
             ]
         case 2:
             return [

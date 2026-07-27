@@ -14,7 +14,6 @@ struct JamView: View {
 
     private let arrangementBuilder = JamArrangementBuilder(bpm: Int(jamBPM))
 
-    @State private var selectedPhotoIDs: [UUID] = []
     @State private var slotAssignments = JamSlotAssignments()
     @State private var vibePosition = CGPoint(x: 0.5, y: 0.5)
     @State private var drumKitSelection: MusicDrumKitSelection = .auto
@@ -32,7 +31,7 @@ struct JamView: View {
     @State private var appliedArrangementVersion = 0
 
     private var selectedSounds: [PhotoSound] {
-        selectedPhotoIDs.compactMap { id in
+        slotAssignments.allPhotoIDs.compactMap { id in
             library.items.first(where: { $0.id == id })
         }
     }
@@ -71,7 +70,7 @@ struct JamView: View {
     }
 
     private var selectedPhotoCountSummary: String {
-        switch selectedPhotoIDs.count {
+        switch slotAssignments.allPhotoIDs.count {
         case 1:
             return "1 photo"
         case 2:
@@ -84,7 +83,7 @@ struct JamView: View {
     }
 
     private var presentedSelectedSounds: [PresentedJamSound] {
-        let selectionIDSet = Set(selectedPhotoIDs)
+        let selectionIDSet = Set(slotAssignments.allPhotoIDs)
         let orderedAssigned: [(UUID?, JamRole)] = [
             (slotAssignments.bass, .bass),
             (slotAssignments.harmony, .harmony),
@@ -162,7 +161,7 @@ struct JamView: View {
                 JamPhotoSelectorSheet(
                     sounds: library.items,
                     coverDataByID: library.coverDataByID,
-                    selectedPhotoIDs: selectedPhotoIDs,
+                    selectedPhotoIDs: slotAssignments.allPhotoIDs,
                     isPresented: $isPhotoSelectorPresented,
                     onConfirmSelection: confirmPhotoSelection
                 )
@@ -182,23 +181,24 @@ struct JamView: View {
             }
             .onChange(of: library.items.map(\.id)) { _, itemIDs in
                 let validIDs = Set(itemIDs)
-                let cleanedSelection = selectedPhotoIDs.filter(validIDs.contains)
-                let cleanedAssignments = slotAssignments.pruningInvalidIDs(validIDs: validIDs)
+                let playableIDs = Set(
+                    library.items.compactMap { sound in
+                        sound.sequence.notes.isEmpty ? nil : sound.id
+                    }
+                )
+                let previousAssignments = slotAssignments
+                let cleanedAssignments = slotAssignments.pruningInvalidIDs(
+                    validIDs: validIDs,
+                    playableIDs: playableIDs
+                )
 
-                let selectionChanged = cleanedSelection != selectedPhotoIDs
-                let assignmentsChanged = cleanedAssignments != slotAssignments
-                guard selectionChanged || assignmentsChanged else { return }
+                guard cleanedAssignments != previousAssignments else { return }
 
-                if isPlaying {
+                if isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
                     hasPendingArrangementChanges = true
                 }
 
-                if selectionChanged {
-                    selectedPhotoIDs = cleanedSelection
-                }
-                if assignmentsChanged {
-                    slotAssignments = cleanedAssignments
-                }
+                slotAssignments = cleanedAssignments
             }
             .onChange(of: library.isTransientPlaybackActive) { _, isActive in
                 guard !isActive, isPlaying else { return }
@@ -393,27 +393,35 @@ struct JamView: View {
         // Same selection (any order) is a no-op so a future manual slot
         // swap is not undone by re-running `assignRoles` when the user
         // simply re-confirms the same photos in the selector.
-        guard Set(confirmedIDs) != Set(selectedPhotoIDs) else { return }
-
-        selectedPhotoIDs = confirmedIDs
+        guard Set(confirmedIDs) != Set(slotAssignments.allPhotoIDs) else { return }
 
         let resolvedSounds = confirmedIDs.compactMap { id in
             library.items.first(where: { $0.id == id })
         }
         let playableSounds = resolvedSounds.filter { !$0.sequence.notes.isEmpty }
+        let playableIDs = Set(playableSounds.map(\.id))
+        let confirmedIDSet = Set(confirmedIDs)
+        let survivingActiveIDs = slotAssignments.activePhotoIDs.filter { confirmedIDSet.contains($0) }
 
         let newAssignments: JamSlotAssignments
-        switch playableSounds.count {
-        case 0:
-            newAssignments = JamSlotAssignments()
-        default:
+        if slotAssignments.allPhotoIDs.isEmpty || survivingActiveIDs.isEmpty {
             let initialAssigned = arrangementBuilder.assignRoles(to: playableSounds)
-            newAssignments = JamSlotAssignments(assignedSounds: initialAssigned)
+            newAssignments = JamSlotAssignments(
+                assignedSounds: initialAssigned,
+                allSelectedIDs: confirmedIDs
+            )
+        } else {
+            newAssignments = slotAssignments.reconcilingSelection(
+                selectedIDs: confirmedIDs,
+                playableIDs: playableIDs
+            )
         }
 
-        guard newAssignments != slotAssignments else { return }
+        let previousAssignments = slotAssignments
+        guard newAssignments != previousAssignments else { return }
+
         slotAssignments = newAssignments
-        if isPlaying {
+        if isPlaying && newAssignments.hasDifferentActiveSlots(from: previousAssignments) {
             hasPendingArrangementChanges = true
         }
     }
