@@ -191,9 +191,9 @@ actor JamCoverRenderer {
         if let backgroundGradient = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
             colors: [
-                background.withBrightness(multiplier: 0.90).cgColor,
-                accentDark.withBrightness(multiplier: 1.03).cgColor,
-                paper.mixed(with: accentDark, ratio: 0.84).cgColor
+                background.withBrightness(multiplier: 0.92).cgColor,
+                accentDark.withBrightness(multiplier: 1.08).cgColor,
+                paper.mixed(with: accentDark, ratio: 0.78).cgColor
             ] as CFArray,
             locations: [0, 0.58, 1]
         ) {
@@ -207,20 +207,29 @@ actor JamCoverRenderer {
 
         var generator = SeededGenerator(seed: stableSeed(for: descriptor))
         let blobColors = blobFillColors(prioritizedRoles: prioritizedRoles, paper: paper)
-        let baseCenters = [
-            CGPoint(x: 0.66, y: 0.36),
-            CGPoint(x: 0.28, y: 0.70),
-            CGPoint(x: 0.82, y: 0.76),
+        let baseCenters = blobCenters(generator: &generator)
+
+        let radiusLayouts: [[ClosedRange<CGFloat>]] = [
+            [0.58...0.74, 0.42...0.56, 0.28...0.38],
+            [0.38...0.52, 0.60...0.76, 0.30...0.42],
+            [0.34...0.46, 0.40...0.54, 0.58...0.72],
+        ]
+
+        let radiusLayoutIndex = Int(
+            generator.nextCGFloat(in: 0...0.9999) * CGFloat(radiusLayouts.count)
+        )
+        let selectedRadiusRanges = radiusLayouts[
+            min(radiusLayoutIndex, radiusLayouts.count - 1)
         ]
 
         for (index, color) in blobColors.enumerated() {
-            let center = jitteredCenter(baseCenters[index % baseCenters.count], generator: &generator)
-            let radiusRange: ClosedRange<CGFloat>
-            switch index {
-            case 0: radiusRange = 0.58...0.74
-            case 1: radiusRange = 0.42...0.56
-            default: radiusRange = 0.28...0.38
-            }
+            let center = jitteredCenter(
+                baseCenters[index % baseCenters.count],
+                generator: &generator
+            )
+            let radiusRange = selectedRadiusRanges[
+                index % selectedRadiusRanges.count
+            ]
             let radius = generator.nextCGFloat(in: radiusRange) * CGFloat(min(pixelWidth, pixelHeight))
             drawBlob(
                 color: color,
@@ -282,9 +291,9 @@ actor JamCoverRenderer {
     private static func blobFillColors(prioritizedRoles: [RoleColors], paper: RGBColor) -> [RGBColor] {
         let background = coverBackground(from: prioritizedRoles)
         let softenedBaseColors = prioritizedRoles.map {
-            softenedColor($0.base, background: background, paper: paper, saturationMix: 0.34, backgroundMix: 0.20)
+            softenedColor($0.base, background: background, paper: paper, saturationMix: 0.18, backgroundMix: 0.11)
         }
-        let accent = blendedColor(softenedBaseColors, fallback: paper).mixed(with: paper, ratio: 0.26)
+        let accent = blendedColor(softenedBaseColors, fallback: paper).mixed(with: paper, ratio: 0.18)
 
         var colors = Array(softenedBaseColors.prefix(3))
         while colors.count < 3 {
@@ -302,8 +311,8 @@ actor JamCoverRenderer {
         guard let gradient = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
             colors: [
-                color.withAlpha(0.62),
-                color.withAlpha(0.26),
+                color.withAlpha(0.68),
+                color.withAlpha(0.30),
                 color.withAlpha(0.0)
             ] as CFArray,
             locations: [0, 0.58, 1]
@@ -339,8 +348,8 @@ actor JamCoverRenderer {
         guard let gradient = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
             colors: [
-                color.withAlpha(0.18),
-                color.withAlpha(0.07),
+                color.withAlpha(0.20),
+                color.withAlpha(0.09),
                 color.withAlpha(0.0)
             ] as CFArray,
             locations: [0, 0.42, 1]
@@ -382,7 +391,7 @@ actor JamCoverRenderer {
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
             colors: [
                 color.withAlpha(0.0),
-                color.withAlpha(0.11),
+                color.withAlpha(0.13),
                 color.withAlpha(0.0)
             ] as CFArray,
             locations: [0, 0.5, 1]
@@ -396,13 +405,55 @@ actor JamCoverRenderer {
         context.restoreGState()
     }
 
+    private static func blobCenters(
+        generator: inout SeededGenerator
+    ) -> [CGPoint] {
+        let layouts: [[CGPoint]] = [
+            [
+                CGPoint(x: 0.72, y: 0.24),
+                CGPoint(x: 0.30, y: 0.62),
+                CGPoint(x: 0.78, y: 0.82),
+            ],
+            [
+                CGPoint(x: 0.26, y: 0.28),
+                CGPoint(x: 0.72, y: 0.58),
+                CGPoint(x: 0.34, y: 0.84),
+            ],
+            [
+                CGPoint(x: 0.48, y: 0.42),
+                CGPoint(x: 0.22, y: 0.76),
+                CGPoint(x: 0.82, y: 0.68),
+            ],
+            [
+                CGPoint(x: 0.30, y: 0.22),
+                CGPoint(x: 0.76, y: 0.32),
+                CGPoint(x: 0.54, y: 0.76),
+            ],
+            [
+                CGPoint(x: 0.48, y: 0.78),
+                CGPoint(x: 0.18, y: 0.44),
+                CGPoint(x: 0.84, y: 0.36),
+            ],
+            [
+                CGPoint(x: 0.84, y: 0.20),
+                CGPoint(x: 0.22, y: 0.46),
+                CGPoint(x: 0.64, y: 0.88),
+            ],
+        ]
+
+        let layoutIndex = Int(
+            generator.nextCGFloat(in: 0...0.9999) * CGFloat(layouts.count)
+        )
+        return layouts[min(layoutIndex, layouts.count - 1)]
+    }
+
     private static func jitteredCenter(
         _ base: CGPoint,
         generator: inout SeededGenerator
     ) -> CGPoint {
         CGPoint(
-            x: min(max(base.x + generator.nextCGFloat(in: -0.05...0.05), 0.12), 0.88),
-            y: min(max(base.y + generator.nextCGFloat(in: -0.05...0.05), 0.12), 0.88)
+            x: min(max(base.x + generator.nextCGFloat(in: -0.12...0.12), 0.08), 0.92),
+            y: min(max(base.y + generator.nextCGFloat(in: -0.12...0.12), 0.08), 0.92)
         )
     }
 
@@ -431,11 +482,11 @@ actor JamCoverRenderer {
                 let blue = Double(pixels[pixelIndex + 2]) / 255
                 let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
-                let halftoneWeight = max(0, min(1, (0.72 - luminance) / 0.42)) * 0.030
+                let halftoneWeight = max(0, min(1, (0.78 - luminance) / 0.48)) * 0.3
                 let matrixIndex = ((y / 2) % 4) * 4 + ((x / 2) % 4)
                 let threshold = halftoneMatrix[matrixIndex]
                 let halftoneDelta = (threshold < luminance ? -1 : 1) * halftoneWeight
-                let grain = hashedUnit(seed: seed, x: x, y: y, salt: 0x9E37) * 0.007
+                let grain = hashedUnit(seed: seed, x: x, y: y, salt: 0x9E37) * 0.2
                 let adjustment = halftoneDelta + grain
 
                 pixels[pixelIndex] = adjustedByte(pixels[pixelIndex], by: adjustment, alpha: alpha)
@@ -460,39 +511,42 @@ actor JamCoverRenderer {
     }
 
     private static func coverBackground(from roles: [RoleColors]) -> RGBColor {
-        let fallback = RGBColor(red: 34, green: 38, blue: 49)
+        let fallback = RGBColor(red: 30, green: 35, blue: 52)
+        let bassShadow = roles.first?.shadow ?? fallback
         let shadowBlend = blendedColor(roles.map(\.shadow), fallback: fallback)
         let darkBlend = blendedColor(roles.map(\.dark), fallback: fallback)
-        let mixed = shadowBlend.mixed(with: darkBlend, ratio: 0.34)
+        let mixed = bassShadow.mixed(with: shadowBlend, ratio: 0.34).mixed(with: darkBlend, ratio: 0.24)
         return softenedColor(
             mixed,
             background: fallback,
             paper: RGBColor(red: 196, green: 203, blue: 218),
-            saturationMix: 0.48,
-            backgroundMix: 0.24
-        ).withBrightness(multiplier: 0.76)
+            saturationMix: 0.24,
+            backgroundMix: 0.14
+        ).withBrightness(multiplier: 0.80)
     }
 
     private static func coverAccentDark(from roles: [RoleColors], background: RGBColor) -> RGBColor {
-        let darkBlend = blendedColor(roles.map(\.dark), fallback: background.withBrightness(multiplier: 1.14))
+        let bassDark = roles.first?.dark ?? background.withBrightness(multiplier: 1.14)
+        let darkBlend = bassDark.mixed(with: blendedColor(roles.map(\.dark), fallback: background.withBrightness(multiplier: 1.14)), ratio: 0.38)
         return softenedColor(
             darkBlend,
             background: background,
             paper: RGBColor(red: 198, green: 204, blue: 220),
-            saturationMix: 0.38,
-            backgroundMix: 0.18
-        ).withBrightness(multiplier: 0.94)
+            saturationMix: 0.22,
+            backgroundMix: 0.14
+        ).withBrightness(multiplier: 0.98)
     }
 
     private static func coverHighlight(from roles: [RoleColors], background: RGBColor) -> RGBColor {
         let coolPaper = RGBColor(red: 204, green: 210, blue: 224)
-        let highlightBlend = blendedColor(roles.map(\.highlight), fallback: coolPaper)
+        let bassHighlight = roles.first?.highlight ?? coolPaper
+        let highlightBlend = bassHighlight.mixed(with: blendedColor(roles.map(\.highlight), fallback: coolPaper), ratio: 0.34)
         return softenedColor(
-            highlightBlend.mixed(with: coolPaper, ratio: 0.42),
+            highlightBlend.mixed(with: coolPaper, ratio: 0.28),
             background: background,
             paper: coolPaper,
-            saturationMix: 0.52,
-            backgroundMix: 0.10
+            saturationMix: 0.28,
+            backgroundMix: 0.06
         )
     }
 
@@ -506,7 +560,7 @@ actor JamCoverRenderer {
         let neutral = grayscale(color)
         let desaturated = color.mixed(with: neutral, ratio: saturationMix)
         let balanced = desaturated.mixed(with: background, ratio: backgroundMix)
-        return balanced.mixed(with: paper, ratio: 0.08)
+        return balanced.mixed(with: paper, ratio: 0.05)
     }
 
     private static func grayscale(_ color: RGBColor) -> RGBColor {

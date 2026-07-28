@@ -10,9 +10,19 @@ struct AppRootView: View {
     @State private var isCapturePresented = false
     @State private var galleryPath: [UUID] = []
     @State private var library = PhotoLibraryViewModel()
+    @State private var isJamSessionPresented = false
 
     private var isGalleryInspectorPresented: Bool {
         !galleryPath.isEmpty
+    }
+
+    private var showsSectionSwitcher: Bool {
+        switch section {
+        case .gallery:
+            !isGalleryInspectorPresented
+        case .jam:
+            !isJamSessionPresented
+        }
     }
 
     var body: some View {
@@ -23,7 +33,13 @@ struct AppRootView: View {
                     .allowsHitTesting(section == .gallery)
                     .accessibilityHidden(section != .gallery)
 
-                JamLibraryView(library: library, isActive: section == .jam)
+                JamLibraryView(
+                    library: library,
+                    isActive: section == .jam,
+                    onSessionPresentationChange: { isPresented in
+                        isJamSessionPresented = isPresented
+                    }
+                )
                     .opacity(section == .jam ? 1 : 0)
                     .allowsHitTesting(section == .jam)
                     .accessibilityHidden(section != .jam)
@@ -92,7 +108,7 @@ struct AppRootView: View {
             }
         }
         .safeAreaInset(edge: .top) {
-            if !isGalleryInspectorPresented {
+            if showsSectionSwitcher {
                 SectionSwitcher(selection: $section)
                     .padding(.top, 8)
                     .padding(.bottom, 10)
