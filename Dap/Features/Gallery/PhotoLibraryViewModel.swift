@@ -272,9 +272,15 @@ final class PhotoLibraryViewModel {
         loops: Bool = false
     ) {
         if loops {
+            // Route through the dedicated Jam player + effect chain so the
+            // global Effect Rack applies only to the Jam playback path.
             playingID = nil
             isTransientPlaybackActive = true
-            player.play(sequence: sequence, percussion: percussion, loops: true)
+            player.playJam(sequence: sequence, percussion: percussion)
+            // Re-apply the current Jam effect settings to the freshly-started
+            // playback path (Delay time + LFO rate depend on the new BPM).
+            let bpm = Double(sequence.harmony.bpm)
+            player.setJamEffects(currentJamEffects, bpm: bpm)
             return
         }
 
@@ -285,6 +291,32 @@ final class PhotoLibraryViewModel {
 
     func stopTransientPlayback() {
         stopPlayback()
+        player.stopJam()
+    }
+
+    /// Forwarding to the dedicated Jam effect chain. The Jam effect settings
+    /// live in `JamView` and are routed here so the ViewModel remains the
+    /// only owner of the MusicPlayer instance.
+    private var currentJamEffects: JamEffectSettings = .default
+
+    func setJamEffects(_ settings: JamEffectSettings, bpm: Double) {
+        currentJamEffects = settings
+        // Apply to the running Jam playback, or simply store for the next start.
+        if isTransientPlaybackActive {
+            player.setJamEffects(settings, bpm: bpm)
+        }
+    }
+
+    /// Returns the current Jam effect settings so the UI can rebuild the rack
+    /// with the persisted values after a re-attach.
+    var currentJamEffectSettings: JamEffectSettings { currentJamEffects }
+
+    /// Schedules a Jam loop update at the next loop boundary.
+    func updateTransientLoop(sequence: MusicSequence, percussion: MusicPercussionPattern?) {
+        player.updateJamLoop(sequence: sequence, percussion: percussion)
+        // Re-apply effect settings using the new loop's BPM.
+        let bpm = Double(sequence.harmony.bpm)
+        player.setJamEffects(currentJamEffects, bpm: bpm)
     }
 
     func setTransientLoopUpdatePreparedHandler(_ handler: @escaping () -> Void) {

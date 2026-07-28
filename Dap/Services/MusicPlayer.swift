@@ -69,6 +69,17 @@ final class MusicPlayer {
     private let playerNode = AVAudioPlayerNode()
     private let format     = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
 
+    // MARK: Jam effect chain (dedicated to transient Jam playback)
+
+    private let jamPlayerNode      = AVAudioPlayerNode()
+    private let jamReverbUnit      = AVAudioUnitReverb()
+    private let jamDelayUnit       = AVAudioUnitDelay()
+    private let jamLFOMixer        = AVAudioMixerNode()
+    private var currentJamSettings = JamEffectSettings.default
+    private var currentJamBPM:     Double = 96.0
+    private var jamLFOPhase:       Double = 0
+    private var jamLFOTask:        Task<Void, Never>?
+
     // MARK: Playback state
 
     private var renderTask:        Task<Void, Never>?
@@ -88,6 +99,26 @@ final class MusicPlayer {
     init() {
         engine.attach(playerNode)
         engine.connect(playerNode, to: engine.mainMixerNode, format: format)
+
+        // Jam effect chain: player -> LFO mixer -> delay -> reverb -> main mixer
+        engine.attach(jamPlayerNode)
+        engine.attach(jamLFOMixer)
+        engine.attach(jamDelayUnit)
+        engine.attach(jamReverbUnit)
+
+        jamReverbUnit.loadFactoryPreset(.mediumHall)
+        jamReverbUnit.wetDryMix = 0
+        jamDelayUnit.feedback   = 35
+        jamDelayUnit.lowPassCutoff = 12_000
+        jamDelayUnit.wetDryMix  = 0
+        jamDelayUnit.delayTime  = 0.30
+        jamLFOMixer.outputVolume = 1.0
+
+        engine.connect(jamPlayerNode, to: jamLFOMixer, format: format)
+        engine.connect(jamLFOMixer,  to: jamDelayUnit, format: format)
+        engine.connect(jamDelayUnit, to: jamReverbUnit, format: format)
+        engine.connect(jamReverbUnit, to: engine.mainMixerNode, format: format)
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleAudioInterruption),
@@ -97,6 +128,7 @@ final class MusicPlayer {
     }
 
     deinit {
+        jamLFOTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -161,6 +193,172 @@ final class MusicPlayer {
         }
     }
 
+    // MARK: - Jam playback (dedicated player + effect chain)
+
+    /// Starts a new Jam playback on the dedicated Jam player + effect chain.
+    /// Loop updates are scheduled at the next loop boundary using the same
+    /// generation token strategy as the regular play path.
+    func playJam(sequence: MusicSequence, percussion: MusicPercussionPattern? = nil) {
+        stopJam()
+
+        guard startEngineIfNeeded() else { return }
+
+        let generation = playbackGeneration
+        let settings = currentJamSettings
+        let bpm = Double(sequence.harmony.bpm)
+        currentJamBPM = bpm
+        applyJamSettings(settings, bpm: bpm)
+
+        renderTask = Task { [weak self] in
+            let samples = await Task.detached(priority: .userInitiated) {
+                MusicPlayer.renderSequence(sequence, percussion: percussion, sampleRate: 44_100, loops: true)
+            }.value
+
+            guard let self, !Task.isCancelled,
+                  self.playbackGeneration == generation else { return }
+
+            guard let buffer = self.makeBuffer(samples: samples) else { return }
+
+            self.jamPlayerNode.scheduleBuffer(
+                buffer,
+                at: nil,
+                options: .loops,
+                completionHandler: nil
+            )
+            self.jamPlayerNode.play()
+            self.isLooping = true
+        }
+    }
+
+    /// Stops Jam playback, cancels the LFO task, and restores the LFO gain to 1.
+    func stopJam() {
+        jamLFOTask?.cancel()
+        jamLFOTask = nil
+        renderTask?.cancel()
+        renderTask = nil
+        playbackGeneration &+= 1
+        isLooping = false
+        if jamPlayerNode.isPlaying { jamPlayerNode.stop() }
+        jamLFOMixer.outputVolume = 1.0
+    }
+
+    /// Schedules a Jam loop update at the next loop boundary using
+    /// `.interruptsAtLoop`. Reapplies effect settings on the new BPM.
+    func updateJamLoop(sequence: MusicSequence, percussion: MusicPercussionPattern?) {
+        pendingLoopTask?.cancel()
+        renderTask?.cancel()
+        renderTask = nil
+        playbackGeneration &+= 1
+        let generation = playbackGeneration
+
+        pendingLoopTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(135))
+
+            guard let self,
+                  !Task.isCancelled,
+                  self.playbackGeneration == generation,
+                  self.isLooping,
+                  self.jamPlayerNode.isPlaying else { return }
+
+            guard self.startEngineIfNeeded() else { return }
+
+            let samples = await Task.detached(priority: .userInitiated) {
+                MusicPlayer.renderSequence(sequence, percussion: percussion, sampleRate: 44_100, loops: true)
+            }.value
+
+            guard !Task.isCancelled,
+                  self.playbackGeneration == generation,
+                  self.isLooping,
+                  self.jamPlayerNode.isPlaying else { return }
+
+            guard let buffer = self.makeBuffer(samples: samples) else { return }
+
+            // Update BPM from the incoming arrangement and reapply settings
+            // (Delay time and LFO rate depend on the BPM of the new loop).
+            let bpm = Double(sequence.harmony.bpm)
+            self.currentJamBPM = bpm
+            self.applyJamSettings(self.currentJamSettings, bpm: bpm)
+
+            self.jamPlayerNode.scheduleBuffer(
+                buffer,
+                at: nil,
+                options: [.loops, .interruptsAtLoop],
+                completionHandler: nil
+            )
+            self.onLoopUpdatePrepared?()
+            self.pendingLoopTask = nil
+        }
+    }
+
+    /// Applies the current Jam effect settings, updates Delay time + LFO rate
+    /// for the supplied BPM, and starts/cancels the LFO task as needed.
+    /// Safe to call from playback context — no node attach/detach.
+    func setJamEffects(_ settings: JamEffectSettings, bpm: Double) {
+        currentJamSettings = settings
+        currentJamBPM = bpm
+        applyJamSettings(settings, bpm: bpm)
+    }
+
+    private func applyJamSettings(_ settings: JamEffectSettings, bpm: Double) {
+        // Reverb bypass via wetDryMix = 0 when disabled.
+        let reverbMix = settings.reverbEnabled
+            ? min(max(settings.reverbMix, 0), 1) * 100
+            : 0
+        jamReverbUnit.wetDryMix = reverbMix
+
+        // Delay: time depends on the BPM of the playing loop.
+        let quarter = 60.0 / max(bpm, 1)
+        let dottedEighth = quarter * 0.75
+        let clamped = min(max(dottedEighth, 0.05), 2.0)
+        jamDelayUnit.delayTime = clamped
+
+        let delayMix = settings.delayEnabled
+            ? min(max(settings.delayMix, 0), 1) * 100
+            : 0
+        jamDelayUnit.wetDryMix = delayMix
+
+        // LFO: tremolo at half-note rate, amplitude scaled by amount.
+        if settings.lfoEnabled {
+            startOrUpdateLFO(amount: min(max(settings.lfoAmount, 0), 1), bpm: bpm)
+        } else {
+            cancelLFO()
+        }
+    }
+
+    private func startOrUpdateLFO(amount: Float, bpm: Double) {
+        // Recreate the task if BPM or amount changed materially to refresh the
+        // capture values. Cheap: a 30 Hz Task, no buffer rebuild.
+        let beatsPerSecond = bpm / 60.0
+        let lfoFrequency = beatsPerSecond / 2.0
+        let phaseIncrement = 2.0 * Double.pi * lfoFrequency / 30.0
+        let amountClamped = min(max(amount, 0), 1)
+        let minimumGain = 1.0 - Double(amountClamped) * 0.85
+
+        // Cancel any existing task and start a fresh one.
+        jamLFOTask?.cancel()
+        jamLFOPhase = 0
+        let task = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(33))
+                guard let self else { return }
+                self.jamLFOPhase += phaseIncrement
+                if self.jamLFOPhase > 2.0 * Double.pi {
+                    self.jamLFOPhase -= 2.0 * Double.pi
+                }
+                let normalizedSine = (sin(self.jamLFOPhase) + 1.0) / 2.0
+                let gain = minimumGain + normalizedSine * (1.0 - minimumGain)
+                self.jamLFOMixer.outputVolume = Float(min(max(gain, 0), 1))
+            }
+        }
+        jamLFOTask = task
+    }
+
+    private func cancelLFO() {
+        jamLFOTask?.cancel()
+        jamLFOTask = nil
+        jamLFOMixer.outputVolume = 1.0
+    }
+
     /// Cancels the render task, invalidates the generation token, and stops the player node.
     func stop() {
         pendingLoopTask?.cancel()
@@ -170,6 +368,11 @@ final class MusicPlayer {
         playbackGeneration &+= 1
         isLooping = false
         if playerNode.isPlaying { playerNode.stop() }
+        // Also stop the Jam path and its LFO so a generic stop() clears both.
+        jamLFOTask?.cancel()
+        jamLFOTask = nil
+        if jamPlayerNode.isPlaying { jamPlayerNode.stop() }
+        jamLFOMixer.outputVolume = 1.0
     }
 
     // MARK: - Private helpers
