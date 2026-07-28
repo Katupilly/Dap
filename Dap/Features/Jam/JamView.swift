@@ -13,7 +13,7 @@ struct JamView: View {
     let library: PhotoLibraryViewModel
     let isActive: Bool
     let initialJam: PersistedJam?
-    let initialCoverData: Data?
+    let initialCoverDescriptor: JamCoverDescriptor?
     let onClose: (() async -> Void)?
 
     private let arrangementBuilder = JamArrangementBuilder(bpm: Int(jamBPM))
@@ -50,13 +50,13 @@ struct JamView: View {
         library: PhotoLibraryViewModel,
         isActive: Bool,
         initialJam: PersistedJam? = nil,
-        initialCoverData: Data? = nil,
+        initialCoverDescriptor: JamCoverDescriptor? = nil,
         onClose: (() async -> Void)? = nil
     ) {
         self.library = library
         self.isActive = isActive
         self.initialJam = initialJam
-        self.initialCoverData = initialCoverData
+        self.initialCoverDescriptor = initialCoverDescriptor
         self.onClose = onClose
     }
 
@@ -312,27 +312,32 @@ struct JamView: View {
 
     @ViewBuilder
     private var sessionHeaderCover: some View {
-        Color.clear
+        if let sessionHeaderCoverDescriptor {
+            JamCoverArtwork(
+                descriptor: sessionHeaderCoverDescriptor,
+                targetSize: CGSize(width: 320, height: 320),
+                cornerRadius: headerThumbnailCornerRadius
+            )
             .frame(width: headerThumbnailSize, height: headerThumbnailSize)
-            .overlay {
-                ZStack {
-                    if let initialCoverImage {
-                        Image(uiImage: initialCoverImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        Rectangle()
-                            .fill(.secondary.opacity(0.15))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
-            }
             .clipShape(RoundedRectangle(cornerRadius: headerThumbnailCornerRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: headerThumbnailCornerRadius, style: .continuous)
                     .stroke(.white.opacity(0.10), lineWidth: 1)
             }
+        } else {
+            Color.clear
+                .frame(width: headerThumbnailSize, height: headerThumbnailSize)
+                .overlay {
+                    Rectangle()
+                        .fill(.secondary.opacity(0.15))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: headerThumbnailCornerRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: headerThumbnailCornerRadius, style: .continuous)
+                        .stroke(.white.opacity(0.10), lineWidth: 1)
+                }
+        }
     }
 
     @ViewBuilder
@@ -964,8 +969,15 @@ struct JamView: View {
             : session.jamName
     }
 
-    private var initialCoverImage: UIImage? {
-        initialCoverData.flatMap(UIImage.init(data:))
+    private var sessionHeaderCoverDescriptor: JamCoverDescriptor? {
+        if let activeJamID = session.activeJamID {
+            return JamCoverDescriptor(
+                jamID: activeJamID,
+                slotAssignments: session.slotAssignments,
+                sounds: library.items
+            )
+        }
+        return initialCoverDescriptor
     }
 
     private var selectedPhotoArea: some View {

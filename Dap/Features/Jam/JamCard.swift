@@ -4,8 +4,9 @@ import UIKit
 struct JamCard: View {
     let id: UUID
     let name: String
-    let coverData: Data?
+    let coverDescriptor: JamCoverDescriptor
     let isEditing: Bool
+    let editingPlaceholder: String
     @Binding var editingName: String
     let onOpen: () -> Void
     let onRename: () -> Void
@@ -13,7 +14,6 @@ struct JamCard: View {
     let onConfirmEdit: () -> Void
     let onCancelEdit: () -> Void
 
-    @State private var coverImage: UIImage?
     @FocusState private var isNameFocused: Bool
 
     var body: some View {
@@ -25,7 +25,7 @@ struct JamCard: View {
 
             HStack(alignment: .center, spacing: 8) {
                 if isEditing {
-                    TextField("Jam name", text: $editingName)
+                    TextField(editingPlaceholder, text: $editingName)
                         .font(.subheadline.weight(.semibold))
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
@@ -80,8 +80,6 @@ struct JamCard: View {
             }
             .frame(minHeight: 28)
         }
-        .onAppear { updateCoverImage() }
-        .onChange(of: coverData) { _, _ in updateCoverImage() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(name)
     }
@@ -91,24 +89,17 @@ struct JamCard: View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay {
-                ZStack {
-                    if let coverImage {
-                        Image(uiImage: coverImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        Rectangle()
-                            .fill(.secondary.opacity(0.15))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
+                JamCoverArtwork(
+                    descriptor: coverDescriptor,
+                    targetSize: CGSize(width: 320, height: 320),
+                    cornerRadius: 4
+                )
             }
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .stroke(.white.opacity(0.10), lineWidth: 1)
-        }
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(.white.opacity(0.10), lineWidth: 1)
+            }
     }
 
     private var cardTitle: some View {
@@ -118,8 +109,54 @@ struct JamCard: View {
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
 
-    private func updateCoverImage() {
-        coverImage = coverData.flatMap(UIImage.init(data:))
+struct JamCoverArtwork: View {
+    @Environment(\.displayScale) private var displayScale
+
+    let descriptor: JamCoverDescriptor
+    let targetSize: CGSize
+    let cornerRadius: CGFloat
+
+    @State private var coverImage: UIImage?
+
+    private struct RenderRequest: Hashable {
+        let descriptor: JamCoverDescriptor
+        let pixelWidth: Int
+        let pixelHeight: Int
+    }
+
+    var body: some View {
+        ZStack {
+            if let coverImage {
+                Image(uiImage: coverImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Rectangle()
+                    .fill(.secondary.opacity(0.15))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .task(id: renderRequest) {
+            coverImage = nil
+            let data = await JamCoverRenderer.shared.data(
+                for: descriptor,
+                size: targetSize,
+                scale: displayScale
+            )
+            guard !Task.isCancelled else { return }
+            coverImage = UIImage(data: data, scale: displayScale)
+        }
+    }
+
+    private var renderRequest: RenderRequest {
+        RenderRequest(
+            descriptor: descriptor,
+            pixelWidth: max(1, Int((targetSize.width * displayScale).rounded())),
+            pixelHeight: max(1, Int((targetSize.height * displayScale).rounded()))
+        )
     }
 }

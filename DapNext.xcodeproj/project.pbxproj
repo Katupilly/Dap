@@ -40,6 +40,7 @@
 		AA000001000000000000020E /* JamLibraryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000020F /* JamLibraryState.swift */; };
 		AA0000010000000000000210 /* JamLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000211 /* JamLibraryView.swift */; };
 		AA0000010000000000000212 /* JamCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000213 /* JamCard.swift */; };
+		AA0000010000000000000214 /* JamCoverRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000215 /* JamCoverRenderer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -78,6 +79,7 @@
 		AA000001000000000000020F /* JamLibraryState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamLibraryState.swift; sourceTree = "<group>"; };
 		AA0000010000000000000211 /* JamLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamLibraryView.swift; sourceTree = "<group>"; };
 		AA0000010000000000000213 /* JamCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamCard.swift; sourceTree = "<group>"; };
+		AA0000010000000000000215 /* JamCoverRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamCoverRenderer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -211,6 +213,7 @@
 				AA000001000000000000012B /* RetroCoverRenderer.swift */,
 				AA000001000000000000013B /* PhotoStore.swift */,
 				AA000001000000000000020D /* JamStore.swift */,
+				AA0000010000000000000215 /* JamCoverRenderer.swift */,
 				AA000001000000000000014B /* MusicPlayer.swift */,
 				AA0000010000000000000203 /* JamAudioRenderer.swift */,
 				AA0000010000000000000195 /* MelodicSampleLibrary.swift */,
@@ -308,6 +311,7 @@
 				AA0000010000000000000210 /* JamLibraryView.swift in Sources */,
 				AA0000010000000000000212 /* JamCard.swift in Sources */,
 				AA000001000000000000004A /* JamView.swift in Sources */,
+				AA0000010000000000000214 /* JamCoverRenderer.swift in Sources */,
 				AA000001000000000000005C /* CameraView.swift in Sources */,
 				AA0000010000000000000190 /* DapLavaLamp.metal in Sources */,
 				AA000001000000000000010A /* PhotoSound.swift in Sources */,

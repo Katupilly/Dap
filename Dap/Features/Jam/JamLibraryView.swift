@@ -42,7 +42,7 @@ struct JamLibraryView: View {
                         library: library,
                         isActive: isActive,
                         initialJam: selectedJam,
-                        initialCoverData: coverData(for: selectedJam),
+                        initialCoverDescriptor: coverDescriptor(for: selectedJam),
                         onClose: {
                             await state.closeSession()
                         }
@@ -151,8 +151,9 @@ struct JamLibraryView: View {
                             JamCard(
                                 id: draft.id,
                                 name: draft.name,
-                                coverData: nil,
+                                coverDescriptor: .empty(jamID: draft.id),
                                 isEditing: state.editingJamID == draft.id,
+                                editingPlaceholder: PersistedJam.defaultName,
                                 editingName: $state.editingName,
                                 onOpen: {},
                                 onRename: {},
@@ -173,8 +174,9 @@ struct JamLibraryView: View {
                             JamCard(
                                 id: jam.id,
                                 name: jam.name,
-                                coverData: coverData(for: jam),
+                                coverDescriptor: coverDescriptor(for: jam),
                                 isEditing: state.editingJamID == jam.id,
+                                editingPlaceholder: "Jam name",
                                 editingName: $state.editingName,
                                 onOpen: {
                                     dismissSearch()
@@ -326,13 +328,7 @@ struct JamLibraryView: View {
         )
     }
 
-    private func coverData(for jam: PersistedJam) -> Data? {
-        let ids = jam.slotAssignments.activePhotoIDs + jam.slotAssignments.reserve
-        guard let id = ids.first(where: { candidate in
-            library.items.contains { $0.id == candidate }
-        }) else {
-            return nil
-        }
-        return library.coverDataByID[id]
+    private func coverDescriptor(for jam: PersistedJam) -> JamCoverDescriptor {
+        JamCoverDescriptor(jam: jam, sounds: library.items)
     }
 }

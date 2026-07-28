@@ -77,7 +77,7 @@ final class JamLibraryState {
         let draft = DraftJam(name: PersistedJam.defaultName)
         draftJam = draft
         editingJamID = draft.id
-        editingName = draft.name
+        editingName = ""
         loadState = .loaded
     }
 
