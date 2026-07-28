@@ -13,34 +13,14 @@ struct JamView: View {
 
     private let arrangementBuilder = JamArrangementBuilder(bpm: Int(jamBPM))
 
-    @State private var slotAssignments = JamSlotAssignments()
+    @State private var session = JamSessionState()
+    @State private var visualTransport = JamVisualTransportState()
     @State private var selectedPanel: JamControlPanel = .none
     @State private var isPanelPresented = false
-    @State private var vibePosition = CGPoint(x: 0.5, y: 0.5)
-    @State private var drumKitSelection: MusicDrumKitSelection = .auto
+    @State private var playbackController = JamPlaybackController()
     @State private var isPhotoSelectorPresented = false
-    @State private var isPlaying = false
-    @State private var hasPendingArrangementChanges = false
-    @State private var isDrumKitChangePending = false
-    @State private var isPreparedDrumKitChangePending = false
-    @State private var isDrumKitPendingIndicatorPulsing = false
-    @State private var drumKitConfirmationPulseTrigger = 0
     @State private var swapArrangementVersion = 0
-    @State private var effectSettings = JamEffectSettings.default
-    @State private var currentStep: Int?
-    @State private var activeSoundIDs: Set<UUID> = []
-    @State private var activeArrangement: JamArrangement?
     @State private var transportTask: Task<Void, Never>?
-    @State private var appliedArrangementVersion = 0
-
-    // Pending arrangement state. The pending arrangement is built and
-    // sent to the MusicPlayer the moment the user expresses intent, so the
-    // player can debounce and prepare it for the next real audio boundary.
-    // The sequencer keeps showing `activeArrangement` until that boundary.
-    @State private var pendingArrangement: JamArrangement?
-    @State private var previousSnapshotStep: Int? = nil
-    @State private var loopIterationAtPending: Int? = nil
-    @State private var hasPreparedArrangement: Bool = false
 
     private let transportPollInterval: Duration = .milliseconds(33)
 
@@ -54,7 +34,7 @@ struct JamView: View {
     private let effectsPanelCornerRadius: CGFloat = 22
 
     private var selectedSounds: [PhotoSound] {
-        slotAssignments.allPhotoIDs.compactMap { id in
+        session.slotAssignments.allPhotoIDs.compactMap { id in
             library.items.first(where: { $0.id == id })
         }
     }
@@ -64,7 +44,7 @@ struct JamView: View {
     }
 
     private var assignedSounds: [AssignedSound] {
-        let roleByID = slotAssignments.assignedRolesByID
+        let roleByID = session.slotAssignments.assignedRolesByID
         let orderedRoles: [JamRole] = [.bass, .harmony, .melody]
         var seen: Set<UUID> = []
         var result: [AssignedSound] = []
@@ -85,75 +65,23 @@ struct JamView: View {
     }
 
     private var playbackAction: PlaybackAction {
-        isPlaying ? .stop : .play
+        session.isPlaying ? .stop : .play
     }
 
-    private var applyingNextBar: Bool {
-        isPlaying && hasPendingArrangementChanges
-    }
-
-    private var resolvedDrumKitValue: MusicDrumKit {
-        resolvedDrumKit(
-            selection: drumKitSelection,
-            region: JamGrooveLibrary.region(for: vibePosition)
-        )
-    }
-
-    private var activeSlotCount: Int {
-        slotAssignments.activePhotoIDs.count
-    }
-
-    private var reserveCount: Int {
-        slotAssignments.reserve.count
-    }
-
-    private var currentRegion: JamRegion {
-        JamGrooveLibrary.region(for: vibePosition)
-    }
-
-    private var statusPrimaryText: String {
-        if selectedSounds.isEmpty { return "READY" }
-        if applyingNextBar { return "NEXT BAR" }
-        return isPlaying ? "PLAYING" : "READY"
-    }
-
-    private var statusSecondaryText: String {
-        if selectedSounds.isEmpty { return "ADD PHOTOS TO START" }
-        if applyingNextBar { return "ARRANGEMENT CHANGE" }
-        if isPlaying {
-            return "\(regionDisplayName(currentRegion)) · \(drumKitDisplayName(resolvedDrumKitValue))"
-        }
-        return "\(activeSlotCount) ACTIVE · \(reserveCount) IN BANK"
+    private var currentDrumKitSubtitle: String {
+        return session.drumKitSelection.displayName
     }
 
     private var hasAnySelection: Bool {
         !selectedSounds.isEmpty
     }
 
-    private func regionDisplayName(_ region: JamRegion) -> String {
-        switch region {
-        case .airy: "Airy"
-        case .bright: "Bright"
-        case .deep: "Deep"
-        case .intense: "Intense"
-        }
-    }
-
-    private func drumKitDisplayName(_ kit: MusicDrumKit) -> String {
-        switch kit {
-        case .soft: "Soft"
-        case .club: "Club"
-        case .breakbeat: "Break"
-        case .metal: "Metal"
-        }
-    }
-
     private func photoColor(for role: JamRole) -> Color? {
         let roleID: UUID?
         switch role {
-        case .bass: roleID = slotAssignments.bass
-        case .harmony: roleID = slotAssignments.harmony
-        case .melody: roleID = slotAssignments.melody
+        case .bass: roleID = session.slotAssignments.bass
+        case .harmony: roleID = session.slotAssignments.harmony
+        case .melody: roleID = session.slotAssignments.melody
         }
         guard let roleID,
               let sound = library.items.first(where: { $0.id == roleID })
@@ -203,7 +131,7 @@ struct JamView: View {
                 JamDockBar(
                     selectedPanel: $selectedPanel,
                     isPanelPresented: $isPanelPresented,
-                    vibePosition: $vibePosition,
+                    session: session,
                     onPanelToggle: { target in
                         handlePanelToggle(target)
                     }
@@ -218,24 +146,24 @@ struct JamView: View {
                     .zIndex(5)
             }
         }
-        .sensoryFeedback(.selection, trigger: appliedArrangementVersion)
+        .sensoryFeedback(.selection, trigger: playbackController.appliedArrangementVersion)
         .sensoryFeedback(.success, trigger: swapArrangementVersion)
-        .onChange(of: effectSettings) { _, newSettings in
-            let bpm = activeArrangement.map { Double($0.sequence.harmony.bpm) } ?? 96.0
+        .onChange(of: session.effectSettings) { _, newSettings in
+            let bpm = session.activeArrangement.map { Double($0.sequence.harmony.bpm) } ?? 96.0
             library.setJamEffects(newSettings, bpm: bpm)
         }
         .sheet(isPresented: $isPhotoSelectorPresented) {
             JamPhotoSelectorSheet(
                 sounds: library.items,
                 coverDataByID: library.coverDataByID,
-                selectedPhotoIDs: slotAssignments.allPhotoIDs,
+                selectedPhotoIDs: session.slotAssignments.allPhotoIDs,
                 isPresented: $isPhotoSelectorPresented,
                 onConfirmSelection: confirmPhotoSelection
             )
         }
         .onAppear {
             library.setTransientLoopUpdatePreparedHandler {
-                handlePreparedDrumKitLoopUpdate()
+                playbackController.markLoopUpdatePrepared()
             }
         }
         .onDisappear {
@@ -253,22 +181,22 @@ struct JamView: View {
                     sound.sequence.notes.isEmpty ? nil : sound.id
                 }
             )
-            let previousAssignments = slotAssignments
-            let cleanedAssignments = slotAssignments.pruningInvalidIDs(
+            let previousAssignments = session.slotAssignments
+            let cleanedAssignments = session.slotAssignments.pruningInvalidIDs(
                 validIDs: validIDs,
                 playableIDs: playableIDs
             )
 
             guard cleanedAssignments != previousAssignments else { return }
 
-            if isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
+            if session.isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
                 sendPendingArrangementToPlayer()
             }
 
-            slotAssignments = cleanedAssignments
+            session.slotAssignments = cleanedAssignments
         }
         .onChange(of: library.isTransientPlaybackActive) { _, isActive in
-            guard !isActive, isPlaying else { return }
+            guard !isActive, session.isPlaying else { return }
             clearTransportState()
         }
     }
@@ -293,6 +221,8 @@ struct JamView: View {
 
     private func panelSize(for panel: JamControlPanel) -> CGSize {
         switch panel {
+        case .kits:
+            return CGSize(width: effectsPanelWidth, height: effectsPanelHeight)
         case .vibe:
             return CGSize(width: 254, height: 254)
         case .effects, .none:
@@ -309,6 +239,8 @@ struct JamView: View {
     @ViewBuilder
     private var panelContent: some View {
         switch selectedPanel {
+        case .kits:
+            kitsPanelContent
         case .vibe:
             vibePanelContent
         case .effects:
@@ -337,21 +269,140 @@ struct JamView: View {
     }
 
     private var vibePanelContent: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(expandedPanelFill)
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(expandedPanelStroke, lineWidth: 1)
-            VibeControl(position: $vibePosition) {
-                if isPlaying {
+        JamVibePanelContent(
+            session: session,
+            expandedPanelFill: expandedPanelFill,
+            expandedPanelStroke: expandedPanelStroke,
+            onPositionChanged: {
+                if session.isPlaying {
                     sendPendingArrangementToPlayer()
                 }
             }
+        )
+    }
+
+    private var kitsPanelContent: some View {
+        let width = panelSize(for: .kits).width
+        let height = panelSize(for: .kits).height
+
+        return VStack(alignment: .leading, spacing: 0) {
+            kitsHeader
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 14)
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(MusicDrumKitSelection.allCases, id: \.self) { selection in
+                    drumKitOptionButton(selection)
+                }
+            }
+            .padding(.horizontal, 18)
+
+            Spacer(minLength: 0)
         }
-        .frame(width: 254, height: 254)
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .accessibilityLabel("Vibe control")
-        .accessibilityValue(thumbnailLabel)
+        .padding(.bottom, 18)
+        .frame(width: width, height: height, alignment: .topLeading)
+        .background {
+            RoundedRectangle(cornerRadius: effectsPanelCornerRadius, style: .continuous)
+                .fill(expandedPanelFill)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: effectsPanelCornerRadius, style: .continuous)
+                .stroke(expandedPanelStroke, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Kits")
+    }
+
+    private var kitsHeader: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Drum Kits")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Text(currentDrumKitSubtitle)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func drumKitOptionButton(_ selection: MusicDrumKitSelection) -> some View {
+        let isSelected = session.drumKitSelection == selection
+        let detailText: String? = if isSelected && playbackController.isDrumKitChangePending {
+            playbackController.isPreparedDrumKitChangePending ? "Queued" : "Next bar"
+        } else {
+            nil
+        }
+
+        return Button {
+            selectDrumKit(selection)
+        } label: {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selection.displayName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if let detailText {
+                        Text(detailText)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text(" ")
+                            .font(.caption.weight(.medium))
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isSelected ? Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.10) : Color.clear)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(
+                            isSelected
+                                ? Color.primary.opacity(colorScheme == .dark ? 0.45 : 0.24)
+                                : expandedPanelStroke,
+                            lineWidth: 1
+                        )
+
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.primary)
+                    }
+                }
+                .frame(width: 22, height: 22)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isSelected ? Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.07) : Color.clear)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(
+                        isSelected
+                            ? Color.primary.opacity(colorScheme == .dark ? 0.24 : 0.14)
+                            : expandedPanelStroke,
+                        lineWidth: 1
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(selection.displayName)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
 
     private var effectsPanelContent: some View {
@@ -369,10 +420,13 @@ struct JamView: View {
                 systemImage: "water.waves",
                 title: "Reverb",
                 description: "Medium Hall",
-                isEnabled: $effectSettings.reverbEnabled,
+                isEnabled: Binding(
+                    get: { session.effectSettings.reverbEnabled },
+                    set: { session.effectSettings.reverbEnabled = $0 }
+                ),
                 mixValue: Binding(
-                    get: { Double(effectSettings.reverbMix) },
-                    set: { effectSettings.reverbMix = Float($0) }
+                    get: { Double(session.effectSettings.reverbMix) },
+                    set: { session.effectSettings.reverbMix = Float($0) }
                 ),
                 enableLabel: "Reverb",
                 mixLabel: "Reverb Mix"
@@ -386,10 +440,13 @@ struct JamView: View {
                 systemImage: "repeat",
                 title: "Delay",
                 description: "Dotted 1/8",
-                isEnabled: $effectSettings.delayEnabled,
+                isEnabled: Binding(
+                    get: { session.effectSettings.delayEnabled },
+                    set: { session.effectSettings.delayEnabled = $0 }
+                ),
                 mixValue: Binding(
-                    get: { Double(effectSettings.delayMix) },
-                    set: { effectSettings.delayMix = Float($0) }
+                    get: { Double(session.effectSettings.delayMix) },
+                    set: { session.effectSettings.delayMix = Float($0) }
                 ),
                 enableLabel: "Delay",
                 mixLabel: "Delay Mix"
@@ -400,10 +457,13 @@ struct JamView: View {
                 systemImage: "waveform.path",
                 title: "LFO",
                 description: "Tremolo · 1/2",
-                isEnabled: $effectSettings.lfoEnabled,
+                isEnabled: Binding(
+                    get: { session.effectSettings.lfoEnabled },
+                    set: { session.effectSettings.lfoEnabled = $0 }
+                ),
                 mixValue: Binding(
-                    get: { Double(effectSettings.lfoAmount) },
-                    set: { effectSettings.lfoAmount = Float($0) }
+                    get: { Double(session.effectSettings.lfoAmount) },
+                    set: { session.effectSettings.lfoAmount = Float($0) }
                 ),
                 enableLabel: "LFO",
                 mixLabel: "LFO Amount"
@@ -427,9 +487,9 @@ struct JamView: View {
 
     private var activeEffectsCount: Int {
         var count = 0
-        if effectSettings.reverbEnabled { count += 1 }
-        if effectSettings.delayEnabled { count += 1 }
-        if effectSettings.lfoEnabled { count += 1 }
+        if session.effectSettings.reverbEnabled { count += 1 }
+        if session.effectSettings.delayEnabled { count += 1 }
+        if session.effectSettings.lfoEnabled { count += 1 }
         return count
     }
 
@@ -584,15 +644,6 @@ struct JamView: View {
             : .spring(response: 0.26, dampingFraction: 0.96)
     }
 
-    private var thumbnailLabel: String {
-        switch JamGrooveLibrary.region(for: vibePosition) {
-        case .airy: "Airy"
-        case .bright: "Bright"
-        case .deep: "Deep"
-        case .intense: "Intense"
-        }
-    }
-
     private var emptyState: some View {
         VStack(spacing: 20) {
             ContentUnavailableView(
@@ -607,53 +658,28 @@ struct JamView: View {
     }
 
     private var selectedPhotoArea: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                ForEach(JamRole.allCases, id: \.self) { role in
-                    roleSlot(for: role)
-                }
-            }
-            .frame(maxWidth: .infinity)
-
-            changePhotosButton()
-        }
-    }
-
-    @ViewBuilder
-    private func roleSlot(for role: JamRole) -> some View {
-        let photoID = slotAssignments.photoID(for: role)
-        let sound = photoID.flatMap { id in library.items.first(where: { $0.id == id }) }
-        let isActive = photoID.map { activeSoundIDs.contains($0) } ?? false
-        let color: Color? = photoColor(for: role)
-        JamSelectedPhotoTile(
-            sound: sound,
-            coverData: sound.flatMap { library.coverDataByID[$0.id] },
-            role: photoID == nil ? nil : role,
-            isActive: photoID != nil && isActive,
+        JamSelectedPhotoArea(
+            session: session,
+            visualTransport: visualTransport,
+            sounds: library.items,
+            coverDataByID: library.coverDataByID,
             reduceMotion: reduceMotion,
-            photoColor: color,
-            onDropPhotoID: { droppedID in
-                handleTileDrop(droppedID: droppedID, onto: role)
-            },
-            onSwapForAccessibility: { _, target in
-                guard let photoID else { return }
-                performSwapFromAccessibility(source: role, target: target, photoID: photoID)
-            }
+            changePhotosButton: { changePhotosButton() },
+            onDropPhotoID: handleTileDrop,
+            onSwapForAccessibility: performSwapFromAccessibility
         )
-        .id(role)
     }
 
     private var sequencerAndStatus: some View {
         JamSequencerAndStatus(
             steps: jamStepsPerBar,
-            currentStep: currentStep,
-            activeStepsBySoundID: activeArrangement?.activeStepsBySoundID ?? [:],
-            roleByID: slotAssignments.assignedRolesByID,
+            session: session,
+            playbackController: playbackController,
+            visualTransport: visualTransport,
+            activeStepsBySoundID: session.activeArrangement?.activeStepsBySoundID ?? [:],
+            roleByID: session.slotAssignments.assignedRolesByID,
             roleColors: rowColorMap,
-            statusPrimaryText: statusPrimaryText,
-            statusSecondaryText: statusSecondaryText,
             bpm: Int(jamBPM),
-            isPending: applyingNextBar,
             reduceMotion: reduceMotion
         )
         .frame(height: 150)
@@ -757,7 +783,7 @@ struct JamView: View {
         // Same selection (any order) is a no-op so a future manual slot
         // swap is not undone by re-running `assignRoles` when the user
         // simply re-confirms the same photos in the selector.
-        guard Set(confirmedIDs) != Set(slotAssignments.allPhotoIDs) else { return }
+        guard Set(confirmedIDs) != Set(session.slotAssignments.allPhotoIDs) else { return }
 
         let resolvedSounds = confirmedIDs.compactMap { id in
             library.items.first(where: { $0.id == id })
@@ -765,27 +791,27 @@ struct JamView: View {
         let playableSounds = resolvedSounds.filter { !$0.sequence.notes.isEmpty }
         let playableIDs = Set(playableSounds.map(\.id))
         let confirmedIDSet = Set(confirmedIDs)
-        let survivingActiveIDs = slotAssignments.activePhotoIDs.filter { confirmedIDSet.contains($0) }
+        let survivingActiveIDs = session.slotAssignments.activePhotoIDs.filter { confirmedIDSet.contains($0) }
 
         let newAssignments: JamSlotAssignments
-        if slotAssignments.allPhotoIDs.isEmpty || survivingActiveIDs.isEmpty {
+        if session.slotAssignments.allPhotoIDs.isEmpty || survivingActiveIDs.isEmpty {
             let initialAssigned = arrangementBuilder.assignRoles(to: playableSounds)
             newAssignments = JamSlotAssignments(
                 assignedSounds: initialAssigned,
                 allSelectedIDs: confirmedIDs
             )
         } else {
-            newAssignments = slotAssignments.reconcilingSelection(
+            newAssignments = session.slotAssignments.reconcilingSelection(
                 selectedIDs: confirmedIDs,
                 playableIDs: playableIDs
             )
         }
 
-        let previousAssignments = slotAssignments
+        let previousAssignments = session.slotAssignments
         guard newAssignments != previousAssignments else { return }
 
-        slotAssignments = newAssignments
-        if isPlaying && newAssignments.hasDifferentActiveSlots(from: previousAssignments) {
+        session.slotAssignments = newAssignments
+        if session.isPlaying && newAssignments.hasDifferentActiveSlots(from: previousAssignments) {
             sendPendingArrangementToPlayer()
         }
     }
@@ -793,10 +819,10 @@ struct JamView: View {
     private func handleTileDrop(droppedID: String, onto targetRole: JamRole?) {
         guard let targetRole,
               let parsedID = UUID(uuidString: droppedID),
-              slotAssignments.activePhotoIDs.contains(parsedID) else {
+              session.slotAssignments.activePhotoIDs.contains(parsedID) else {
             return
         }
-        guard let sourceRole = slotAssignments.assignedRolesByID[parsedID] else {
+        guard let sourceRole = session.slotAssignments.assignedRolesByID[parsedID] else {
             return
         }
         guard sourceRole != targetRole else { return }
@@ -813,19 +839,19 @@ struct JamView: View {
     private func performSwapFromAccessibility(source: JamRole, target: JamRole, photoID: UUID) {
         // Accessibility path has no native drag session, so no defer is needed.
         guard source != target,
-              slotAssignments.photoID(for: source) == photoID else { return }
+              session.slotAssignments.photoID(for: source) == photoID else { return }
         applySwap(source: source, destination: target)
     }
 
     private func applySwap(source: JamRole, destination: JamRole) {
         guard source != destination else { return }
-        let next = slotAssignments.swapping(source, destination)
-        guard next != slotAssignments else { return }
+        let next = session.slotAssignments.swapping(source, destination)
+        guard next != session.slotAssignments else { return }
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            slotAssignments = next
-            if isPlaying {
+            session.slotAssignments = next
+            if session.isPlaying {
                 sendPendingArrangementToPlayer()
             }
         }
@@ -833,15 +859,15 @@ struct JamView: View {
     }
 
     private func selectDrumKit(_ selection: MusicDrumKitSelection) {
-        guard selection != drumKitSelection else { return }
-        drumKitSelection = selection
+        guard selection != session.drumKitSelection else { return }
+        session.drumKitSelection = selection
 
-        guard isPlaying else {
-            clearDrumKitPendingFeedback()
+        guard session.isPlaying else {
+            playbackController.clearDrumKitPendingFeedback()
             return
         }
 
-        beginDrumKitPendingFeedback()
+        playbackController.beginDrumKitPendingFeedback(reduceMotion: reduceMotion)
         sendPendingArrangementToPlayer()
     }
 
@@ -852,46 +878,40 @@ struct JamView: View {
             return
         }
 
-        activeArrangement = arrangement
+        session.activeArrangement = arrangement
         library.playTransientSequence(
             arrangement.sequence,
             percussion: arrangement.percussion,
             loops: true
         )
         // Forward the current Effect Rack settings to the dedicated Jam chain.
-        library.setJamEffects(effectSettings, bpm: Double(arrangement.sequence.harmony.bpm))
+        library.setJamEffects(session.effectSettings, bpm: Double(arrangement.sequence.harmony.bpm))
         // Do not seed `currentStep` to 0 here. The transport polling task will
         // read the real sample position from the AVAudioPlayerNode and
         // surface the first valid step. Until then the sequencer shows nil.
-        currentStep = nil
-        activeSoundIDs = []
-        isPlaying = true
-        hasPendingArrangementChanges = false
-        clearDrumKitPendingFeedback()
-        clearPendingArrangementState()
+        visualTransport.reset()
+        session.isPlaying = true
+        playbackController.clearDrumKitPendingFeedback()
+        playbackController.clearPendingState()
         startTransportLoop()
     }
 
     /// Sends the latest arrangement to the MusicPlayer immediately so it can
     /// debounce, render, and prepare the next loop buffer. The arrangement
-    /// stays in `pendingArrangement` until the real audio boundary promotes it.
+    /// stays pending inside `JamPlaybackController` until the real audio
+    /// boundary promotes it.
     private func sendPendingArrangementToPlayer() {
-        guard isPlaying else { return }
+        guard session.isPlaying else { return }
         guard let arrangement = buildArrangement() else {
             // Nothing playable: drop the pending state instead of hanging on it.
-            clearPendingArrangementState()
+            playbackController.clearPendingState()
             return
         }
 
-        pendingArrangement = arrangement
-        // Anchor the iteration so we only promote on the boundary that occurs
-        // *after* the current transport position when the buffer is ready.
-        // The actual promotion is driven by the polling task and the
-        // onLoopUpdatePrepared correlation, not by this anchor alone.
-        loopIterationAtPending = library.currentJamTransportSnapshot()?.loopIteration
-        hasPendingArrangementChanges = true
-        hasPreparedArrangement = false
-        isPreparedDrumKitChangePending = false
+        playbackController.beginPendingArrangement(
+            arrangement,
+            loopIteration: library.currentJamTransportSnapshot()?.loopIteration
+        )
 
         library.updateTransientLoop(
             sequence: arrangement.sequence,
@@ -899,24 +919,15 @@ struct JamView: View {
         )
     }
 
-    private func clearPendingArrangementState() {
-        pendingArrangement = nil
-        loopIterationAtPending = nil
-        hasPreparedArrangement = false
-    }
-
     private func clearTransportAndPlayback(clearPending: Bool = true) {
         cancelTransportTask()
-        clearDrumKitPendingFeedback()
+        playbackController.clearDrumKitPendingFeedback()
         library.stopTransientPlayback()
-        activeArrangement = nil
-        currentStep = nil
-        activeSoundIDs = []
-        isPlaying = false
-        previousSnapshotStep = nil
+        session.activeArrangement = nil
+        visualTransport.reset()
+        session.isPlaying = false
         if clearPending {
-            hasPendingArrangementChanges = false
-            clearPendingArrangementState()
+            playbackController.clearPendingState()
         }
     }
 
@@ -925,14 +936,11 @@ struct JamView: View {
     /// externally (e.g. audio interruption) and we must not call `player.stop()` again.
     private func clearTransportState() {
         cancelTransportTask()
-        clearDrumKitPendingFeedback()
-        activeArrangement = nil
-        currentStep = nil
-        activeSoundIDs = []
-        isPlaying = false
-        hasPendingArrangementChanges = false
-        previousSnapshotStep = nil
-        clearPendingArrangementState()
+        playbackController.clearDrumKitPendingFeedback()
+        session.activeArrangement = nil
+        visualTransport.reset()
+        session.isPlaying = false
+        playbackController.clearPendingState()
     }
 
     private func cancelTransportTask() {
@@ -946,9 +954,9 @@ struct JamView: View {
         transportTask = Task { @MainActor in
             // UI polling task. The musical clock is the AVAudioPlayerNode
             // sample position; this loop just asks the player for it.
-            while !Task.isCancelled && isPlaying {
+            while !Task.isCancelled && session.isPlaying {
                 try? await Task.sleep(for: transportPollInterval)
-                guard !Task.isCancelled, isPlaying else { break }
+                guard !Task.isCancelled, session.isPlaying else { break }
 
                 pollTransportFromPlayer()
             }
@@ -965,42 +973,22 @@ struct JamView: View {
         }
 
         let step = snapshot.currentStep
-        let activeIDs = Set(
-            activeArrangement?.activeStepsBySoundID.compactMap { soundID, steps in
-                steps.contains(step) ? soundID : nil
-            } ?? []
-        )
-
-        // Detect a real loop wrap using the audio iteration count. This is the
-        // actual moment the previously scheduled buffer becomes audible.
-        let didWrap = previousSnapshotStep.map { prev in
-            // Two valid ways the audio clock can indicate the new buffer has
-            // taken over: an iteration advance, or a step regression to 0/1.
-            snapshot.loopIteration > (loopIterationAtPending ?? Int.min)
-                || (step <= 1 && prev >= (jamStepsPerBar - 1))
-        } ?? false
-        previousSnapshotStep = step
-
-        if hasPendingArrangementChanges,
-           hasPreparedArrangement,
-           let pending = pendingArrangement,
-           didWrap {
+        if let pending = playbackController.promotePendingArrangementIfNeeded(from: snapshot) {
             // Promote the pending arrangement on the real audio boundary.
             // The sequencer and the audio are now in sync.
-            activeArrangement = pending
-            hasPendingArrangementChanges = false
-            hasPreparedArrangement = false
-            appliedArrangementVersion &+= 1
-            finishDrumKitPendingFeedbackIfNeeded()
+            session.activeArrangement = pending
             updateStepState(step: step, arrangement: pending)
             return
         }
 
+        let activeIDs = Set(
+            session.activeArrangement?.activeStepsBySoundID.compactMap { soundID, steps in
+                steps.contains(step) ? soundID : nil
+            } ?? []
+        )
+
         // No promotion this poll; just keep the UI in step with the audio.
-        if currentStep != step || activeSoundIDs != activeIDs {
-            currentStep = step
-            activeSoundIDs = activeIDs
-        }
+        visualTransport.update(step: step, activeSoundIDs: activeIDs)
     }
 
     private func updateStepState(step: Int, arrangement: JamArrangement) {
@@ -1010,70 +998,36 @@ struct JamView: View {
             }
         )
 
-        currentStep = step
-        activeSoundIDs = activeIDs
+        visualTransport.update(step: step, activeSoundIDs: activeIDs)
     }
 
     private func buildArrangement() -> JamArrangement? {
-        let region = JamGrooveLibrary.region(for: vibePosition)
-        let drumKit = resolvedDrumKit(selection: drumKitSelection, region: region)
+        let region = JamGrooveLibrary.region(for: session.vibePosition)
+        let drumKit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
 
         return arrangementBuilder.build(
             assignedSounds: assignedSounds,
-            vibePosition: vibePosition,
+            vibePosition: session.vibePosition,
             drumKit: drumKit
         )
     }
 
     private func sendCurrentArrangementToPlayer() {
         guard let arrangement = buildArrangement() else {
-            clearDrumKitPendingFeedback()
+            playbackController.clearDrumKitPendingFeedback()
             clearTransportAndPlayback()
             return
         }
 
-        hasPendingArrangementChanges = false
-        isPreparedDrumKitChangePending = false
-        activeArrangement = arrangement
+        playbackController.clearPendingState()
+        playbackController.clearDrumKitPendingFeedback()
+        session.activeArrangement = arrangement
 
         library.playTransientSequence(
             arrangement.sequence,
             percussion: arrangement.percussion,
             loops: true
         )
-    }
-
-    private func beginDrumKitPendingFeedback() {
-        isPreparedDrumKitChangePending = false
-        isDrumKitChangePending = true
-        if !reduceMotion {
-            isDrumKitPendingIndicatorPulsing = true
-        }
-    }
-
-    private func handlePreparedDrumKitLoopUpdate() {
-        // Called whenever the MusicPlayer has scheduled a replacement buffer
-        // for the next loop boundary. Marks the global preparation flag so
-        // the polling task can promote the pending arrangement on the real
-        // audio wrap, and feeds the Drum Kit two-phase feedback indicator.
-        if hasPendingArrangementChanges {
-            hasPreparedArrangement = true
-        }
-        if isDrumKitChangePending {
-            isPreparedDrumKitChangePending = true
-        }
-    }
-
-    private func finishDrumKitPendingFeedbackIfNeeded() {
-        guard isDrumKitChangePending, isPreparedDrumKitChangePending else { return }
-        clearDrumKitPendingFeedback()
-        drumKitConfirmationPulseTrigger += 1
-    }
-
-    private func clearDrumKitPendingFeedback() {
-        isDrumKitChangePending = false
-        isPreparedDrumKitChangePending = false
-        isDrumKitPendingIndicatorPulsing = false
     }
 
     private func resolvedDrumKit(
@@ -1233,6 +1187,99 @@ private struct JamSelectedPhotoTile: View {
     }
 }
 
+private struct JamVibePanelContent: View {
+    let session: JamSessionState
+    let expandedPanelFill: Color
+    let expandedPanelStroke: Color
+    let onPositionChanged: () -> Void
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(expandedPanelFill)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(expandedPanelStroke, lineWidth: 1)
+            VibeControl(
+                position: Binding(
+                    get: { session.vibePosition },
+                    set: { session.vibePosition = $0 }
+                ),
+                onPositionChanged: onPositionChanged
+            )
+        }
+        .frame(width: 254, height: 254)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .accessibilityLabel("Vibe control")
+        .accessibilityValue(thumbnailLabel)
+    }
+
+    private var thumbnailLabel: String {
+        switch JamGrooveLibrary.region(for: session.vibePosition) {
+        case .airy: "Airy"
+        case .bright: "Bright"
+        case .deep: "Deep"
+        case .intense: "Intense"
+        }
+    }
+}
+
+private struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
+    let session: JamSessionState
+    let visualTransport: JamVisualTransportState
+    let sounds: [PhotoSound]
+    let coverDataByID: [UUID: Data]
+    let reduceMotion: Bool
+    let changePhotosButton: () -> ChangePhotosButton
+    let onDropPhotoID: (String, JamRole?) -> Void
+    let onSwapForAccessibility: (JamRole, JamRole, UUID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                ForEach(JamRole.allCases, id: \.self) { role in
+                    roleSlot(for: role)
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            changePhotosButton()
+        }
+    }
+
+    @ViewBuilder
+    private func roleSlot(for role: JamRole) -> some View {
+        let photoID = session.slotAssignments.photoID(for: role)
+        let sound = photoID.flatMap { id in sounds.first(where: { $0.id == id }) }
+        let isActive = photoID.map { visualTransport.activeSoundIDs.contains($0) } ?? false
+        let color = photoColor(for: role)
+
+        JamSelectedPhotoTile(
+            sound: sound,
+            coverData: sound.flatMap { coverDataByID[$0.id] },
+            role: photoID == nil ? nil : role,
+            isActive: photoID != nil && isActive,
+            reduceMotion: reduceMotion,
+            photoColor: color,
+            onDropPhotoID: { droppedID in
+                onDropPhotoID(droppedID, role)
+            },
+            onSwapForAccessibility: { _, target in
+                guard let photoID else { return }
+                onSwapForAccessibility(role, target, photoID)
+            }
+        )
+        .id(role)
+    }
+
+    private func photoColor(for role: JamRole) -> Color? {
+        guard let roleID = session.slotAssignments.photoID(for: role),
+              let sound = sounds.first(where: { $0.id == roleID })
+        else { return nil }
+        let pitch = PitchClass(rawValue: sound.sequence.harmony.rootPitchClass) ?? .c
+        return Color(RetroCoverRenderer.tonalPalette(for: pitch).base)
+    }
+}
+
 private struct JamTileDragAndDrop: ViewModifier {
     let role: JamRole?
     let photoID: UUID?
@@ -1295,6 +1342,7 @@ private struct JamTileAccessibilityActions: ViewModifier {
 
 private enum JamControlPanel: Equatable {
     case none
+    case kits
     case vibe
     case effects
 }
@@ -1303,17 +1351,14 @@ private struct JamSequencerAndStatus: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let steps: Int
-    let currentStep: Int?
+    let session: JamSessionState
+    let playbackController: JamPlaybackController
+    let visualTransport: JamVisualTransportState
     let activeStepsBySoundID: [UUID: Set<Int>]
     let roleByID: [UUID: JamRole]
     let roleColors: [JamRole: Color]
-    let statusPrimaryText: String
-    let statusSecondaryText: String
     let bpm: Int
-    let isPending: Bool
     let reduceMotion: Bool
-
-    private static let rowOrder: [JamRole] = [.bass, .harmony, .melody]
 
     private var structuralCardFill: Color {
         switch colorScheme {
@@ -1371,6 +1416,111 @@ private struct JamSequencerAndStatus: View {
     }
 
     private var sequencerContent: some View {
+        JamSequencerRows(
+            steps: steps,
+            visualTransport: visualTransport,
+            activeStepsBySoundID: activeStepsBySoundID,
+            roleByID: roleByID,
+            roleColors: roleColors,
+            reduceMotion: reduceMotion
+        )
+    }
+
+    private var statusContent: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(statusPrimaryText)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(statusSecondaryText)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("\(bpm) BPM")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+    }
+
+    private var statusPrimaryText: String {
+        if session.slotAssignments.allPhotoIDs.isEmpty { return "READY" }
+        if applyingNextBar { return "NEXT BAR" }
+        return session.isPlaying ? "PLAYING" : "READY"
+    }
+
+    private var statusSecondaryText: String {
+        if session.slotAssignments.allPhotoIDs.isEmpty { return "ADD PHOTOS TO START" }
+        if applyingNextBar { return "ARRANGEMENT CHANGE" }
+        if session.isPlaying {
+            let region = JamGrooveLibrary.region(for: session.vibePosition)
+            let drumKit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
+            return "\(regionDisplayName(region)) · \(drumKitDisplayName(drumKit))"
+        }
+        let activeSlotCount = session.slotAssignments.activePhotoIDs.count
+        let reserveCount = session.slotAssignments.reserve.count
+        return "\(activeSlotCount) ACTIVE · \(reserveCount) IN BANK"
+    }
+
+    private var applyingNextBar: Bool {
+        session.isPlaying && playbackController.hasPendingArrangementChanges
+    }
+
+    private func regionDisplayName(_ region: JamRegion) -> String {
+        switch region {
+        case .airy: "Airy"
+        case .bright: "Bright"
+        case .deep: "Deep"
+        case .intense: "Intense"
+        }
+    }
+
+    private func drumKitDisplayName(_ kit: MusicDrumKit) -> String {
+        switch kit {
+        case .soft: "Soft"
+        case .club: "Club"
+        case .breakbeat: "Break"
+        case .metal: "Metal"
+        }
+    }
+
+    private func resolvedDrumKit(
+        selection: MusicDrumKitSelection,
+        region: JamRegion
+    ) -> MusicDrumKit {
+        switch selection {
+        case .auto:
+            switch region {
+            case .airy: .soft
+            case .bright: .club
+            case .deep: .breakbeat
+            case .intense: .metal
+            }
+        case .soft: .soft
+        case .club: .club
+        case .breakbeat: .breakbeat
+        case .metal: .metal
+        }
+    }
+}
+
+private struct JamSequencerRows: View {
+    let steps: Int
+    let visualTransport: JamVisualTransportState
+    let activeStepsBySoundID: [UUID: Set<Int>]
+    let roleByID: [UUID: JamRole]
+    let roleColors: [JamRole: Color]
+    let reduceMotion: Bool
+
+    private static let rowOrder: [JamRole] = [.bass, .harmony, .melody]
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             ForEach(Array(Self.rowOrder.enumerated()), id: \.element) { _, role in
                 sequencerRow(role: role)
@@ -1396,7 +1546,7 @@ private struct JamSequencerAndStatus: View {
     }
 
     private func stepCell(role: JamRole, step: Int, isActiveInRow: Bool) -> some View {
-        let isPlayhead = step == currentStep
+        let isPlayhead = step == visualTransport.currentStep
         let rowColor = roleColors[role]
         let inactiveColor = Color.secondary.opacity(0.16)
         let activeColor = (rowColor ?? .secondary).opacity(0.55)
@@ -1430,29 +1580,6 @@ private struct JamSequencerAndStatus: View {
             .accessibilityHidden(true)
     }
 
-    private var statusContent: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(statusPrimaryText)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(statusSecondaryText)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Text("\(bpm) BPM")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-                .monospacedDigit()
-                .lineLimit(1)
-        }
-    }
-
     private func activeStepsForRole(_ role: JamRole) -> Set<Int> {
         var result: Set<Int> = []
         for (soundID, steps) in activeStepsBySoundID where roleByID[soundID] == role {
@@ -1465,19 +1592,37 @@ private struct JamSequencerAndStatus: View {
 private struct JamDockBar: View {
     @Binding var selectedPanel: JamControlPanel
     @Binding var isPanelPresented: Bool
-    @Binding var vibePosition: CGPoint
+    let session: JamSessionState
     let onPanelToggle: (JamControlPanel) -> Void
 
     private static let tileSize: CGFloat = 68
     private static let tileSpacing: CGFloat = 12
     private static let cornerRadius: CGFloat = 18
+    private static let iconSlotSize: CGFloat = 22
 
     var body: some View {
         HStack(spacing: Self.tileSpacing) {
+            kitsTileButton
             vibeTileButton
             effectsTileButton
         }
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private var kitsTileButton: some View {
+        Button {
+            onPanelToggle(.kits)
+        } label: {
+            KitsDockTile(
+                cornerRadius: Self.cornerRadius,
+                iconSlotSize: Self.iconSlotSize,
+                isActive: selectedPanel == .kits && isPanelPresented
+            )
+        }
+        .buttonStyle(.plain)
+        .frame(width: Self.tileSize, height: Self.tileSize)
+        .accessibilityLabel("Kits")
+        .accessibilityValue("\(selectedPanel == .kits && isPanelPresented ? "Expanded" : "Collapsed")")
     }
 
     private var vibeTileButton: some View {
@@ -1485,8 +1630,9 @@ private struct JamDockBar: View {
             onPanelToggle(.vibe)
         } label: {
             VibeDockTile(
-                position: vibePosition,
+                position: session.vibePosition,
                 cornerRadius: Self.cornerRadius,
+                iconSlotSize: Self.iconSlotSize,
                 isActive: selectedPanel == .vibe && isPanelPresented
             )
         }
@@ -1502,6 +1648,7 @@ private struct JamDockBar: View {
         } label: {
             EffectsDockTile(
                 cornerRadius: Self.cornerRadius,
+                iconSlotSize: Self.iconSlotSize,
                 isActive: selectedPanel == .effects && isPanelPresented
             )
         }
@@ -1512,7 +1659,7 @@ private struct JamDockBar: View {
     }
 
     private var thumbnailLabel: String {
-        switch JamGrooveLibrary.region(for: vibePosition) {
+        switch JamGrooveLibrary.region(for: session.vibePosition) {
         case .airy: "Airy"
         case .bright: "Bright"
         case .deep: "Deep"
@@ -1521,11 +1668,73 @@ private struct JamDockBar: View {
     }
 }
 
+private struct KitsDockTile: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let cornerRadius: CGFloat
+    let iconSlotSize: CGFloat
+    var isActive: Bool = false
+
+    private var tileFill: Color {
+        switch colorScheme {
+        case .dark:
+            Color.secondary.opacity(isActive ? 0.16 : 0.10)
+        default:
+            Color.black.opacity(isActive ? 0.09 : 0.075)
+        }
+    }
+
+    private var tileStroke: Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(isActive ? 0.22 : 0.10)
+        default:
+            Color.black.opacity(isActive ? 0.12 : 0.10)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(tileFill)
+
+            VStack(spacing: 3) {
+                dockIconSlot {
+                    Image("drum-svg")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 20, height: 20)
+                        .foregroundStyle(.primary)
+                }
+
+                Text("Kits")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(tileStroke, lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func dockIconSlot<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack {
+            content()
+        }
+        .frame(width: iconSlotSize, height: iconSlotSize)
+    }
+}
+
 private struct VibeDockTile: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let position: CGPoint
     let cornerRadius: CGFloat
+    let iconSlotSize: CGFloat
     var isActive: Bool = false
 
     private var tileFill: Color {
@@ -1561,24 +1770,26 @@ private struct VibeDockTile: View {
                 .fill(tileFill)
 
             VStack(spacing: 3) {
-                ZStack {
-                    Path { path in
-                        path.move(to: CGPoint(x: 0, y: 18))
-                        path.addLine(to: CGPoint(x: 36, y: 18))
-                        path.move(to: CGPoint(x: 18, y: 0))
-                        path.addLine(to: CGPoint(x: 18, y: 36))
-                    }
-                    .stroke(axisStroke, style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                dockIconSlot {
+                    ZStack {
+                        Path { path in
+                            path.move(to: CGPoint(x: 0, y: 11))
+                            path.addLine(to: CGPoint(x: 22, y: 11))
+                            path.move(to: CGPoint(x: 11, y: 0))
+                            path.addLine(to: CGPoint(x: 11, y: 22))
+                        }
+                        .stroke(axisStroke, style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
 
-                    Circle()
-                        .fill(Color.primary)
-                        .frame(width: 6, height: 6)
-                        .position(
-                            x: min(max(position.x, 0), 1) * 36,
-                            y: min(max(position.y, 0), 1) * 36
-                        )
+                        Circle()
+                            .fill(Color.primary)
+                            .frame(width: 4, height: 4)
+                            .position(
+                                x: min(max(position.x, 0), 1) * 22,
+                                y: min(max(position.y, 0), 1) * 22
+                            )
+                    }
+                    .frame(width: 22, height: 22)
                 }
-                .frame(width: 36, height: 36)
 
                 Text("Vibe")
                     .font(.caption2.weight(.semibold))
@@ -1591,12 +1802,21 @@ private struct VibeDockTile: View {
                 .stroke(tileStroke, lineWidth: 1)
         }
     }
+
+    @ViewBuilder
+    private func dockIconSlot<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack {
+            content()
+        }
+        .frame(width: iconSlotSize, height: iconSlotSize)
+    }
 }
 
 private struct EffectsDockTile: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let cornerRadius: CGFloat
+    let iconSlotSize: CGFloat
     var isActive: Bool = false
 
     private var tileFill: Color {
@@ -1623,9 +1843,11 @@ private struct EffectsDockTile: View {
                 .fill(tileFill)
 
             VStack(spacing: 3) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary)
+                dockIconSlot {
+                    Image(systemName: "dial.medium")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
 
                 Text("Effects")
                     .font(.caption2.weight(.semibold))
@@ -1637,6 +1859,14 @@ private struct EffectsDockTile: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(tileStroke, lineWidth: 1)
         }
+    }
+
+    @ViewBuilder
+    private func dockIconSlot<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack {
+            content()
+        }
+        .frame(width: iconSlotSize, height: iconSlotSize)
     }
 }
 

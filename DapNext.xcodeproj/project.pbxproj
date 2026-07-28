@@ -13,15 +13,8 @@
 		AA000001000000000000003C /* PhotoInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003D /* PhotoInspectorView.swift */; };
 		AA000001000000000000004A /* JamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004B /* JamView.swift */; };
 		AA000001000000000000004C /* JamArrangementBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004D /* JamArrangementBuilder.swift */; };
-		AA0000010000000000000196 /* JamAssignments.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000197 /* JamAssignments.swift */; };
-		AA0000010000000000000198 /* JamPhotoSelectorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */; };
-		AA000001000000000000017A /* JamGrooveLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000017B /* JamGrooveLibrary.swift */; };
-		AA0000010000000000000200 /* JamEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000201 /* JamEffects.swift */; };
 		AA000001000000000000005C /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000005D /* CameraView.swift */; };
-		AA0000010000000000000190 /* DapLavaLamp.metal in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000191 /* DapLavaLamp.metal */; };
 		AA000001000000000000006A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000006B /* Assets.xcassets */; };
-		AA000001000000000000018A /* Drums in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000018B /* Drums */; };
-		AA0000010000000000000192 /* DapAnalogFamily in Resources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000193 /* DapAnalogFamily */; };
 		AA000001000000000000010A /* PhotoSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000010B /* PhotoSound.swift */; };
 		AA000001000000000000011A /* PhotoMusicPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000011B /* PhotoMusicPipeline.swift */; };
 		AA000001000000000000012A /* RetroCoverRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000012B /* RetroCoverRenderer.swift */; };
@@ -29,9 +22,19 @@
 		AA000001000000000000014A /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000014B /* MusicPlayer.swift */; };
 		AA000001000000000000015A /* PhotoLibraryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000015B /* PhotoLibraryViewModel.swift */; };
 		AA000001000000000000016A /* PhotoMetadataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000016B /* PhotoMetadataGenerator.swift */; };
+		AA000001000000000000017A /* JamGrooveLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000017B /* JamGrooveLibrary.swift */; };
+		AA000001000000000000018A /* Drums in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000018B /* Drums */; };
 		AA000001000000000000018C /* DrumSampleLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000018D /* DrumSampleLibrary.swift */; };
+		AA0000010000000000000190 /* DapLavaLamp.metal in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000191 /* DapLavaLamp.metal */; };
+		AA0000010000000000000192 /* DapAnalogFamily in Resources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000193 /* DapAnalogFamily */; };
 		AA0000010000000000000194 /* MelodicSampleLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000195 /* MelodicSampleLibrary.swift */; };
+		AA0000010000000000000196 /* JamAssignments.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000197 /* JamAssignments.swift */; };
+		AA0000010000000000000198 /* JamPhotoSelectorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */; };
+		AA0000010000000000000200 /* JamEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000201 /* JamEffects.swift */; };
 		AA0000010000000000000202 /* JamAudioRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000203 /* JamAudioRenderer.swift */; };
+		AA0000010000000000000204 /* JamPlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000205 /* JamPlaybackController.swift */; };
+		AA0000010000000000000206 /* JamSessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000207 /* JamSessionState.swift */; };
+		AA0000010000000000000208 /* JamVisualTransportState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000209 /* JamVisualTransportState.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,15 +44,8 @@
 		AA000001000000000000003D /* PhotoInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoInspectorView.swift; sourceTree = "<group>"; };
 		AA000001000000000000004B /* JamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamView.swift; sourceTree = "<group>"; };
 		AA000001000000000000004D /* JamArrangementBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamArrangementBuilder.swift; sourceTree = "<group>"; };
-		AA0000010000000000000197 /* JamAssignments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamAssignments.swift; sourceTree = "<group>"; };
-		AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPhotoSelectorSheet.swift; sourceTree = "<group>"; };
-		AA000001000000000000017B /* JamGrooveLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamGrooveLibrary.swift; sourceTree = "<group>"; };
-		AA0000010000000000000201 /* JamEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamEffects.swift; sourceTree = "<group>"; };
 		AA000001000000000000005D /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
-		AA0000010000000000000191 /* DapLavaLamp.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = DapLavaLamp.metal; sourceTree = "<group>"; };
 		AA000001000000000000006B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		AA000001000000000000018B /* Drums */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Drums; sourceTree = "<group>"; };
-		AA0000010000000000000193 /* DapAnalogFamily */ = {isa = PBXFileReference; lastKnownFileType = folder; path = DapAnalogFamily; sourceTree = "<group>"; };
 		AA000001000000000000007B /* Dap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA000001000000000000008B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000001000000000000010B /* PhotoSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoSound.swift; sourceTree = "<group>"; };
@@ -59,9 +55,19 @@
 		AA000001000000000000014B /* MusicPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayer.swift; sourceTree = "<group>"; };
 		AA000001000000000000015B /* PhotoLibraryViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibraryViewModel.swift; sourceTree = "<group>"; };
 		AA000001000000000000016B /* PhotoMetadataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMetadataGenerator.swift; sourceTree = "<group>"; };
+		AA000001000000000000017B /* JamGrooveLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamGrooveLibrary.swift; sourceTree = "<group>"; };
+		AA000001000000000000018B /* Drums */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Drums; sourceTree = "<group>"; };
 		AA000001000000000000018D /* DrumSampleLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrumSampleLibrary.swift; sourceTree = "<group>"; };
+		AA0000010000000000000191 /* DapLavaLamp.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = DapLavaLamp.metal; sourceTree = "<group>"; };
+		AA0000010000000000000193 /* DapAnalogFamily */ = {isa = PBXFileReference; lastKnownFileType = folder; path = DapAnalogFamily; sourceTree = "<group>"; };
 		AA0000010000000000000195 /* MelodicSampleLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MelodicSampleLibrary.swift; sourceTree = "<group>"; };
+		AA0000010000000000000197 /* JamAssignments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamAssignments.swift; sourceTree = "<group>"; };
+		AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPhotoSelectorSheet.swift; sourceTree = "<group>"; };
+		AA0000010000000000000201 /* JamEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamEffects.swift; sourceTree = "<group>"; };
 		AA0000010000000000000203 /* JamAudioRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamAudioRenderer.swift; sourceTree = "<group>"; };
+		AA0000010000000000000205 /* JamPlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPlaybackController.swift; sourceTree = "<group>"; };
+		AA0000010000000000000207 /* JamSessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamSessionState.swift; sourceTree = "<group>"; };
+		AA0000010000000000000209 /* JamVisualTransportState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamVisualTransportState.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -134,6 +140,48 @@
 			path = Gallery;
 			sourceTree = "<group>";
 		};
+		AA0000010000000000000095 /* Jam */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000010000000000000197 /* JamAssignments.swift */,
+				AA000001000000000000004D /* JamArrangementBuilder.swift */,
+				AA0000010000000000000201 /* JamEffects.swift */,
+				AA000001000000000000017B /* JamGrooveLibrary.swift */,
+				AA0000010000000000000205 /* JamPlaybackController.swift */,
+				AA0000010000000000000207 /* JamSessionState.swift */,
+				AA0000010000000000000209 /* JamVisualTransportState.swift */,
+				AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */,
+				AA000001000000000000004B /* JamView.swift */,
+			);
+			path = Jam;
+			sourceTree = "<group>";
+		};
+		AA0000010000000000000096 /* Capture */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001000000000000005D /* CameraView.swift */,
+				AA0000010000000000000191 /* DapLavaLamp.metal */,
+			);
+			path = Capture;
+			sourceTree = "<group>";
+		};
+		AA000001000000000000018E /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001000000000000018F /* Audio */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		AA000001000000000000018F /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000010000000000000193 /* DapAnalogFamily */,
+				AA000001000000000000018B /* Drums */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
 		AA000001000000000000097 /* Models */ = {
 			isa = PBXGroup;
 			children = (
@@ -155,45 +203,6 @@
 				AA000001000000000000016B /* PhotoMetadataGenerator.swift */,
 			);
 			path = Services;
-			sourceTree = "<group>";
-		};
-		AA000001000000000000018E /* Resources */ = {
-			isa = PBXGroup;
-			children = (
-				AA000001000000000000018F /* Audio */,
-			);
-			path = Resources;
-			sourceTree = "<group>";
-		};
-		AA000001000000000000018F /* Audio */ = {
-			isa = PBXGroup;
-			children = (
-				AA0000010000000000000193 /* DapAnalogFamily */,
-				AA000001000000000000018B /* Drums */,
-			);
-			path = Audio;
-			sourceTree = "<group>";
-		};
-		AA0000010000000000000095 /* Jam */ = {
-			isa = PBXGroup;
-			children = (
-				AA0000010000000000000197 /* JamAssignments.swift */,
-				AA000001000000000000004D /* JamArrangementBuilder.swift */,
-				AA0000010000000000000201 /* JamEffects.swift */,
-			AA000001000000000000017B /* JamGrooveLibrary.swift */,
-				AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */,
-				AA000001000000000000004B /* JamView.swift */,
-			);
-			path = Jam;
-			sourceTree = "<group>";
-		};
-		AA0000010000000000000096 /* Capture */ = {
-			isa = PBXGroup;
-			children = (
-				AA000001000000000000005D /* CameraView.swift */,
-				AA0000010000000000000191 /* DapLavaLamp.metal */,
-			);
-			path = Capture;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -276,6 +285,9 @@
 				AA000001000000000000017A /* JamGrooveLibrary.swift in Sources */,
 				AA0000010000000000000200 /* JamEffects.swift in Sources */,
 				AA0000010000000000000198 /* JamPhotoSelectorSheet.swift in Sources */,
+				AA0000010000000000000204 /* JamPlaybackController.swift in Sources */,
+				AA0000010000000000000206 /* JamSessionState.swift in Sources */,
+				AA0000010000000000000208 /* JamVisualTransportState.swift in Sources */,
 				AA000001000000000000004A /* JamView.swift in Sources */,
 				AA000001000000000000005C /* CameraView.swift in Sources */,
 				AA0000010000000000000190 /* DapLavaLamp.metal in Sources */,
@@ -427,6 +439,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Dap/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Dap;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -460,6 +473,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Dap/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Dap;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
