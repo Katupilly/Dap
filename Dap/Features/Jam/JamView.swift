@@ -13,7 +13,8 @@ struct JamView: View {
     let library: PhotoLibraryViewModel
     let isActive: Bool
     let initialJam: PersistedJam?
-    let onClose: (() -> Void)?
+    let initialCoverData: Data?
+    let onClose: (() async -> Void)?
 
     private let arrangementBuilder = JamArrangementBuilder(bpm: Int(jamBPM))
 
@@ -46,11 +47,13 @@ struct JamView: View {
         library: PhotoLibraryViewModel,
         isActive: Bool,
         initialJam: PersistedJam? = nil,
-        onClose: (() -> Void)? = nil
+        initialCoverData: Data? = nil,
+        onClose: (() async -> Void)? = nil
     ) {
         self.library = library
         self.isActive = isActive
         self.initialJam = initialJam
+        self.initialCoverData = initialCoverData
         self.onClose = onClose
     }
 
@@ -119,15 +122,7 @@ struct JamView: View {
                 VStack(spacing: 18) {
                     sessionHeader
 
-                    if hasAnySelection {
-                        sequencerAndStatus
-                    }
-
-                    if selectedSounds.isEmpty {
-                        emptyState
-                    } else {
-                        selectedPhotoArea
-                    }
+                    sessionBody
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, bottomReserve)
@@ -275,7 +270,9 @@ struct JamView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Back to Jam Library")
 
-            Text(session.jamName)
+            sessionHeaderCover
+
+            Text(sessionDisplayName)
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -283,6 +280,46 @@ struct JamView: View {
             Spacer(minLength: 0)
         }
         .padding(.top, 4)
+    }
+
+    @ViewBuilder
+    private var sessionHeaderCover: some View {
+        Color.clear
+            .frame(width: 52, height: 52)
+            .overlay {
+                ZStack {
+                    if let initialCoverImage {
+                        Image(uiImage: initialCoverImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        Rectangle()
+                            .fill(.secondary.opacity(0.15))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(.white.opacity(0.10), lineWidth: 1)
+            }
+    }
+
+    @ViewBuilder
+    private var sessionBody: some View {
+        Group {
+            if hasAnySelection {
+                sequencerAndStatus
+            }
+
+            if selectedSounds.isEmpty {
+                emptyState
+            } else {
+                selectedPhotoArea
+            }
+        }
     }
 
     private func loadPersistedJam(id: UUID) {
@@ -336,42 +373,14 @@ struct JamView: View {
         }
     }
 
-    private func clearActiveJam() {
-        Task {
-            await flushAutosave()
-            await MainActor.run {
-                cancelAutosaveTask()
-                clearTransportAndPlayback()
-                session.activeJamID = nil
-                session.jamName = PersistedJam.defaultName
-                session.jamCreatedAt = nil
-                session.slotAssignments = JamSlotAssignments()
-                session.drumKitSelection = .auto
-                session.effectSettings = .default
-                session.vibePosition = CGPoint(x: 0.5, y: 0.5)
-                session.activeArrangement = nil
-                visualTransport.reset()
-            }
-        }
-    }
-
     private func closeSessionAndReturnToLibrary() {
         Task {
             await flushAutosave()
-            await MainActor.run {
-                cancelAutosaveTask()
-                clearTransportAndPlayback()
-                session.activeJamID = nil
-                session.jamName = PersistedJam.defaultName
-                session.jamCreatedAt = nil
-                session.slotAssignments = JamSlotAssignments()
-                session.drumKitSelection = .auto
-                session.effectSettings = .default
-                session.vibePosition = CGPoint(x: 0.5, y: 0.5)
-                session.activeArrangement = nil
-                visualTransport.reset()
-                onClose?()
-            }
+            clearTransportAndPlayback()
+            selectedPanel = .none
+            isPanelPresented = false
+            visualTransport.reset()
+            await onClose?()
         }
     }
 
@@ -919,6 +928,16 @@ struct JamView: View {
             addPhotosButton(isLarge: true)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var sessionDisplayName: String {
+        session.activeJamID == nil
+            ? PersistedJam.normalizedName(initialJam?.name ?? PersistedJam.defaultName)
+            : session.jamName
+    }
+
+    private var initialCoverImage: UIImage? {
+        initialCoverData.flatMap(UIImage.init(data:))
     }
 
     private var selectedPhotoArea: some View {

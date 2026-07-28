@@ -61,11 +61,7 @@ struct JamCard: View {
                     .accessibilityLabel("Cancel Jam name edit")
                 } else {
                     Button(action: onOpen) {
-                        Text(name)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        cardTitle
                     }
                     .buttonStyle(.plain)
 
@@ -113,6 +109,14 @@ struct JamCard: View {
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .stroke(.white.opacity(0.10), lineWidth: 1)
         }
+    }
+
+    private var cardTitle: some View {
+        Text(name)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func updateCoverImage() {
