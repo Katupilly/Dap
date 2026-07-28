@@ -27,6 +27,7 @@ struct JamView: View {
     @State private var isDrumKitPendingIndicatorPulsing = false
     @State private var drumKitConfirmationPulseTrigger = 0
     @State private var swapArrangementVersion = 0
+    @State private var effectSettings = JamEffectSettings.default
     @State private var currentStep: Int?
     @State private var activeSoundIDs: Set<UUID> = []
     @State private var activeArrangement: JamArrangement?
@@ -35,6 +36,12 @@ struct JamView: View {
 
     private let panelDockGap: CGFloat = 14
     private let bottomReserve: CGFloat = 168
+    private let dockHeight: CGFloat = 68
+    private let dockBottomInset: CGFloat = 82
+    private let playbackBottomInset: CGFloat = 16
+    private let effectsPanelWidth: CGFloat = 352
+    private let effectsPanelHeight: CGFloat = 392
+    private let effectsPanelCornerRadius: CGFloat = 22
 
     private var selectedSounds: [PhotoSound] {
         slotAssignments.allPhotoIDs.compactMap { id in
@@ -169,6 +176,7 @@ struct JamView: View {
 
             if isPanelPresented {
                 Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         closePanel()
@@ -200,6 +208,10 @@ struct JamView: View {
         }
         .sensoryFeedback(.selection, trigger: appliedArrangementVersion)
         .sensoryFeedback(.success, trigger: swapArrangementVersion)
+        .onChange(of: effectSettings) { _, newSettings in
+            let bpm = activeArrangement.map { Double($0.sequence.harmony.bpm) } ?? 96.0
+            library.setJamEffects(newSettings, bpm: bpm)
+        }
         .sheet(isPresented: $isPhotoSelectorPresented) {
             JamPhotoSelectorSheet(
                 sounds: library.items,
@@ -254,16 +266,32 @@ struct JamView: View {
     @ViewBuilder
     private var panelLayer: some View {
         if isPanelPresented || selectedPanel != .none {
+            let size = panelSize(for: selectedPanel)
             ZStack(alignment: .bottom) {
                 panelContent
-                    .scaleEffect(isPanelPresented ? 1 : 0.94, anchor: .bottom)
+                    .scaleEffect(isPanelPresented ? 1 : 0.97, anchor: .bottom)
                     .opacity(isPanelPresented ? 1 : 0)
             }
-            .frame(width: 254, height: panelLayerHeight)
+            .frame(width: size.width, height: size.height)
             .frame(maxWidth: .infinity)
-            .padding(.bottom, 82 + 68 + panelDockGap)
-            .allowsHitTesting(isPanelPresented)
+            .padding(.bottom, dockBottomInset + dockHeight + panelDockGap)
+            .animation(panelSizeAnimation, value: selectedPanel)
         }
+    }
+
+    private func panelSize(for panel: JamControlPanel) -> CGSize {
+        switch panel {
+        case .vibe:
+            return CGSize(width: 254, height: 254)
+        case .effects, .none:
+            return CGSize(width: effectsPanelWidth, height: effectsPanelHeight)
+        }
+    }
+
+    private var panelSizeAnimation: Animation {
+        reduceMotion
+            ? .easeOut(duration: 0.18)
+            : .spring(response: 0.28, dampingFraction: 0.96)
     }
 
     @ViewBuilder
@@ -291,35 +319,206 @@ struct JamView: View {
             }
         }
         .frame(width: 254, height: 254)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .accessibilityLabel("Vibe control")
         .accessibilityValue(thumbnailLabel)
     }
 
     private var effectsPanelContent: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+        let width = panelSize(for: .effects).width
+        let height = panelSize(for: .effects).height
+        let activeCount = activeEffectsCount
+
+        return VStack(alignment: .leading, spacing: 0) {
+            effectsHeader(activeCount: activeCount)
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 14)
+
+            effectRow(
+                systemImage: "water.waves",
+                title: "Reverb",
+                description: "Medium Hall",
+                isEnabled: $effectSettings.reverbEnabled,
+                mixValue: Binding(
+                    get: { Double(effectSettings.reverbMix) },
+                    set: { effectSettings.reverbMix = Float($0) }
+                ),
+                enableLabel: "Reverb",
+                mixLabel: "Reverb Mix"
+            )
+            .padding(.horizontal, 18)
+
+            effectDivider
+                .padding(.horizontal, 18)
+
+            effectRow(
+                systemImage: "repeat",
+                title: "Delay",
+                description: "Dotted 1/8",
+                isEnabled: $effectSettings.delayEnabled,
+                mixValue: Binding(
+                    get: { Double(effectSettings.delayMix) },
+                    set: { effectSettings.delayMix = Float($0) }
+                ),
+                enableLabel: "Delay",
+                mixLabel: "Delay Mix"
+            )
+            .padding(.horizontal, 18)
+
+            effectRow(
+                systemImage: "waveform.path",
+                title: "LFO",
+                description: "Tremolo · 1/2",
+                isEnabled: $effectSettings.lfoEnabled,
+                mixValue: Binding(
+                    get: { Double(effectSettings.lfoAmount) },
+                    set: { effectSettings.lfoAmount = Float($0) }
+                ),
+                enableLabel: "LFO",
+                mixLabel: "LFO Amount"
+            )
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
+        }
+        .frame(width: width, height: height, alignment: .topLeading)
+        .background {
+            RoundedRectangle(cornerRadius: effectsPanelCornerRadius, style: .continuous)
                 .fill(Color(uiColor: .secondarySystemBackground))
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
-            VStack(spacing: 8) {
-                Text("Effect Rack")
-                    .font(.subheadline.weight(.semibold))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: effectsPanelCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Effect Rack")
+    }
+
+    private var activeEffectsCount: Int {
+        var count = 0
+        if effectSettings.reverbEnabled { count += 1 }
+        if effectSettings.delayEnabled { count += 1 }
+        if effectSettings.lfoEnabled { count += 1 }
+        return count
+    }
+
+    private func effectsHeader(activeCount: Int) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Effects")
+                    .font(.title3.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text("No effects yet")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text("Rack is empty")
-                    .font(.caption2.weight(.medium))
+                Text(activeEffectsDescription(activeCount: activeCount))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            .padding(16)
+            Spacer(minLength: 0)
         }
-        .frame(width: 254, height: 160)
-        .accessibilityLabel("Effect Rack")
-        .accessibilityValue("Empty")
+    }
+
+    private func activeEffectsDescription(activeCount: Int) -> String {
+        switch activeCount {
+        case 0: return "No effects active"
+        case 1: return "1 active"
+        case 2: return "2 active"
+        case 3: return "3 active"
+        default: return "No effects active"
+        }
+    }
+
+    private var effectDivider: some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+                .padding(.leading, 50)
+        }
+        .padding(.vertical, 0)
+    }
+
+    @ViewBuilder
+    private func effectRow(
+        systemImage: String,
+        title: String,
+        description: String,
+        isEnabled: Binding<Bool>,
+        mixValue: Binding<Double>,
+        enableLabel: String,
+        mixLabel: String
+    ) -> some View {
+        let percentage = Int((mixValue.wrappedValue * 100).rounded())
+        let enabled = isEnabled.wrappedValue
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                effectIcon(systemImage: systemImage, enabled: enabled)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Text("\(percentage)%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                enableSwitch(
+                    isEnabled: isEnabled,
+                    enableLabel: enableLabel
+                )
+            }
+
+            Slider(
+                value: mixValue,
+                in: 0...1
+            )
+            .controlSize(.small)
+            .tint(.primary)
+            .opacity(enabled ? 1 : 0.55)
+            .accessibilityLabel(mixLabel)
+            .accessibilityValue("\(percentage) percent")
+        }
+        .padding(.vertical, 12)
+    }
+
+    private func effectIcon(systemImage: String, enabled: Bool) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 18, weight: .semibold))
+            .frame(width: 38, height: 38)
+            .foregroundStyle(enabled ? Color.primary : Color.secondary)
+            .background {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(
+                        enabled
+                            ? Color.primary.opacity(0.10)
+                            : Color.secondary.opacity(0.10)
+                    )
+            }
+            .accessibilityHidden(true)
+    }
+
+    private func enableSwitch(
+        isEnabled: Binding<Bool>,
+        enableLabel: String
+    ) -> some View {
+        let enabled = isEnabled.wrappedValue
+        return Toggle("", isOn: isEnabled)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .accessibilityLabel(enabled ? "Disable \(enableLabel)" : "Enable \(enableLabel)")
+            .accessibilityValue(enabled ? "On" : "Off")
     }
 
     private func handlePanelToggle(_ target: JamControlPanel) {
@@ -345,10 +544,6 @@ struct JamView: View {
                 selectedPanel = .none
             }
         }
-    }
-
-    private var panelLayerHeight: CGFloat {
-        254
     }
 
     private var panelRevealAnimation: Animation {
@@ -624,6 +819,8 @@ struct JamView: View {
             percussion: arrangement.percussion,
             loops: true
         )
+        // Forward the current Effect Rack settings to the dedicated Jam chain.
+        library.setJamEffects(effectSettings, bpm: Double(arrangement.sequence.harmony.bpm))
         updateStepState(step: 0, arrangement: arrangement)
         isPlaying = true
         hasPendingArrangementChanges = false
@@ -686,10 +883,9 @@ struct JamView: View {
                         }
 
                         activeArrangement = nextArrangement
-                        library.playTransientSequence(
-                            nextArrangement.sequence,
-                            percussion: nextArrangement.percussion,
-                            loops: true
+                        library.updateTransientLoop(
+                            sequence: nextArrangement.sequence,
+                            percussion: nextArrangement.percussion
                         )
                         hasPendingArrangementChanges = false
                         appliedArrangementVersion += 1
