@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import OSLog
 
 private let jamStepsPerBar = MusicSequence.steps
 private let jamBPM = 96.0
@@ -7,9 +8,12 @@ private let jamBPM = 96.0
 struct JamView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     let library: PhotoLibraryViewModel
     let isActive: Bool
+    let initialJam: PersistedJam?
+    let onClose: (() -> Void)?
 
     private let arrangementBuilder = JamArrangementBuilder(bpm: Int(jamBPM))
 
@@ -21,8 +25,13 @@ struct JamView: View {
     @State private var isPhotoSelectorPresented = false
     @State private var swapArrangementVersion = 0
     @State private var transportTask: Task<Void, Never>?
+    @State private var autosaveTask: Task<Void, Never>?
+    @State private var persistenceError: JamPersistenceError?
+    @State private var hasAppliedInitialJam = false
 
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Dap", category: "JamView")
     private let transportPollInterval: Duration = .milliseconds(33)
+    private let autosaveDebounce: Duration = .milliseconds(500)
 
     private let panelDockGap: CGFloat = 14
     private let bottomReserve: CGFloat = 168
@@ -32,6 +41,18 @@ struct JamView: View {
     private let effectsPanelWidth: CGFloat = 352
     private let effectsPanelHeight: CGFloat = 392
     private let effectsPanelCornerRadius: CGFloat = 22
+
+    init(
+        library: PhotoLibraryViewModel,
+        isActive: Bool,
+        initialJam: PersistedJam? = nil,
+        onClose: (() -> Void)? = nil
+    ) {
+        self.library = library
+        self.isActive = isActive
+        self.initialJam = initialJam
+        self.onClose = onClose
+    }
 
     private var selectedSounds: [PhotoSound] {
         session.slotAssignments.allPhotoIDs.compactMap { id in
@@ -96,6 +117,8 @@ struct JamView: View {
 
             ScrollView {
                 VStack(spacing: 18) {
+                    sessionHeader
+
                     if hasAnySelection {
                         sequencerAndStatus
                     }
@@ -151,6 +174,28 @@ struct JamView: View {
         .onChange(of: session.effectSettings) { _, newSettings in
             let bpm = session.activeArrangement.map { Double($0.sequence.harmony.bpm) } ?? 96.0
             library.setJamEffects(newSettings, bpm: bpm)
+            scheduleAutosave()
+        }
+        .onChange(of: session.slotAssignments) { _, assignments in
+            if !session.isPlaying {
+                session.activeArrangement = buildArrangement(for: assignments)
+            }
+            scheduleAutosave()
+        }
+        .onChange(of: session.drumKitSelection) { _, _ in
+            if !session.isPlaying {
+                session.activeArrangement = buildArrangement()
+            }
+            scheduleAutosave()
+        }
+        .onChange(of: session.vibePosition) { _, _ in
+            if !session.isPlaying {
+                session.activeArrangement = buildArrangement()
+            }
+            scheduleAutosave()
+        }
+        .onChange(of: session.jamName) { _, _ in
+            scheduleAutosave()
         }
         .sheet(isPresented: $isPhotoSelectorPresented) {
             JamPhotoSelectorSheet(
@@ -165,13 +210,19 @@ struct JamView: View {
             library.setTransientLoopUpdatePreparedHandler {
                 playbackController.markLoopUpdatePrepared()
             }
+            if !hasAppliedInitialJam, let initialJam {
+                hasAppliedInitialJam = true
+                applyPersistedJam(initialJam)
+            }
         }
         .onDisappear {
             library.clearTransientLoopUpdatePreparedHandler()
+            Task { await flushAutosave() }
             clearTransportAndPlayback()
         }
         .onChange(of: isActive) { _, isActive in
             guard !isActive else { return }
+            Task { await flushAutosave() }
             clearTransportAndPlayback()
         }
         .onChange(of: library.items.map(\.id)) { _, itemIDs in
@@ -191,13 +242,226 @@ struct JamView: View {
 
             if session.isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
                 sendPendingArrangementToPlayer()
+            } else if !session.isPlaying {
+                session.activeArrangement = buildArrangement(for: cleanedAssignments)
             }
 
             session.slotAssignments = cleanedAssignments
+            scheduleAutosave()
         }
         .onChange(of: library.isTransientPlaybackActive) { _, isActive in
             guard !isActive, session.isPlaying else { return }
             clearTransportState()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .background else { return }
+            Task { await flushAutosave() }
+        }
+    }
+
+    // MARK: - Jam persistence
+
+    private var sessionHeader: some View {
+        HStack(spacing: 12) {
+            Button {
+                closeSessionAndReturnToLibrary()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
+                    .background(.secondary.opacity(0.12), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back to Jam Library")
+
+            Text(session.jamName)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 4)
+    }
+
+    private func loadPersistedJam(id: UUID) {
+        Task {
+            do {
+                let jam = try await JamStore.shared.load(id: id)
+                await MainActor.run {
+                    applyPersistedJam(jam)
+                }
+            } catch {
+                await MainActor.run {
+                    handlePersistenceError(error, context: "load")
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func applyPersistedJam(_ jam: PersistedJam) {
+        cancelAutosaveTask()
+        clearTransportAndPlayback()
+
+        session.activeJamID = jam.id
+        session.jamName = PersistedJam.normalizedName(jam.name)
+        session.jamCreatedAt = jam.createdAt
+        session.vibePosition = jam.vibePosition.cgPoint
+        session.drumKitSelection = MusicDrumKitSelection(persistedValue: jam.drumKitSelection)
+        session.effectSettings = jam.effectSettings.jamEffectSettings
+        session.isPlaying = false
+        visualTransport.reset()
+        playbackController.clearPendingState()
+        playbackController.clearDrumKitPendingFeedback()
+
+        let validIDs = Set(library.items.map(\.id))
+        let playableIDs = Set(
+            library.items.compactMap { sound in
+                sound.sequence.notes.isEmpty ? nil : sound.id
+            }
+        )
+        let persistedAssignments = jam.slotAssignments.jamSlotAssignments
+        let reconciledAssignments = persistedAssignments.pruningInvalidIDs(
+            validIDs: validIDs,
+            playableIDs: playableIDs
+        )
+
+        session.slotAssignments = reconciledAssignments
+        session.activeArrangement = buildArrangement(for: reconciledAssignments)
+
+        if snapshotDiffersFromPersistedJam(jam) {
+            scheduleAutosave(debounce: .zero)
+        }
+    }
+
+    private func clearActiveJam() {
+        Task {
+            await flushAutosave()
+            await MainActor.run {
+                cancelAutosaveTask()
+                clearTransportAndPlayback()
+                session.activeJamID = nil
+                session.jamName = PersistedJam.defaultName
+                session.jamCreatedAt = nil
+                session.slotAssignments = JamSlotAssignments()
+                session.drumKitSelection = .auto
+                session.effectSettings = .default
+                session.vibePosition = CGPoint(x: 0.5, y: 0.5)
+                session.activeArrangement = nil
+                visualTransport.reset()
+            }
+        }
+    }
+
+    private func closeSessionAndReturnToLibrary() {
+        Task {
+            await flushAutosave()
+            await MainActor.run {
+                cancelAutosaveTask()
+                clearTransportAndPlayback()
+                session.activeJamID = nil
+                session.jamName = PersistedJam.defaultName
+                session.jamCreatedAt = nil
+                session.slotAssignments = JamSlotAssignments()
+                session.drumKitSelection = .auto
+                session.effectSettings = .default
+                session.vibePosition = CGPoint(x: 0.5, y: 0.5)
+                session.activeArrangement = nil
+                visualTransport.reset()
+                onClose?()
+            }
+        }
+    }
+
+    @MainActor
+    private func currentPersistedJamSnapshot() -> PersistedJam? {
+        guard let id = session.activeJamID,
+              let createdAt = session.jamCreatedAt else {
+            return nil
+        }
+
+        return PersistedJam(
+            schemaVersion: PersistedJam.currentSchemaVersion,
+            id: id,
+            name: PersistedJam.normalizedName(session.jamName),
+            createdAt: createdAt,
+            updatedAt: Date(),
+            slotAssignments: PersistedJamSlotAssignments(session.slotAssignments),
+            vibePosition: PersistedPoint(session.vibePosition),
+            drumKitSelection: session.drumKitSelection.persistedValue,
+            effectSettings: PersistedJamEffectSettings(session.effectSettings)
+        )
+    }
+
+    @MainActor
+    private func scheduleAutosave(debounce: Duration? = nil) {
+        guard session.activeJamID != nil else { return }
+        let delay = debounce ?? autosaveDebounce
+        cancelAutosaveTask()
+
+        autosaveTask = Task { @MainActor in
+            if delay != .zero {
+                try? await Task.sleep(for: delay)
+            }
+            guard !Task.isCancelled else { return }
+            await saveCurrentJamSnapshot()
+        }
+    }
+
+    @MainActor
+    private func flushAutosave() async {
+        guard session.activeJamID != nil else { return }
+        cancelAutosaveTask()
+        await saveCurrentJamSnapshot()
+    }
+
+    @MainActor
+    private func saveCurrentJamSnapshot() async {
+        guard let snapshot = currentPersistedJamSnapshot() else { return }
+
+        do {
+            _ = try await JamStore.shared.save(snapshot)
+            persistenceError = nil
+        } catch {
+            handlePersistenceError(error, context: "save")
+        }
+    }
+
+    @MainActor
+    private func cancelAutosaveTask() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+    }
+
+    @MainActor
+    private func snapshotDiffersFromPersistedJam(_ jam: PersistedJam) -> Bool {
+        guard let snapshot = currentPersistedJamSnapshot() else { return false }
+        return snapshot.name != jam.name
+            || snapshot.slotAssignments != jam.slotAssignments
+            || snapshot.vibePosition != jam.vibePosition
+            || snapshot.drumKitSelection != jam.drumKitSelection
+            || snapshot.effectSettings != jam.effectSettings
+    }
+
+    @MainActor
+    private func handlePersistenceError(_ error: Error, context: String) {
+        if let storeError = error as? JamStore.StoreError {
+            switch storeError {
+            case .notFound:
+                persistenceError = .notFound
+                logger.error("Jam persistence \(context, privacy: .public) failed: not found")
+            case .corruptedFile(let id):
+                persistenceError = .corruptedFile(id)
+                logger.error("Jam persistence \(context, privacy: .public) failed: corrupted file \(id.uuidString, privacy: .public)")
+            case .unsupportedSchemaVersion(let version):
+                persistenceError = .unsupportedSchemaVersion(version)
+                logger.error("Jam persistence \(context, privacy: .public) failed: unsupported schema \(version, privacy: .public)")
+            }
+        } else {
+            persistenceError = .writeFailed
+            logger.error("Jam persistence \(context, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -1002,11 +1266,27 @@ struct JamView: View {
     }
 
     private func buildArrangement() -> JamArrangement? {
+        buildArrangement(for: session.slotAssignments)
+    }
+
+    private func buildArrangement(for assignments: JamSlotAssignments) -> JamArrangement? {
+        let roleByID = assignments.assignedRolesByID
+        let playableAssignedSounds = library.items.compactMap { sound -> AssignedSound? in
+            guard !sound.sequence.notes.isEmpty,
+                  let role = roleByID[sound.id] else {
+                return nil
+            }
+            return AssignedSound(sound: sound, role: role)
+        }
+        let orderedRoles: [JamRole] = [.bass, .harmony, .melody]
+        let orderedAssignedSounds = orderedRoles.compactMap { role in
+            playableAssignedSounds.first { $0.role == role }
+        }
         let region = JamGrooveLibrary.region(for: session.vibePosition)
         let drumKit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
 
         return arrangementBuilder.build(
-            assignedSounds: assignedSounds,
+            assignedSounds: orderedAssignedSounds,
             vibePosition: session.vibePosition,
             drumKit: drumKit
         )
@@ -1345,6 +1625,13 @@ private enum JamControlPanel: Equatable {
     case kits
     case vibe
     case effects
+}
+
+private enum JamPersistenceError: Equatable {
+    case notFound
+    case corruptedFile(UUID)
+    case unsupportedSchemaVersion(Int)
+    case writeFailed
 }
 
 private struct JamSequencerAndStatus: View {

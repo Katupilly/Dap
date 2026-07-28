@@ -35,6 +35,11 @@
 		AA0000010000000000000204 /* JamPlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000205 /* JamPlaybackController.swift */; };
 		AA0000010000000000000206 /* JamSessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000207 /* JamSessionState.swift */; };
 		AA0000010000000000000208 /* JamVisualTransportState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000209 /* JamVisualTransportState.swift */; };
+		AA000001000000000000020A /* PersistedJam.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000020B /* PersistedJam.swift */; };
+		AA000001000000000000020C /* JamStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000020D /* JamStore.swift */; };
+		AA000001000000000000020E /* JamLibraryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000020F /* JamLibraryState.swift */; };
+		AA0000010000000000000210 /* JamLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000211 /* JamLibraryView.swift */; };
+		AA0000010000000000000212 /* JamCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000213 /* JamCard.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -68,6 +73,11 @@
 		AA0000010000000000000205 /* JamPlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPlaybackController.swift; sourceTree = "<group>"; };
 		AA0000010000000000000207 /* JamSessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamSessionState.swift; sourceTree = "<group>"; };
 		AA0000010000000000000209 /* JamVisualTransportState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamVisualTransportState.swift; sourceTree = "<group>"; };
+		AA000001000000000000020B /* PersistedJam.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedJam.swift; sourceTree = "<group>"; };
+		AA000001000000000000020D /* JamStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStore.swift; sourceTree = "<group>"; };
+		AA000001000000000000020F /* JamLibraryState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamLibraryState.swift; sourceTree = "<group>"; };
+		AA0000010000000000000211 /* JamLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamLibraryView.swift; sourceTree = "<group>"; };
+		AA0000010000000000000213 /* JamCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamCard.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -143,10 +153,14 @@
 		AA0000010000000000000095 /* Jam */ = {
 			isa = PBXGroup;
 			children = (
+				AA0000010000000000000213 /* JamCard.swift */,
+				AA000001000000000000020F /* JamLibraryState.swift */,
+				AA0000010000000000000211 /* JamLibraryView.swift */,
 				AA0000010000000000000197 /* JamAssignments.swift */,
 				AA000001000000000000004D /* JamArrangementBuilder.swift */,
 				AA0000010000000000000201 /* JamEffects.swift */,
 				AA000001000000000000017B /* JamGrooveLibrary.swift */,
+				AA000001000000000000020B /* PersistedJam.swift */,
 				AA0000010000000000000205 /* JamPlaybackController.swift */,
 				AA0000010000000000000207 /* JamSessionState.swift */,
 				AA0000010000000000000209 /* JamVisualTransportState.swift */,
@@ -196,6 +210,7 @@
 				AA000001000000000000011B /* PhotoMusicPipeline.swift */,
 				AA000001000000000000012B /* RetroCoverRenderer.swift */,
 				AA000001000000000000013B /* PhotoStore.swift */,
+				AA000001000000000000020D /* JamStore.swift */,
 				AA000001000000000000014B /* MusicPlayer.swift */,
 				AA0000010000000000000203 /* JamAudioRenderer.swift */,
 				AA0000010000000000000195 /* MelodicSampleLibrary.swift */,
@@ -288,6 +303,10 @@
 				AA0000010000000000000204 /* JamPlaybackController.swift in Sources */,
 				AA0000010000000000000206 /* JamSessionState.swift in Sources */,
 				AA0000010000000000000208 /* JamVisualTransportState.swift in Sources */,
+				AA000001000000000000020A /* PersistedJam.swift in Sources */,
+				AA000001000000000000020E /* JamLibraryState.swift in Sources */,
+				AA0000010000000000000210 /* JamLibraryView.swift in Sources */,
+				AA0000010000000000000212 /* JamCard.swift in Sources */,
 				AA000001000000000000004A /* JamView.swift in Sources */,
 				AA000001000000000000005C /* CameraView.swift in Sources */,
 				AA0000010000000000000190 /* DapLavaLamp.metal in Sources */,
@@ -295,6 +314,7 @@
 				AA000001000000000000011A /* PhotoMusicPipeline.swift in Sources */,
 				AA000001000000000000012A /* RetroCoverRenderer.swift in Sources */,
 				AA000001000000000000013A /* PhotoStore.swift in Sources */,
+				AA000001000000000000020C /* JamStore.swift in Sources */,
 				AA000001000000000000014A /* MusicPlayer.swift in Sources */,
 				AA0000010000000000000202 /* JamAudioRenderer.swift in Sources */,
 				AA0000010000000000000194 /* MelodicSampleLibrary.swift in Sources */,
