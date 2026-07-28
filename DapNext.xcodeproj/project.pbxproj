@@ -31,6 +31,7 @@
 		AA000001000000000000016A /* PhotoMetadataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000016B /* PhotoMetadataGenerator.swift */; };
 		AA000001000000000000018C /* DrumSampleLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000018D /* DrumSampleLibrary.swift */; };
 		AA0000010000000000000194 /* MelodicSampleLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000195 /* MelodicSampleLibrary.swift */; };
+		AA0000010000000000000202 /* JamAudioRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000203 /* JamAudioRenderer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -60,6 +61,7 @@
 		AA000001000000000000016B /* PhotoMetadataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMetadataGenerator.swift; sourceTree = "<group>"; };
 		AA000001000000000000018D /* DrumSampleLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrumSampleLibrary.swift; sourceTree = "<group>"; };
 		AA0000010000000000000195 /* MelodicSampleLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MelodicSampleLibrary.swift; sourceTree = "<group>"; };
+		AA0000010000000000000203 /* JamAudioRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamAudioRenderer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -147,6 +149,7 @@
 				AA000001000000000000012B /* RetroCoverRenderer.swift */,
 				AA000001000000000000013B /* PhotoStore.swift */,
 				AA000001000000000000014B /* MusicPlayer.swift */,
+				AA0000010000000000000203 /* JamAudioRenderer.swift */,
 				AA0000010000000000000195 /* MelodicSampleLibrary.swift */,
 				AA000001000000000000018D /* DrumSampleLibrary.swift */,
 				AA000001000000000000016B /* PhotoMetadataGenerator.swift */,
@@ -281,6 +284,7 @@
 				AA000001000000000000012A /* RetroCoverRenderer.swift in Sources */,
 				AA000001000000000000013A /* PhotoStore.swift in Sources */,
 				AA000001000000000000014A /* MusicPlayer.swift in Sources */,
+				AA0000010000000000000202 /* JamAudioRenderer.swift in Sources */,
 				AA0000010000000000000194 /* MelodicSampleLibrary.swift in Sources */,
 				AA000001000000000000018C /* DrumSampleLibrary.swift in Sources */,
 				AA000001000000000000015A /* PhotoLibraryViewModel.swift in Sources */,
