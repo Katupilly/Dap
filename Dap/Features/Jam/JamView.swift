@@ -803,7 +803,7 @@ struct JamView: View {
         }
 
         beginDrumKitPendingFeedback()
-        sendCurrentArrangementToPlayer()
+        hasPendingArrangementChanges = true
     }
 
     private func startPlaybackIfPossible() {
@@ -917,15 +917,8 @@ struct JamView: View {
             }
         )
 
-        if reduceMotion {
-            currentStep = step
-            activeSoundIDs = activeIDs
-        } else {
-            withAnimation(.easeInOut(duration: jamStepDuration * 0.6)) {
-                currentStep = step
-                activeSoundIDs = activeIDs
-            }
-        }
+        currentStep = step
+        activeSoundIDs = activeIDs
     }
 
     private func buildArrangement() -> JamArrangement? {
@@ -1058,8 +1051,6 @@ private struct JamSelectedPhotoTile: View {
                     .fill(Color.white.opacity(isActive ? 0.08 : 0))
             }
             .opacity(role == nil ? 0.58 : 1)
-            .scaleEffect(reduceMotion ? 1 : (isActive ? 1.03 : 1.0))
-            .animation(reduceMotion ? nil : .easeInOut(duration: jamStepDuration * 0.6), value: isActive)
         .frame(maxWidth: .infinity)
         .modifier(JamTileDragAndDrop(
             role: role,
@@ -1306,7 +1297,6 @@ private struct JamSequencerAndStatus: View {
                     : .clear,
                 radius: isActiveInRow && isPlayhead ? 3 : 0
             )
-            .animation(.easeOut(duration: 0.11), value: currentStep)
             .accessibilityHidden(true)
     }
 
