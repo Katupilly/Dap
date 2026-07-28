@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-struct PersistedJam: Codable, Identifiable {
+struct PersistedJam: Codable, Identifiable, Hashable {
     static let currentSchemaVersion = 1
 
     let schemaVersion: Int
@@ -15,19 +15,19 @@ struct PersistedJam: Codable, Identifiable {
     var effectSettings: PersistedJamEffectSettings
 }
 
-struct PersistedJamSlotAssignments: Codable, Equatable {
+struct PersistedJamSlotAssignments: Codable, Hashable {
     var bass: UUID?
     var harmony: UUID?
     var melody: UUID?
     var reserve: [UUID]
 }
 
-struct PersistedPoint: Codable, Equatable {
+struct PersistedPoint: Codable, Hashable {
     var x: Double
     var y: Double
 }
 
-struct PersistedJamEffectSettings: Codable, Equatable {
+struct PersistedJamEffectSettings: Codable, Hashable {
     var reverbEnabled: Bool
     var reverbMix: Float
     var delayEnabled: Bool

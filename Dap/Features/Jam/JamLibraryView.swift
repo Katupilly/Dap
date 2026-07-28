@@ -1,19 +1,22 @@
 import SwiftUI
 
 struct JamLibraryView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     let library: PhotoLibraryViewModel
     let isActive: Bool
+    let onSessionPresentationChange: (Bool) -> Void
 
     @State private var state = JamLibraryState()
     @State private var pendingDelete: PersistedJam?
     @FocusState private var isSearchFocused: Bool
 
     private let horizontalPadding: CGFloat = 20
+    private let segmentedControlTopInset: CGFloat = 8
+    private let segmentedControlHeight: CGFloat = 38
+    private let segmentToSearchSpacing: CGFloat = 22
     private let searchHeight: CGFloat = 46
-    private let topBlurHeight: CGFloat = 120
-    private let topContentInset: CGFloat = 84
+    private let gridTopSpacing: CGFloat = 20
+    private let topBlurFadeTail: CGFloat = 24
+    private let topBlurHeight: CGFloat = 160
     private let bottomBlurHeight: CGFloat = 88
     private let gridSpacing: CGFloat = 18
 
@@ -22,26 +25,47 @@ struct JamLibraryView: View {
         GridItem(.flexible(), spacing: 14)
     ]
 
+    private var searchTopInset: CGFloat {
+        segmentedControlTopInset + segmentedControlHeight + segmentToSearchSpacing
+    }
+
+    private var topContentInset: CGFloat {
+        searchTopInset + searchHeight + gridTopSpacing
+    }
+
     var body: some View {
-        ZStack {
-            if let selectedJam = state.selectedJam {
-                JamView(
-                    library: library,
-                    isActive: isActive,
-                    initialJam: selectedJam,
-                    initialCoverData: coverData(for: selectedJam),
-                    onClose: {
-                        await state.closeSession()
-                    }
-                )
-                .id(selectedJam.id)
-                .transition(sessionTransition)
-            } else {
-                libraryContent
-                    .transition(sessionTransition)
-            }
+        NavigationStack {
+            libraryContent
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(item: $state.selectedJam) { selectedJam in
+                    JamView(
+                        library: library,
+                        isActive: isActive,
+                        initialJam: selectedJam,
+                        initialCoverData: coverData(for: selectedJam),
+                        onClose: {
+                            await state.closeSession()
+                        }
+                    )
+                    .id(selectedJam.id)
+                    .toolbar(.hidden, for: .navigationBar)
+                    .navigationBarBackButtonHidden(true)
+                }
         }
-        .animation(sessionAnimation, value: state.selectedJam?.id)
+        .onChange(of: state.selectedJam?.id) { oldValue, newValue in
+            onSessionPresentationChange(newValue != nil)
+            // Covers the interactive swipe-back gesture, which clears
+            // `selectedJam` directly through the binding without going
+            // through `closeSession()`.
+            guard oldValue != nil, newValue == nil else { return }
+            Task { await state.reload() }
+        }
+        .onAppear {
+            onSessionPresentationChange(state.selectedJam != nil)
+        }
+        .onDisappear {
+            onSessionPresentationChange(false)
+        }
         .task {
             await state.loadIfNeeded()
         }
@@ -79,7 +103,7 @@ struct JamLibraryView: View {
 
             searchField
                 .padding(.horizontal, horizontalPadding)
-                .padding(.top, 8)
+                .padding(.top, searchTopInset)
                 .frame(maxHeight: .infinity, alignment: .top)
 
             if shouldShowCreateChrome {
@@ -202,7 +226,7 @@ struct JamLibraryView: View {
                 endPoint: .bottom
             )
         }
-        .frame(height: topBlurHeight)
+        .frame(height: max(topBlurHeight, searchTopInset + searchHeight + topBlurFadeTail))
         .ignoresSafeArea(edges: .top)
         .allowsHitTesting(false)
     }
@@ -281,21 +305,6 @@ struct JamLibraryView: View {
 
     private var shouldShowCreateChrome: Bool {
         !isSearchFocused && state.editingJamID == nil
-    }
-
-    private var sessionAnimation: Animation {
-        reduceMotion
-            ? .easeOut(duration: 0.18)
-            : .easeInOut(duration: 0.28)
-    }
-
-    private var sessionTransition: AnyTransition {
-        reduceMotion
-            ? .opacity
-            : .asymmetric(
-                insertion: .move(edge: .trailing).combined(with: .opacity),
-                removal: .move(edge: .leading).combined(with: .opacity)
-            )
     }
 
     private func dismissSearch() {

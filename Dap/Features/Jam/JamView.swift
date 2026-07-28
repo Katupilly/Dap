@@ -39,6 +39,9 @@ struct JamView: View {
     private let dockHeight: CGFloat = 68
     private let dockBottomInset: CGFloat = 82
     private let playbackBottomInset: CGFloat = 16
+    private let topHeaderInset: CGFloat = 18
+    private let headerThumbnailSize: CGFloat = 24
+    private let headerThumbnailCornerRadius: CGFloat = 5
     private let effectsPanelWidth: CGFloat = 352
     private let effectsPanelHeight: CGFloat = 392
     private let effectsPanelCornerRadius: CGFloat = 22
@@ -118,19 +121,19 @@ struct JamView: View {
         ZStack(alignment: .bottom) {
             Color(uiColor: .systemBackground)
 
-            ScrollView {
-                VStack(spacing: 18) {
-                    sessionHeader
+            GeometryReader { geometry in
+                ViewThatFits(in: .vertical) {
+                    fixedSessionLayout
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-                    sessionBody
+                    ScrollView {
+                        sessionContentStack
+                    }
+                    .scrollIndicators(.hidden)
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, bottomReserve)
-                .frame(maxWidth: .infinity)
             }
             .blur(radius: isPanelPresented ? 2.5 : 0)
             .animation(.easeInOut(duration: 0.18), value: isPanelPresented)
-            .scrollIndicators(.hidden)
 
             if isPanelPresented {
                 Color.clear
@@ -256,8 +259,33 @@ struct JamView: View {
 
     // MARK: - Jam persistence
 
+    private var fixedSessionLayout: some View {
+        VStack(spacing: 18) {
+            sessionHeader
+
+            sessionBody
+
+            Spacer(minLength: bottomReserve)
+        }
+        .padding(.top, topHeaderInset)
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var sessionContentStack: some View {
+        VStack(spacing: 18) {
+            sessionHeader
+
+            sessionBody
+        }
+        .padding(.top, topHeaderInset)
+        .padding(.horizontal, 20)
+        .padding(.bottom, bottomReserve)
+        .frame(maxWidth: .infinity)
+    }
+
     private var sessionHeader: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Button {
                 closeSessionAndReturnToLibrary()
             } label: {
@@ -276,16 +304,16 @@ struct JamView: View {
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .layoutPriority(1)
 
             Spacer(minLength: 0)
         }
-        .padding(.top, 4)
     }
 
     @ViewBuilder
     private var sessionHeaderCover: some View {
         Color.clear
-            .frame(width: 52, height: 52)
+            .frame(width: headerThumbnailSize, height: headerThumbnailSize)
             .overlay {
                 ZStack {
                     if let initialCoverImage {
@@ -300,9 +328,9 @@ struct JamView: View {
                     }
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: headerThumbnailCornerRadius, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: headerThumbnailCornerRadius, style: .continuous)
                     .stroke(.white.opacity(0.10), lineWidth: 1)
             }
     }
