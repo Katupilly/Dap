@@ -319,6 +319,12 @@ final class PhotoLibraryViewModel {
         player.setJamEffects(currentJamEffects, bpm: bpm)
     }
 
+    /// Read-only pass-through to the live Jam transport snapshot.
+    /// The MusicPlayer remains the single source of musical truth.
+    func currentJamTransportSnapshot() -> MusicPlayer.JamTransportSnapshot? {
+        player.currentJamTransportSnapshot()
+    }
+
     func setTransientLoopUpdatePreparedHandler(_ handler: @escaping () -> Void) {
         player.onLoopUpdatePrepared = handler
     }

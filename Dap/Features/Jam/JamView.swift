@@ -3,8 +3,6 @@ import UIKit
 
 private let jamStepsPerBar = MusicSequence.steps
 private let jamBPM = 96.0
-private let jamStepDuration = 60.0 / jamBPM / 4.0
-private let jamBarDuration = jamStepDuration * Double(jamStepsPerBar)
 
 struct JamView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -33,6 +31,17 @@ struct JamView: View {
     @State private var activeArrangement: JamArrangement?
     @State private var transportTask: Task<Void, Never>?
     @State private var appliedArrangementVersion = 0
+
+    // Pending arrangement state. The pending arrangement is built and
+    // sent to the MusicPlayer the moment the user expresses intent, so the
+    // player can debounce and prepare it for the next real audio boundary.
+    // The sequencer keeps showing `activeArrangement` until that boundary.
+    @State private var pendingArrangement: JamArrangement?
+    @State private var previousSnapshotStep: Int? = nil
+    @State private var loopIterationAtPending: Int? = nil
+    @State private var hasPreparedArrangement: Bool = false
+
+    private let transportPollInterval: Duration = .milliseconds(33)
 
     private let panelDockGap: CGFloat = 14
     private let bottomReserve: CGFloat = 168
@@ -250,7 +259,7 @@ struct JamView: View {
             guard cleanedAssignments != previousAssignments else { return }
 
             if isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
-                hasPendingArrangementChanges = true
+                sendPendingArrangementToPlayer()
             }
 
             slotAssignments = cleanedAssignments
@@ -314,7 +323,7 @@ struct JamView: View {
                 .stroke(Color.primary.opacity(0.10), lineWidth: 1)
             VibeControl(position: $vibePosition) {
                 if isPlaying {
-                    hasPendingArrangementChanges = true
+                    sendPendingArrangementToPlayer()
                 }
             }
         }
@@ -747,7 +756,7 @@ struct JamView: View {
 
         slotAssignments = newAssignments
         if isPlaying && newAssignments.hasDifferentActiveSlots(from: previousAssignments) {
-            hasPendingArrangementChanges = true
+            sendPendingArrangementToPlayer()
         }
     }
 
@@ -787,7 +796,7 @@ struct JamView: View {
         withTransaction(transaction) {
             slotAssignments = next
             if isPlaying {
-                hasPendingArrangementChanges = true
+                sendPendingArrangementToPlayer()
             }
         }
         swapArrangementVersion += 1
@@ -803,7 +812,7 @@ struct JamView: View {
         }
 
         beginDrumKitPendingFeedback()
-        hasPendingArrangementChanges = true
+        sendPendingArrangementToPlayer()
     }
 
     private func startPlaybackIfPossible() {
@@ -821,11 +830,49 @@ struct JamView: View {
         )
         // Forward the current Effect Rack settings to the dedicated Jam chain.
         library.setJamEffects(effectSettings, bpm: Double(arrangement.sequence.harmony.bpm))
-        updateStepState(step: 0, arrangement: arrangement)
+        // Do not seed `currentStep` to 0 here. The transport polling task will
+        // read the real sample position from the AVAudioPlayerNode and
+        // surface the first valid step. Until then the sequencer shows nil.
+        currentStep = nil
+        activeSoundIDs = []
         isPlaying = true
         hasPendingArrangementChanges = false
         clearDrumKitPendingFeedback()
+        clearPendingArrangementState()
         startTransportLoop()
+    }
+
+    /// Sends the latest arrangement to the MusicPlayer immediately so it can
+    /// debounce, render, and prepare the next loop buffer. The arrangement
+    /// stays in `pendingArrangement` until the real audio boundary promotes it.
+    private func sendPendingArrangementToPlayer() {
+        guard isPlaying else { return }
+        guard let arrangement = buildArrangement() else {
+            // Nothing playable: drop the pending state instead of hanging on it.
+            clearPendingArrangementState()
+            return
+        }
+
+        pendingArrangement = arrangement
+        // Anchor the iteration so we only promote on the boundary that occurs
+        // *after* the current transport position when the buffer is ready.
+        // The actual promotion is driven by the polling task and the
+        // onLoopUpdatePrepared correlation, not by this anchor alone.
+        loopIterationAtPending = library.currentJamTransportSnapshot()?.loopIteration
+        hasPendingArrangementChanges = true
+        hasPreparedArrangement = false
+        isPreparedDrumKitChangePending = false
+
+        library.updateTransientLoop(
+            sequence: arrangement.sequence,
+            percussion: arrangement.percussion
+        )
+    }
+
+    private func clearPendingArrangementState() {
+        pendingArrangement = nil
+        loopIterationAtPending = nil
+        hasPreparedArrangement = false
     }
 
     private func clearTransportAndPlayback(clearPending: Bool = true) {
@@ -836,8 +883,10 @@ struct JamView: View {
         currentStep = nil
         activeSoundIDs = []
         isPlaying = false
+        previousSnapshotStep = nil
         if clearPending {
             hasPendingArrangementChanges = false
+            clearPendingArrangementState()
         }
     }
 
@@ -852,6 +901,8 @@ struct JamView: View {
         activeSoundIDs = []
         isPlaying = false
         hasPendingArrangementChanges = false
+        previousSnapshotStep = nil
+        clearPendingArrangementState()
     }
 
     private func cancelTransportTask() {
@@ -863,50 +914,62 @@ struct JamView: View {
         cancelTransportTask()
 
         transportTask = Task { @MainActor in
-            let clock = ContinuousClock()
-            let stepInterval = Duration.seconds(jamStepDuration)
-            var nextTick = clock.now.advanced(by: stepInterval)
-            var step = 0
-
+            // UI polling task. The musical clock is the AVAudioPlayerNode
+            // sample position; this loop just asks the player for it.
             while !Task.isCancelled && isPlaying {
-                try? await clock.sleep(until: nextTick)
+                try? await Task.sleep(for: transportPollInterval)
                 guard !Task.isCancelled, isPlaying else { break }
 
-                step = (step + 1) % jamStepsPerBar
-
-                if step == 0 {
-                    if hasPendingArrangementChanges {
-                        guard let nextArrangement = buildArrangement() else {
-                            clearDrumKitPendingFeedback()
-                            clearTransportAndPlayback()
-                            break
-                        }
-
-                        activeArrangement = nextArrangement
-                        library.updateTransientLoop(
-                            sequence: nextArrangement.sequence,
-                            percussion: nextArrangement.percussion
-                        )
-                        hasPendingArrangementChanges = false
-                        appliedArrangementVersion += 1
-                        updateStepState(step: 0, arrangement: nextArrangement)
-                        finishDrumKitPendingFeedbackIfNeeded()
-                    } else if let activeArrangement {
-                        updateStepState(step: 0, arrangement: activeArrangement)
-                        finishDrumKitPendingFeedbackIfNeeded()
-                    } else {
-                        clearTransportAndPlayback()
-                        break
-                    }
-                } else if let activeArrangement {
-                    updateStepState(step: step, arrangement: activeArrangement)
-                } else {
-                    clearTransportAndPlayback()
-                    break
-                }
-
-                nextTick = nextTick.advanced(by: stepInterval)
+                pollTransportFromPlayer()
             }
+        }
+    }
+
+    /// Reads the current transport position from the MusicPlayer and applies
+    /// the smallest possible UI update. Skips all work if the step or
+    /// active-sound set did not change since the last poll.
+    private func pollTransportFromPlayer() {
+        guard let snapshot = library.currentJamTransportSnapshot() else {
+            // Player is not yet producing a valid position. Preserve nil UI.
+            return
+        }
+
+        let step = snapshot.currentStep
+        let activeIDs = Set(
+            activeArrangement?.activeStepsBySoundID.compactMap { soundID, steps in
+                steps.contains(step) ? soundID : nil
+            } ?? []
+        )
+
+        // Detect a real loop wrap using the audio iteration count. This is the
+        // actual moment the previously scheduled buffer becomes audible.
+        let didWrap = previousSnapshotStep.map { prev in
+            // Two valid ways the audio clock can indicate the new buffer has
+            // taken over: an iteration advance, or a step regression to 0/1.
+            snapshot.loopIteration > (loopIterationAtPending ?? Int.min)
+                || (step <= 1 && prev >= (jamStepsPerBar - 1))
+        } ?? false
+        previousSnapshotStep = step
+
+        if hasPendingArrangementChanges,
+           hasPreparedArrangement,
+           let pending = pendingArrangement,
+           didWrap {
+            // Promote the pending arrangement on the real audio boundary.
+            // The sequencer and the audio are now in sync.
+            activeArrangement = pending
+            hasPendingArrangementChanges = false
+            hasPreparedArrangement = false
+            appliedArrangementVersion &+= 1
+            finishDrumKitPendingFeedbackIfNeeded()
+            updateStepState(step: step, arrangement: pending)
+            return
+        }
+
+        // No promotion this poll; just keep the UI in step with the audio.
+        if currentStep != step || activeSoundIDs != activeIDs {
+            currentStep = step
+            activeSoundIDs = activeIDs
         }
     }
 
@@ -959,8 +1022,16 @@ struct JamView: View {
     }
 
     private func handlePreparedDrumKitLoopUpdate() {
-        guard isDrumKitChangePending else { return }
-        isPreparedDrumKitChangePending = true
+        // Called whenever the MusicPlayer has scheduled a replacement buffer
+        // for the next loop boundary. Marks the global preparation flag so
+        // the polling task can promote the pending arrangement on the real
+        // audio wrap, and feeds the Drum Kit two-phase feedback indicator.
+        if hasPendingArrangementChanges {
+            hasPreparedArrangement = true
+        }
+        if isDrumKitChangePending {
+            isPreparedDrumKitChangePending = true
+        }
     }
 
     private func finishDrumKitPendingFeedbackIfNeeded() {

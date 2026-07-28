@@ -87,6 +87,29 @@ final class MusicPlayer {
     private var playbackGeneration = 0
     private var isLooping = false
 
+    // MARK: Jam transport introspection
+    //
+    // The Jam transport state is computed from the live AVAudioPlayerNode
+    // sample position. These cached values let the UI poll a read-only snapshot
+    // without ever re-implementing the musical clock.
+    //
+    // `jamLoopFrameCount` is the exact PCM frame count of one 16-step Jam loop.
+    // `jamFramesPerStep` derives from the BPM at scheduling time.
+    // `jamIsTransportReady` is true only between a successful Play and a Stop
+    // (or interruption); it gates the snapshot so the UI never invents a step.
+
+    private var jamLoopFrameCount: Int = 0
+    private var jamFramesPerStep: Int = 0
+    private var jamIsTransportReady: Bool = false
+
+    /// Read-only snapshot of the current Jam transport position.
+    /// Derived exclusively from the AVAudioPlayerNode sample clock.
+    struct JamTransportSnapshot {
+        let currentStep: Int
+        let loopProgress: Double
+        let loopIteration: Int
+    }
+
     /// Called when playback ends naturally or is interrupted.
     /// NOT called when stop() is invoked directly by the ViewModel.
     var onPlaybackFinished: (() -> Void)?
@@ -209,6 +232,13 @@ final class MusicPlayer {
         currentJamBPM = bpm
         applyJamSettings(settings, bpm: bpm)
 
+        // Compute transport metrics from the canonical 16-step Jam loop
+        // contract (BPM and step count are stable for the current product).
+        let framesPerStep = Int((60.0 / bpm / 4.0 * 44_100.0).rounded())
+        let loopFrameCount = framesPerStep * MusicSequence.steps
+        self.jamFramesPerStep = framesPerStep
+        self.jamLoopFrameCount = loopFrameCount
+
         renderTask = Task { [weak self] in
             let samples = await Task.detached(priority: .userInitiated) {
                 MusicPlayer.renderSequence(sequence, percussion: percussion, sampleRate: 44_100, loops: true)
@@ -227,6 +257,7 @@ final class MusicPlayer {
             )
             self.jamPlayerNode.play()
             self.isLooping = true
+            self.jamIsTransportReady = self.jamPlayerNode.isPlaying
         }
     }
 
@@ -240,6 +271,9 @@ final class MusicPlayer {
         isLooping = false
         if jamPlayerNode.isPlaying { jamPlayerNode.stop() }
         jamLFOMixer.outputVolume = 1.0
+        jamIsTransportReady = false
+        jamLoopFrameCount = 0
+        jamFramesPerStep = 0
     }
 
     /// Schedules a Jam loop update at the next loop boundary using
@@ -278,6 +312,12 @@ final class MusicPlayer {
             let bpm = Double(sequence.harmony.bpm)
             self.currentJamBPM = bpm
             self.applyJamSettings(self.currentJamSettings, bpm: bpm)
+
+            // Refresh transport metrics in case the new loop changed BPM.
+            let framesPerStep = Int((60.0 / bpm / 4.0 * 44_100.0).rounded())
+            let loopFrameCount = framesPerStep * MusicSequence.steps
+            self.jamFramesPerStep = framesPerStep
+            self.jamLoopFrameCount = loopFrameCount
 
             self.jamPlayerNode.scheduleBuffer(
                 buffer,
@@ -373,6 +413,56 @@ final class MusicPlayer {
         jamLFOTask = nil
         if jamPlayerNode.isPlaying { jamPlayerNode.stop() }
         jamLFOMixer.outputVolume = 1.0
+        jamIsTransportReady = false
+        jamLoopFrameCount = 0
+        jamFramesPerStep = 0
+    }
+
+    // MARK: - Jam transport snapshot
+
+    /// Returns the current Jam transport position derived from the live
+    /// AVAudioPlayerNode sample clock. Returns `nil` if no valid Jam
+    /// playback is active or the player has no rendered time yet.
+    ///
+    /// - Does not mutate state.
+    /// - Does not start the engine.
+    /// - Does not schedule buffers.
+    /// - Is safe to call from a polling task on the main actor.
+    func currentJamTransportSnapshot() -> JamTransportSnapshot? {
+        guard jamIsTransportReady,
+              isLooping,
+              jamPlayerNode.isPlaying,
+              jamLoopFrameCount > 0,
+              jamFramesPerStep > 0 else {
+            return nil
+        }
+
+        guard let nodeTime = jamPlayerNode.lastRenderTime,
+              let playerTime = jamPlayerNode.playerTime(forNodeTime: nodeTime) else {
+            return nil
+        }
+
+        // `playerTime.sampleTime` is an AVAudioFramePosition (Int64). It is
+        // continuous across the `.interruptsAtLoop` swap because the same
+        // engine clock keeps counting while buffers are exchanged.
+        let rawSampleTime = playerTime.sampleTime
+        guard rawSampleTime >= 0 else { return nil }
+
+        let loopFrameCount = Int64(jamLoopFrameCount)
+        let framesPerStep = Int64(jamFramesPerStep)
+        guard loopFrameCount > 0, framesPerStep > 0 else { return nil }
+
+        let positionInLoop = rawSampleTime % loopFrameCount
+        let step = Int(positionInLoop / framesPerStep)
+        let clampedStep = min(max(step, 0), MusicSequence.steps - 1)
+        let progress = Double(positionInLoop) / Double(loopFrameCount)
+        let iteration = Int(rawSampleTime / loopFrameCount)
+
+        return JamTransportSnapshot(
+            currentStep: clampedStep,
+            loopProgress: progress,
+            loopIteration: iteration
+        )
     }
 
     // MARK: - Private helpers
