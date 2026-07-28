@@ -182,6 +182,8 @@ struct JamView: View {
                 .padding(.bottom, bottomReserve)
                 .frame(maxWidth: .infinity)
             }
+            .blur(radius: isPanelPresented ? 2.5 : 0)
+            .animation(.easeInOut(duration: 0.18), value: isPanelPresented)
             .scrollIndicators(.hidden)
 
             if isPanelPresented {
