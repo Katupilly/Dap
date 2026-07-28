@@ -6,6 +6,7 @@ private let jamBPM = 96.0
 
 struct JamView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     let library: PhotoLibraryViewModel
     let isActive: Bool
@@ -315,12 +316,30 @@ struct JamView: View {
         }
     }
 
+    private var expandedPanelFill: Color {
+        switch colorScheme {
+        case .dark:
+            Color(red: 26 / 255, green: 26 / 255, blue: 30 / 255)
+        default:
+            Color(red: 243 / 255, green: 243 / 255, blue: 246 / 255)
+        }
+    }
+
+    private var expandedPanelStroke: Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(0.09)
+        default:
+            Color.black.opacity(0.09)
+        }
+    }
+
     private var vibePanelContent: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(uiColor: .secondarySystemBackground))
+                .fill(expandedPanelFill)
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+                .stroke(expandedPanelStroke, lineWidth: 1)
             VibeControl(position: $vibePosition) {
                 if isPlaying {
                     sendPendingArrangementToPlayer()
@@ -393,11 +412,11 @@ struct JamView: View {
         .frame(width: width, height: height, alignment: .topLeading)
         .background {
             RoundedRectangle(cornerRadius: effectsPanelCornerRadius, style: .continuous)
-                .fill(Color(uiColor: .secondarySystemBackground))
+                .fill(expandedPanelFill)
         }
         .overlay {
             RoundedRectangle(cornerRadius: effectsPanelCornerRadius, style: .continuous)
-                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                .stroke(expandedPanelStroke, lineWidth: 1)
                 .allowsHitTesting(false)
         }
         .accessibilityElement(children: .contain)
@@ -441,7 +460,7 @@ struct JamView: View {
     private var effectDivider: some View {
         HStack(spacing: 0) {
             Rectangle()
-                .fill(Color.primary.opacity(0.08))
+                .fill(colorScheme == .dark ? Color.primary.opacity(0.08) : Color.black.opacity(0.07))
                 .frame(height: 1)
                 .padding(.leading, 50)
         }
@@ -502,17 +521,19 @@ struct JamView: View {
     }
 
     private func effectIcon(systemImage: String, enabled: Bool) -> some View {
-        Image(systemName: systemImage)
+        let backgroundFill: Color = if colorScheme == .dark {
+            enabled ? Color.primary.opacity(0.10) : Color.secondary.opacity(0.10)
+        } else {
+            Color.black.opacity(enabled ? 0.09 : 0.07)
+        }
+
+        return Image(systemName: systemImage)
             .font(.system(size: 18, weight: .semibold))
             .frame(width: 38, height: 38)
             .foregroundStyle(enabled ? Color.primary : Color.secondary)
             .background {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(
-                        enabled
-                            ? Color.primary.opacity(0.10)
-                            : Color.secondary.opacity(0.10)
-                    )
+                    .fill(backgroundFill)
             }
             .accessibilityHidden(true)
     }
@@ -670,7 +691,14 @@ struct JamView: View {
     }
 
     private func changePhotosButton() -> some View {
-        Button {
+        let backgroundFill: Color = colorScheme == .dark
+            ? Color.secondary.opacity(0.12)
+            : Color.black.opacity(0.08)
+        let borderColor: Color = colorScheme == .dark
+            ? Color.white.opacity(0.08)
+            : Color.black.opacity(0.10)
+
+        return Button {
             isPhotoSelectorPresented = true
         } label: {
             HStack(spacing: 8) {
@@ -682,10 +710,10 @@ struct JamView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 44)
             .foregroundStyle(.primary)
-            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(backgroundFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(borderColor, lineWidth: 1)
             }
         }
         .buttonStyle(.plain)
@@ -1270,6 +1298,8 @@ private enum JamControlPanel: Equatable {
 }
 
 private struct JamSequencerAndStatus: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let steps: Int
     let currentStep: Int?
     let activeStepsBySoundID: [UUID: Set<Int>]
@@ -1283,6 +1313,33 @@ private struct JamSequencerAndStatus: View {
 
     private static let rowOrder: [JamRole] = [.bass, .harmony, .melody]
 
+    private var structuralCardFill: Color {
+        switch colorScheme {
+        case .dark:
+            Color.secondary.opacity(0.06)
+        default:
+            Color.black.opacity(0.05)
+        }
+    }
+
+    private var structuralCardStroke: Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(0.08)
+        default:
+            Color.black.opacity(0.10)
+        }
+    }
+
+    private var structuralDivider: Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(0.08)
+        default:
+            Color.black.opacity(0.07)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             sequencerContent
@@ -1291,7 +1348,7 @@ private struct JamSequencerAndStatus: View {
                 .padding(.bottom, 8)
 
             Rectangle()
-                .fill(Color.white.opacity(0.08))
+                .fill(structuralDivider)
                 .frame(height: 1)
                 .padding(.horizontal, 14)
 
@@ -1301,11 +1358,11 @@ private struct JamSequencerAndStatus: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.secondary.opacity(0.06))
+                .fill(structuralCardFill)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(structuralCardStroke, lineWidth: 1)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(statusPrimaryText), \(statusSecondaryText), \(bpm) BPM")
@@ -1463,14 +1520,43 @@ private struct JamDockBar: View {
 }
 
 private struct VibeDockTile: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let position: CGPoint
     let cornerRadius: CGFloat
     var isActive: Bool = false
 
+    private var tileFill: Color {
+        switch colorScheme {
+        case .dark:
+            Color.secondary.opacity(isActive ? 0.16 : 0.10)
+        default:
+            Color.black.opacity(isActive ? 0.09 : 0.075)
+        }
+    }
+
+    private var tileStroke: Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(isActive ? 0.22 : 0.10)
+        default:
+            Color.black.opacity(isActive ? 0.12 : 0.10)
+        }
+    }
+
+    private var axisStroke: Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(0.22)
+        default:
+            Color.black.opacity(0.11)
+        }
+    }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.secondary.opacity(isActive ? 0.16 : 0.10))
+                .fill(tileFill)
 
             VStack(spacing: 3) {
                 ZStack {
@@ -1480,7 +1566,7 @@ private struct VibeDockTile: View {
                         path.move(to: CGPoint(x: 18, y: 0))
                         path.addLine(to: CGPoint(x: 18, y: 36))
                     }
-                    .stroke(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                    .stroke(axisStroke, style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
 
                     Circle()
                         .fill(Color.primary)
@@ -1500,19 +1586,39 @@ private struct VibeDockTile: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(isActive ? 0.22 : 0.10), lineWidth: 1)
+                .stroke(tileStroke, lineWidth: 1)
         }
     }
 }
 
 private struct EffectsDockTile: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let cornerRadius: CGFloat
     var isActive: Bool = false
+
+    private var tileFill: Color {
+        switch colorScheme {
+        case .dark:
+            Color.secondary.opacity(isActive ? 0.16 : 0.10)
+        default:
+            Color.black.opacity(isActive ? 0.09 : 0.075)
+        }
+    }
+
+    private var tileStroke: Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(isActive ? 0.22 : 0.10)
+        default:
+            Color.black.opacity(isActive ? 0.12 : 0.10)
+        }
+    }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.secondary.opacity(isActive ? 0.16 : 0.10))
+                .fill(tileFill)
 
             VStack(spacing: 3) {
                 Image(systemName: "slider.horizontal.3")
@@ -1527,20 +1633,61 @@ private struct EffectsDockTile: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(isActive ? 0.22 : 0.10), lineWidth: 1)
+                .stroke(tileStroke, lineWidth: 1)
         }
     }
 }
 
 private struct VibeControl: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     @Binding var position: CGPoint
     let onPositionChanged: () -> Void
 
-    @State private var lastQuadrant: Quadrant?
     @State private var feedbackGenerator = UIImpactFeedbackGenerator(style: .light)
     @GestureState private var isDragging = false
+
+    private var currentQuadrant: Quadrant {
+        Quadrant(position: clampedPosition)
+    }
+
+    private var crosshairStroke: Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(0.10)
+        default:
+            Color.black.opacity(0.11)
+        }
+    }
+
+    private var quadrantHighlightColors: [LinearGradient] {
+        switch colorScheme {
+        case .dark:
+            [
+                LinearGradient(colors: [Color.white.opacity(0.08), .clear], startPoint: .topLeading, endPoint: .bottomTrailing),
+                LinearGradient(colors: [Color.white.opacity(0.05), .clear], startPoint: .topTrailing, endPoint: .bottomLeading),
+                LinearGradient(colors: [.clear, Color.white.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomLeading),
+                LinearGradient(colors: [.clear, Color.white.opacity(0.03)], startPoint: .topTrailing, endPoint: .bottomTrailing)
+            ]
+        default:
+            [
+                LinearGradient(colors: [Color.black.opacity(0.035), .clear], startPoint: .topLeading, endPoint: .bottomTrailing),
+                LinearGradient(colors: [Color.black.opacity(0.025), .clear], startPoint: .topTrailing, endPoint: .bottomLeading),
+                LinearGradient(colors: [.clear, Color.black.opacity(0.018)], startPoint: .topLeading, endPoint: .bottomLeading),
+                LinearGradient(colors: [.clear, Color.black.opacity(0.014)], startPoint: .topTrailing, endPoint: .bottomTrailing)
+            ]
+        }
+    }
+
+    private var labelBackground: Color {
+        switch colorScheme {
+        case .dark:
+            Color(uiColor: .systemBackground).opacity(0.62)
+        default:
+            Color.black.opacity(0.065)
+        }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -1583,7 +1730,6 @@ private struct VibeControl: View {
                         let newPosition = normalizedPosition(for: value.location, in: size)
                         position = newPosition
                         onPositionChanged()
-                        handleHaptics(for: newPosition)
                     }
                     .onEnded { value in
                         position = normalizedPosition(for: value.location, in: size)
@@ -1591,7 +1737,11 @@ private struct VibeControl: View {
             )
             .onAppear {
                 feedbackGenerator.prepare()
-                lastQuadrant = Quadrant(position: clampedPosition)
+            }
+            .onChange(of: currentQuadrant) { oldValue, newValue in
+                guard oldValue != newValue else { return }
+                feedbackGenerator.impactOccurred()
+                feedbackGenerator.prepare()
             }
         }
         .aspectRatio(1, contentMode: .fit)
@@ -1627,16 +1777,15 @@ private struct VibeControl: View {
                 path.move(to: CGPoint(x: 0, y: geometry.size.height / 2))
                 path.addLine(to: CGPoint(x: geometry.size.width, y: geometry.size.height / 2))
             }
-            .stroke(Color.white.opacity(0.10), style: StrokeStyle(lineWidth: 1, dash: [6, 6]))
+            .stroke(crosshairStroke, style: StrokeStyle(lineWidth: 1, dash: [6, 6]))
         }
     }
 
     private var quadrantHighlights: some View {
         ZStack {
-            LinearGradient(colors: [Color.white.opacity(0.08), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
-            LinearGradient(colors: [Color.white.opacity(0.05), .clear], startPoint: .topTrailing, endPoint: .bottomLeading)
-            LinearGradient(colors: [.clear, Color.white.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomLeading)
-            LinearGradient(colors: [.clear, Color.white.opacity(0.03)], startPoint: .topTrailing, endPoint: .bottomTrailing)
+            ForEach(Array(quadrantHighlightColors.enumerated()), id: \.offset) { _, gradient in
+                Rectangle().fill(gradient)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
@@ -1668,7 +1817,7 @@ private struct VibeControl: View {
             .foregroundStyle(Color.primary.opacity(prominence))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(Color(uiColor: .systemBackground).opacity(0.62), in: Capsule())
+            .background(labelBackground, in: Capsule())
             .scaleEffect(0.95 + weight * 0.07)
     }
 
@@ -1682,13 +1831,6 @@ private struct VibeControl: View {
         )
     }
 
-    private func handleHaptics(for position: CGPoint) {
-        let quadrant = Quadrant(position: position)
-        guard quadrant != lastQuadrant else { return }
-        lastQuadrant = quadrant
-        feedbackGenerator.impactOccurred()
-        feedbackGenerator.prepare()
-    }
 }
 
 private enum Quadrant: Equatable {
