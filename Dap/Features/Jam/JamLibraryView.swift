@@ -64,13 +64,17 @@ struct JamLibraryView: View {
                 contentBody
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 92)
+            .padding(.bottom, state.editingJamID == nil ? 92 : 24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-            createButton
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
+            if state.editingJamID == nil {
+                createButton
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.easeInOut(duration: 0.18), value: state.editingJamID == nil)
     }
 
     @ViewBuilder

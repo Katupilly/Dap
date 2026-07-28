@@ -92,18 +92,22 @@ struct JamCard: View {
 
     @ViewBuilder
     private var cover: some View {
-        ZStack {
-            if let coverImage {
-                Image(uiImage: coverImage)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                Rectangle()
-                    .fill(.secondary.opacity(0.15))
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                ZStack {
+                    if let coverImage {
+                        Image(uiImage: coverImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        Rectangle()
+                            .fill(.secondary.opacity(0.15))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
             }
-        }
-        .aspectRatio(4.0 / 5.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 4, style: .continuous)
