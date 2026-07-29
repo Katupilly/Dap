@@ -69,7 +69,8 @@ actor JamStore {
                 delayMix: 0.22,
                 lfoEnabled: false,
                 lfoAmount: 0.35
-            )
+            ),
+            melodyVariation: .initial
         )
 
         try write(jam)

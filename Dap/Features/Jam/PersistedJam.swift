@@ -13,6 +13,13 @@ struct PersistedJam: Codable, Identifiable, Hashable {
     var vibePosition: PersistedPoint
     var drumKitSelection: String
     var effectSettings: PersistedJamEffectSettings
+    var melodyVariation: JamMelodyVariation?
+}
+
+struct JamMelodyVariation: Codable, Hashable, Sendable {
+    var generation: UInt64
+
+    static let initial = JamMelodyVariation(generation: 0)
 }
 
 struct PersistedJamSlotAssignments: Codable, Hashable {

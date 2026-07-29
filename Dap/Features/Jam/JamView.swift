@@ -24,6 +24,7 @@ struct JamView: View {
     @State private var isPanelPresented = false
     @State private var playbackController = JamPlaybackController()
     @State private var isPhotoSelectorPresented = false
+    @State private var selectedJamRole: JamRole?
     @State private var swapArrangementVersion = 0
     @State private var transportTask: Task<Void, Never>?
     @State private var autosaveTask: Task<Void, Never>?
@@ -176,8 +177,13 @@ struct JamView: View {
         }
         .onChange(of: session.slotAssignments) { _, assignments in
             if !session.isPlaying {
-                session.activeArrangement = buildArrangement(for: assignments)
+                session.activeArrangement = buildArrangement(
+                    for: assignments,
+                    melodyVariation: session.melodyVariation,
+                    buildMode: .standard
+                )
             }
+            synchronizeSelectedJamRole()
             scheduleAutosave()
         }
         .onChange(of: session.drumKitSelection) { _, _ in
@@ -212,6 +218,7 @@ struct JamView: View {
                 hasAppliedInitialJam = true
                 applyPersistedJam(initialJam)
             }
+            synchronizeSelectedJamRole()
         }
         .onDisappear {
             library.clearTransientLoopUpdatePreparedHandler()
@@ -241,10 +248,15 @@ struct JamView: View {
             if session.isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
                 sendPendingArrangementToPlayer()
             } else if !session.isPlaying {
-                session.activeArrangement = buildArrangement(for: cleanedAssignments)
+                session.activeArrangement = buildArrangement(
+                    for: cleanedAssignments,
+                    melodyVariation: session.melodyVariation,
+                    buildMode: .standard
+                )
             }
 
             session.slotAssignments = cleanedAssignments
+            synchronizeSelectedJamRole()
             scheduleAutosave()
         }
         .onChange(of: library.isTransientPlaybackActive) { _, isActive in
@@ -381,10 +393,12 @@ struct JamView: View {
         session.vibePosition = jam.vibePosition.cgPoint
         session.drumKitSelection = MusicDrumKitSelection(persistedValue: jam.drumKitSelection)
         session.effectSettings = jam.effectSettings.jamEffectSettings
+        session.melodyVariation = jam.melodyVariation ?? .initial
         session.isPlaying = false
         visualTransport.reset()
         playbackController.clearPendingState()
         playbackController.clearDrumKitPendingFeedback()
+        selectedJamRole = nil
 
         let validIDs = Set(library.items.map(\.id))
         let playableIDs = Set(
@@ -399,7 +413,11 @@ struct JamView: View {
         )
 
         session.slotAssignments = reconciledAssignments
-        session.activeArrangement = buildArrangement(for: reconciledAssignments)
+        session.activeArrangement = buildArrangement(
+            for: reconciledAssignments,
+            melodyVariation: session.melodyVariation,
+            buildMode: .standard
+        )
 
         if snapshotDiffersFromPersistedJam(jam) {
             scheduleAutosave(debounce: .zero)
@@ -433,7 +451,8 @@ struct JamView: View {
             slotAssignments: PersistedJamSlotAssignments(session.slotAssignments),
             vibePosition: PersistedPoint(session.vibePosition),
             drumKitSelection: session.drumKitSelection.persistedValue,
-            effectSettings: PersistedJamEffectSettings(session.effectSettings)
+            effectSettings: PersistedJamEffectSettings(session.effectSettings),
+            melodyVariation: session.melodyVariation
         )
     }
 
@@ -485,6 +504,7 @@ struct JamView: View {
             || snapshot.vibePosition != jam.vibePosition
             || snapshot.drumKitSelection != jam.drumKitSelection
             || snapshot.effectSettings != jam.effectSettings
+            || snapshot.melodyVariation != (jam.melodyVariation ?? .initial)
     }
 
     @MainActor
@@ -987,7 +1007,10 @@ struct JamView: View {
             sounds: library.items,
             coverDataByID: library.coverDataByID,
             reduceMotion: reduceMotion,
+            selectedJamRole: selectedJamRole,
             changePhotosButton: { changePhotosButton() },
+            newPhraseButton: { newPhraseButton() },
+            onTapRole: handleRoleTap,
             onDropPhotoID: handleTileDrop,
             onSwapForAccessibility: performSwapFromAccessibility
         )
@@ -1198,6 +1221,82 @@ struct JamView: View {
         sendPendingArrangementToPlayer()
     }
 
+    private func handleRoleTap(_ role: JamRole?) {
+        guard role == .melody, isMelodyPlayable else { return }
+        selectedJamRole = selectedJamRole == .melody ? nil : .melody
+    }
+
+    private var isMelodyPlayable: Bool {
+        guard let melodyID = session.slotAssignments.melody,
+              let sound = library.items.first(where: { $0.id == melodyID }) else {
+            return false
+        }
+        return !sound.sequence.notes.isEmpty
+    }
+
+    private var displayedReferenceArrangement: JamArrangement? {
+        playbackController.pendingArrangement ?? session.activeArrangement
+    }
+
+    private func newPhraseButton() -> some View {
+        let backgroundFill: Color = colorScheme == .dark
+            ? Color.secondary.opacity(0.12)
+            : Color.black.opacity(0.08)
+        let borderColor: Color = colorScheme == .dark
+            ? Color.white.opacity(0.08)
+            : Color.black.opacity(0.10)
+
+        return Button {
+            applyNextMelodyPhrase()
+        } label: {
+            Text("NEW PHRASE")
+                .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .foregroundStyle(.primary)
+                .background(backgroundFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(borderColor, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(!isMelodyPlayable)
+    }
+
+    private func applyNextMelodyPhrase() {
+        guard isMelodyPlayable,
+              let result = findNextMelodyVariation(
+                after: session.melodyVariation,
+                referenceArrangement: displayedReferenceArrangement,
+                buildArrangement: { assignments, variation, mode in
+                    buildArrangement(for: assignments, melodyVariation: variation, buildMode: mode)
+                }
+              ) else {
+            return
+        }
+
+        session.melodyVariation = result.variation
+        scheduleAutosave()
+
+        if session.isPlaying {
+            if result.usedFallback {
+                playbackController.beginPendingArrangement(
+                    result.arrangement,
+                    loopIteration: library.currentJamTransportSnapshot()?.loopIteration
+                )
+                library.updateTransientLoop(
+                    sequence: result.arrangement.sequence,
+                    percussion: result.arrangement.percussion
+                )
+            } else {
+                sendPendingArrangementToPlayer()
+            }
+        } else {
+            session.activeArrangement = result.arrangement
+        }
+    }
+
     private func startPlaybackIfPossible() {
         cancelTransportTask()
 
@@ -1329,10 +1428,18 @@ struct JamView: View {
     }
 
     private func buildArrangement() -> JamArrangement? {
-        buildArrangement(for: session.slotAssignments)
+        buildArrangement(
+            for: session.slotAssignments,
+            melodyVariation: session.melodyVariation,
+            buildMode: .standard
+        )
     }
 
-    private func buildArrangement(for assignments: JamSlotAssignments) -> JamArrangement? {
+    private func buildArrangement(
+        for assignments: JamSlotAssignments,
+        melodyVariation: JamMelodyVariation,
+        buildMode: MelodyVariationBuildMode
+    ) -> JamArrangement? {
         let roleByID = assignments.assignedRolesByID
         let playableAssignedSounds = library.items.compactMap { sound -> AssignedSound? in
             guard !sound.sequence.notes.isEmpty,
@@ -1351,8 +1458,127 @@ struct JamView: View {
         return arrangementBuilder.build(
             assignedSounds: orderedAssignedSounds,
             vibePosition: session.vibePosition,
-            drumKit: drumKit
+            drumKit: drumKit,
+            melodyVariation: melodyVariation,
+            buildMode: buildMode
         )
+    }
+
+    private func synchronizeSelectedJamRole() {
+        guard selectedJamRole == .melody, !isMelodyPlayable else { return }
+        selectedJamRole = nil
+    }
+
+    private func findNextMelodyVariation(
+        after currentVariation: JamMelodyVariation,
+        referenceArrangement: JamArrangement?,
+        buildArrangement: (JamSlotAssignments, JamMelodyVariation, MelodyVariationBuildMode) -> JamArrangement?
+    ) -> MelodyVariationSearchResult? {
+        let referenceSequence = referenceArrangement?.sequence
+        var bestAcceptedBelowThreshold: MelodyVariationSearchResult?
+        var bestOverall: MelodyVariationSearchResult?
+
+        for attempt in 1...8 {
+            let variation = JamMelodyVariation(generation: currentVariation.generation &+ UInt64(attempt))
+            let family = MelodyVariationFamily(generation: variation.generation)
+            guard let arrangement = buildArrangement(session.slotAssignments, variation, .standard) else { continue }
+
+            let difference = referenceSequence.map {
+                melodyDifference(from: $0, to: arrangement.sequence)
+            } ?? MelodyDifference.identityFallback
+            let comparableEventCount = max(
+                difference.previousOccupiedStepCount,
+                difference.candidateOccupiedStepCount
+            )
+            let minimumChangedSteps = minimumChangedSteps(for: comparableEventCount)
+            let meetsGeneralMinimum = difference.changedSteps >= minimumChangedSteps
+            let meetsFamilyMinimum = meetsFamilyRequirement(
+                family,
+                difference: difference,
+                comparableEventCount: comparableEventCount
+            )
+            let meetsThreshold = difference.score >= melodyDistanceThreshold
+            let accepted = meetsGeneralMinimum && meetsFamilyMinimum && meetsThreshold
+
+            let result = MelodyVariationSearchResult(
+                variation: variation,
+                arrangement: arrangement,
+                family: family,
+                difference: difference,
+                minimumChangedSteps: minimumChangedSteps,
+                accepted: accepted,
+                usedFallback: false
+            )
+
+#if DEBUG
+            print(melodyVariationLog(for: result))
+#endif
+
+            if accepted {
+                return result
+            }
+
+            if meetsGeneralMinimum && meetsFamilyMinimum {
+                if let existingBestAccepted = bestAcceptedBelowThreshold {
+                    if result.difference.score > existingBestAccepted.difference.score {
+                        bestAcceptedBelowThreshold = result
+                    }
+                } else {
+                    bestAcceptedBelowThreshold = result
+                }
+            }
+
+            if let existingBestOverall = bestOverall {
+                if result.difference.changedSteps > existingBestOverall.difference.changedSteps
+                    || (result.difference.changedSteps == existingBestOverall.difference.changedSteps
+                        && result.difference.score > existingBestOverall.difference.score) {
+                    bestOverall = result
+                }
+            } else {
+                bestOverall = result
+            }
+        }
+
+        if let bestAcceptedBelowThreshold {
+            return bestAcceptedBelowThreshold
+        }
+
+        guard let bestOverall,
+              let fallbackArrangement = buildArrangement(session.slotAssignments, bestOverall.variation, .fallback) else {
+            return nil
+        }
+
+        let fallbackDifference = referenceSequence.map {
+            melodyDifference(from: $0, to: fallbackArrangement.sequence)
+        } ?? MelodyDifference.identityFallback
+        let comparableEventCount = max(
+            fallbackDifference.previousOccupiedStepCount,
+            fallbackDifference.candidateOccupiedStepCount
+        )
+        let minimumChangedSteps = minimumChangedSteps(for: comparableEventCount)
+        let meetsGeneralMinimum = fallbackDifference.changedSteps >= minimumChangedSteps
+        let meetsFamilyMinimum = meetsFamilyRequirement(
+            bestOverall.family,
+            difference: fallbackDifference,
+            comparableEventCount: comparableEventCount
+        )
+        let accepted = meetsGeneralMinimum && meetsFamilyMinimum && fallbackDifference.score >= melodyDistanceThreshold
+
+        let fallbackResult = MelodyVariationSearchResult(
+            variation: bestOverall.variation,
+            arrangement: fallbackArrangement,
+            family: bestOverall.family,
+            difference: fallbackDifference,
+            minimumChangedSteps: minimumChangedSteps,
+            accepted: accepted,
+            usedFallback: true
+        )
+
+#if DEBUG
+        print(melodyVariationLog(for: fallbackResult))
+#endif
+
+        return fallbackResult.accepted ? fallbackResult : nil
     }
 
     private func sendCurrentArrangementToPlayer() {
@@ -1398,8 +1624,10 @@ private struct JamSelectedPhotoTile: View {
     let coverData: Data?
     let role: JamRole?
     let isActive: Bool
+    let isSelected: Bool
     let reduceMotion: Bool
     let photoColor: Color?
+    let onTap: () -> Void
     let onDropPhotoID: (String) -> Void
     let onSwapForAccessibility: (JamRole, JamRole) -> Void
 
@@ -1415,6 +1643,12 @@ private struct JamSelectedPhotoTile: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .stroke(borderColor, lineWidth: borderWidth)
+            }
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill((photoColor ?? .primary).opacity(0.10))
+                }
             }
             .overlay {
                 if isHoverTarget {
@@ -1450,6 +1684,8 @@ private struct JamSelectedPhotoTile: View {
             }
             .opacity(role == nil ? 0.58 : 1)
         .frame(maxWidth: .infinity)
+        .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .onTapGesture(perform: onTap)
         .modifier(JamTileDragAndDrop(
             role: role,
             photoID: sound?.id,
@@ -1473,6 +1709,9 @@ private struct JamSelectedPhotoTile: View {
         if isHoverTarget {
             return (photoColor ?? .primary).opacity(0.75)
         }
+        if isSelected {
+            return (photoColor ?? .primary).opacity(0.82)
+        }
         if isActive {
             return .white.opacity(0.88)
         }
@@ -1482,6 +1721,7 @@ private struct JamSelectedPhotoTile: View {
 
     private var borderWidth: CGFloat {
         if isHoverTarget { return 2 }
+        if isSelected { return 2 }
         return isActive ? 2 : 1
     }
 
@@ -1566,13 +1806,16 @@ private struct JamVibePanelContent: View {
     }
 }
 
-private struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
+private struct JamSelectedPhotoArea<ChangePhotosButton: View, NewPhraseButton: View>: View {
     let session: JamSessionState
     let visualTransport: JamVisualTransportState
     let sounds: [PhotoSound]
     let coverDataByID: [UUID: Data]
     let reduceMotion: Bool
+    let selectedJamRole: JamRole?
     let changePhotosButton: () -> ChangePhotosButton
+    let newPhraseButton: () -> NewPhraseButton
+    let onTapRole: (JamRole?) -> Void
     let onDropPhotoID: (String, JamRole?) -> Void
     let onSwapForAccessibility: (JamRole, JamRole, UUID) -> Void
 
@@ -1584,6 +1827,10 @@ private struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
                 }
             }
             .frame(maxWidth: .infinity)
+
+            if selectedJamRole == .melody, melodyIsPlayable {
+                newPhraseButton()
+            }
 
             changePhotosButton()
         }
@@ -1601,8 +1848,12 @@ private struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
             coverData: sound.flatMap { coverDataByID[$0.id] },
             role: photoID == nil ? nil : role,
             isActive: photoID != nil && isActive,
+            isSelected: selectedJamRole == role,
             reduceMotion: reduceMotion,
             photoColor: color,
+            onTap: {
+                onTapRole(photoID == nil ? nil : role)
+            },
             onDropPhotoID: { droppedID in
                 onDropPhotoID(droppedID, role)
             },
@@ -1612,6 +1863,14 @@ private struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
             }
         )
         .id(role)
+    }
+
+    private var melodyIsPlayable: Bool {
+        guard let melodyID = session.slotAssignments.melody,
+              let sound = sounds.first(where: { $0.id == melodyID }) else {
+            return false
+        }
+        return !sound.sequence.notes.isEmpty
     }
 
     private func photoColor(for role: JamRole) -> Color? {
@@ -1682,6 +1941,221 @@ private struct JamTileAccessibilityActions: ViewModifier {
         }
     }
 }
+
+private let melodyDistanceThreshold = 0.34
+
+private struct MelodyVariationSearchResult {
+    let variation: JamMelodyVariation
+    let arrangement: JamArrangement
+    let family: MelodyVariationFamily
+    let difference: MelodyDifference
+    let minimumChangedSteps: Int
+    let accepted: Bool
+    let usedFallback: Bool
+}
+
+private struct MelodyStepProfile {
+    let pitches: [Int]
+
+    var representativePitch: Int {
+        pitches.first ?? 0
+    }
+}
+
+private struct MelodyDifference {
+    let previousOccupiedStepCount: Int
+    let candidateOccupiedStepCount: Int
+    let changedPresenceSteps: Int
+    let changedPitchSteps: Int
+    let changedSteps: Int
+    let changedStepRatio: Double
+    let contourDistance: Double
+    let registerDistance: Double
+    let score: Double
+
+    static let identityFallback = MelodyDifference(
+        previousOccupiedStepCount: 0,
+        candidateOccupiedStepCount: 0,
+        changedPresenceSteps: 0,
+        changedPitchSteps: 0,
+        changedSteps: 0,
+        changedStepRatio: 1,
+        contourDistance: 1,
+        registerDistance: 1,
+        score: 1
+    )
+}
+
+private func melodyDifference(
+    from previous: MusicSequence,
+    to candidate: MusicSequence
+) -> MelodyDifference {
+    let previousProfile = melodyStepProfile(for: previous)
+    let candidateProfile = melodyStepProfile(for: candidate)
+    let allSteps = Set(previousProfile.keys).union(candidateProfile.keys)
+    let sharedSteps = allSteps.filter { previousProfile[$0] != nil && candidateProfile[$0] != nil }.sorted()
+    let changedPresenceSteps = allSteps.filter { (previousProfile[$0] != nil) != (candidateProfile[$0] != nil) }.count
+    let changedPitchSteps = sharedSteps.filter { previousProfile[$0]?.pitches != candidateProfile[$0]?.pitches }.count
+    let changedSteps = Set(
+        allSteps.filter { (previousProfile[$0] != nil) != (candidateProfile[$0] != nil) }
+            + sharedSteps.filter { previousProfile[$0]?.pitches != candidateProfile[$0]?.pitches }
+    ).count
+
+    let comparableEventCount = max(previousProfile.count, candidateProfile.count)
+    let changedStepRatio = comparableEventCount == 0
+        ? 0
+        : clampedUnit(Double(changedSteps) / Double(comparableEventCount))
+
+    let registerDistance: Double
+    if sharedSteps.isEmpty {
+        registerDistance = changedStepRatio
+    } else {
+        let total = sharedSteps.reduce(0.0) { partial, step in
+            let lhs = previousProfile[step]?.representativePitch ?? 0
+            let rhs = candidateProfile[step]?.representativePitch ?? 0
+            return partial + clampedUnit(Double(abs(lhs - rhs)) / 12.0)
+        }
+        registerDistance = clampedUnit(total / Double(sharedSteps.count))
+    }
+
+    let previousIntervals = melodyIntervals(from: previousProfile, orderedSteps: sharedSteps)
+    let candidateIntervals = melodyIntervals(from: candidateProfile, orderedSteps: sharedSteps)
+    let contourDistance: Double
+    if previousIntervals.isEmpty || candidateIntervals.isEmpty {
+        contourDistance = 0
+    } else {
+        let pairCount = min(previousIntervals.count, candidateIntervals.count)
+        let changed = zip(previousIntervals.prefix(pairCount), candidateIntervals.prefix(pairCount)).filter { $0 != $1 }.count
+        contourDistance = clampedUnit(Double(changed) / Double(pairCount))
+    }
+
+    let score = clampedUnit(
+        changedStepRatio * 0.55
+            + contourDistance * 0.25
+            + registerDistance * 0.20
+    )
+
+    return MelodyDifference(
+        previousOccupiedStepCount: previousProfile.count,
+        candidateOccupiedStepCount: candidateProfile.count,
+        changedPresenceSteps: changedPresenceSteps,
+        changedPitchSteps: changedPitchSteps,
+        changedSteps: changedSteps,
+        changedStepRatio: changedStepRatio,
+        contourDistance: contourDistance,
+        registerDistance: registerDistance,
+        score: score
+    )
+}
+
+private func melodyStepProfile(for sequence: MusicSequence) -> [Int: MelodyStepProfile] {
+    let melodyNotes = sequence.notes
+        .filter { $0.voiceRole == .melody }
+        .sorted {
+            if $0.step != $1.step { return $0.step < $1.step }
+            if $0.midiNote != $1.midiNote { return $0.midiNote < $1.midiNote }
+            return $0.row < $1.row
+        }
+
+    let grouped = Dictionary(grouping: melodyNotes, by: \.step)
+    var profile: [Int: MelodyStepProfile] = [:]
+    for (step, notes) in grouped {
+        profile[step] = MelodyStepProfile(pitches: notes.map(\.midiNote).sorted())
+    }
+    return profile
+}
+
+private func melodyIntervals(
+    from profile: [Int: MelodyStepProfile],
+    orderedSteps: [Int]
+) -> [Int] {
+    let pitches = orderedSteps.compactMap { profile[$0]?.representativePitch }
+    guard pitches.count >= 2 else { return [] }
+    return zip(pitches, pitches.dropFirst()).map { current, next in
+        let interval = next - current
+        if interval == 0 { return 0 }
+        return interval > 0 ? 1 : -1
+    }
+}
+
+private func clampedUnit(_ value: Double) -> Double {
+    min(max(value, 0), 1)
+}
+
+private func minimumChangedSteps(for comparableEventCount: Int) -> Int {
+    switch comparableEventCount {
+    case 0: 0
+    case 1: 1
+    case 2: 1
+    case 3: 2
+    default:
+        max(2, Int(ceil(Double(comparableEventCount) * 0.40)))
+    }
+}
+
+private func meetsFamilyRequirement(
+    _ family: MelodyVariationFamily,
+    difference: MelodyDifference,
+    comparableEventCount: Int
+) -> Bool {
+    switch family {
+    case .rhythm:
+        if comparableEventCount < 4 {
+            return difference.changedSteps >= minimumChangedSteps(for: comparableEventCount)
+        }
+        return difference.changedPresenceSteps >= min(
+            comparableEventCount,
+            max(2, Int(ceil(Double(comparableEventCount) * 0.35)))
+        )
+
+    case .contour:
+        if comparableEventCount < 4 {
+            return difference.changedPitchSteps >= max(1, minimumChangedSteps(for: comparableEventCount) - 1)
+        }
+        return difference.changedPitchSteps >= min(
+            comparableEventCount,
+            max(2, Int(ceil(Double(comparableEventCount) * 0.40)))
+        )
+
+    case .register:
+        if comparableEventCount < 4 {
+            return difference.changedPitchSteps >= max(1, minimumChangedSteps(for: comparableEventCount) - 1)
+        }
+        let requiredPitchChanges = comparableEventCount >= 6 ? 3 : 2
+        return difference.changedPitchSteps >= min(requiredPitchChanges, comparableEventCount)
+
+    case .full:
+        if comparableEventCount < 4 {
+            return difference.changedSteps >= minimumChangedSteps(for: comparableEventCount)
+        }
+        return difference.changedSteps >= min(
+            comparableEventCount,
+            Int(ceil(Double(comparableEventCount) * 0.50))
+        )
+    }
+}
+
+#if DEBUG
+private func melodyVariationLog(for result: MelodyVariationSearchResult) -> String {
+    """
+    [MelodyVariation]
+    generation: \(result.variation.generation)
+    family: \(result.family.logLabel)
+    previous events: \(result.difference.previousOccupiedStepCount)
+    candidate events: \(result.difference.candidateOccupiedStepCount)
+    changed presence: \(result.difference.changedPresenceSteps)
+    changed pitch: \(result.difference.changedPitchSteps)
+    changed total: \(result.difference.changedSteps)
+    ratio: \(String(format: "%.3f", result.difference.changedStepRatio))
+    contour: \(String(format: "%.3f", result.difference.contourDistance))
+    register: \(String(format: "%.3f", result.difference.registerDistance))
+    score: \(String(format: "%.3f", result.difference.score))
+    minimum required: \(result.minimumChangedSteps)
+    fallback: \(result.usedFallback)
+    accepted: \(result.accepted)
+    """
+}
+#endif
 
 private enum JamControlPanel: Equatable {
     case none

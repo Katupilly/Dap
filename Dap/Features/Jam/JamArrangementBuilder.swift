@@ -42,20 +42,26 @@ struct JamArrangementBuilder {
     func build(
         sounds: [PhotoSound],
         vibePosition: CGPoint,
-        drumKit: MusicDrumKit
+        drumKit: MusicDrumKit,
+        melodyVariation: JamMelodyVariation = .initial,
+        buildMode: MelodyVariationBuildMode = .standard
     ) -> JamArrangement? {
         let assignedSounds = assignRoles(to: sounds)
         return build(
             assignedSounds: assignedSounds,
             vibePosition: vibePosition,
-            drumKit: drumKit
+            drumKit: drumKit,
+            melodyVariation: melodyVariation,
+            buildMode: buildMode
         )
     }
 
     func build(
         assignedSounds: [AssignedSound],
         vibePosition: CGPoint,
-        drumKit: MusicDrumKit
+        drumKit: MusicDrumKit,
+        melodyVariation: JamMelodyVariation = .initial,
+        buildMode: MelodyVariationBuildMode = .standard
     ) -> JamArrangement? {
         guard let melodySound = assignedSounds.first(where: { $0.role == .melody }) else {
             return nil
@@ -102,6 +108,8 @@ struct JamArrangementBuilder {
                     from: sourceNotes,
                     harmony: harmony,
                     registerShift: registerShift,
+                    melodyVariation: melodyVariation,
+                    buildMode: buildMode,
                     density: effectiveDensity(
                         for: .melody,
                         sourceCount: sourceNotes.count,
@@ -254,6 +262,8 @@ struct JamArrangementBuilder {
         from sourceNotes: [MusicNote],
         harmony: GlobalHarmony,
         registerShift: Int,
+        melodyVariation: JamMelodyVariation,
+        buildMode: MelodyVariationBuildMode,
         density: Double,
         region: JamRegion,
         percussion: MusicPercussionPattern,
@@ -270,12 +280,20 @@ struct JamArrangementBuilder {
             selectedSoundIDs: selectedSoundIDs,
             harmony: harmony,
             region: region,
-            transformedSourceNotes: transformedSourceNotes
+            transformedSourceNotes: transformedSourceNotes,
+            melodyVariation: melodyVariation
         )
+        let variationFamily = MelodyVariationFamily(generation: melodyVariation.generation)
+        let isFallback = buildMode == .fallback
+        let rhythmSeed = mixedSeed(seed, salt: 0x18D3_A5F9_52C1_7B41)
+        let contourSeed = mixedSeed(seed, salt: 0x72E9_C41D_A16B_3F25)
+        let registerSeed = mixedSeed(seed, salt: 0xB54C_91E2_5DA8_0C73)
+        let velocitySeed = mixedSeed(seed, salt: 0xC9A3_7E11_4BF2_DA9D)
         let template = adjustedMelodyTemplate(
             photoConditionedMelodyTemplate(
                 for: region,
-                seed: seed,
+                seed: rhythmSeed,
+                variationFamily: variationFamily,
                 transformedSourceNotes: transformedSourceNotes
             ),
             region: region,
@@ -288,30 +306,65 @@ struct JamArrangementBuilder {
             harmony: harmony,
             transformedSourceNotes: transformedSourceNotes
         )
-        let contour = melodyContour(for: region, seed: seed)
+        let contour = melodyContour(for: region, seed: contourSeed, variationFamily: variationFamily)
         let anchorMIDINote = melodyAnchorMIDINote(
             anchorPitchClass: anchorPitchClass,
             harmony: harmony,
             transformedSourceNotes: transformedSourceNotes,
             registerShift: registerShift,
-            region: region
+            region: region,
+            variationFamily: variationFamily,
+            seed: registerSeed
         )
-        let primaryOffsets = melodyContourOffsets(for: contour, count: template.count)
+        let kickSteps = Set(percussion.kickHits.map(\.step))
+        let primarySteps = variedMelodyTemplate(
+            from: template,
+            region: region,
+            seed: mixedSeed(rhythmSeed, salt: 0x01),
+            variationFamily: variationFamily,
+            buildMode: buildMode,
+            preserveLeadingAnchor: true,
+            kickSteps: kickSteps
+        )
         let secondarySteps = variedMelodyTemplate(
             from: template,
             region: region,
-            seed: seed,
-            kickSteps: Set(percussion.kickHits.map(\.step))
+            seed: mixedSeed(rhythmSeed, salt: 0x02),
+            variationFamily: variationFamily,
+            buildMode: buildMode,
+            preserveLeadingAnchor: false,
+            kickSteps: kickSteps
         )
         let variationKind = melodyVariationKind(for: region, seed: seed)
-        let secondaryOffsets = variedMelodyOffsets(
-            from: primaryOffsets,
+        let primaryOffsets = variedMelodyOffsets(
+            from: melodyContourOffsets(for: contour, count: primarySteps.count),
             variationKind: variationKind,
-            seed: seed
+            variationFamily: variationFamily,
+            seed: mixedSeed(contourSeed, salt: 0x11),
+            buildMode: buildMode
+        )
+        let secondaryOffsets = variedMelodyOffsets(
+            from: melodyContourOffsets(for: contour, count: secondarySteps.count),
+            variationKind: variationKind,
+            variationFamily: variationFamily,
+            seed: mixedSeed(contourSeed, salt: 0x22),
+            buildMode: buildMode
+        )
+        let primaryRegisterPlan = melodyRegisterPlan(
+            eventCount: primarySteps.count,
+            seed: mixedSeed(registerSeed, salt: 0x1111),
+            variationFamily: variationFamily,
+            buildMode: buildMode
+        )
+        let secondaryRegisterPlan = melodyRegisterPlan(
+            eventCount: secondarySteps.count,
+            seed: mixedSeed(registerSeed, salt: 0x2222),
+            variationFamily: variationFamily,
+            buildMode: buildMode
         )
 
         let primaryHalf = buildMelodyHalf(
-            relativeSteps: template,
+            relativeSteps: primarySteps,
             contourOffsets: primaryOffsets,
             halfOffset: 0,
             anchorMIDINote: anchorMIDINote,
@@ -321,7 +374,9 @@ struct JamArrangementBuilder {
             transformedSourceNotes: transformedSourceNotes,
             accompanimentNotes: accompanimentNotes,
             region: region,
-            variationKind: nil,
+            variationKind: isFallback ? variationKind : nil,
+            registerPlan: primaryRegisterPlan,
+            velocitySeed: mixedSeed(velocitySeed, salt: 0xA1),
             octaveJumpUsed: false
         )
 
@@ -337,6 +392,8 @@ struct JamArrangementBuilder {
             accompanimentNotes: accompanimentNotes + primaryHalf.notes,
             region: region,
             variationKind: variationKind,
+            registerPlan: secondaryRegisterPlan,
+            velocitySeed: mixedSeed(velocitySeed, salt: 0xB2),
             octaveJumpUsed: primaryHalf.usedOctaveJump
         )
 
@@ -655,7 +712,8 @@ struct JamArrangementBuilder {
         selectedSoundIDs: [UUID],
         harmony: GlobalHarmony,
         region: JamRegion,
-        transformedSourceNotes: [MelodySourceNote]
+        transformedSourceNotes: [MelodySourceNote],
+        melodyVariation: JamMelodyVariation
     ) -> UInt64 {
         var hash: UInt64 = 14_695_981_039_346_656_037
 
@@ -692,7 +750,28 @@ struct JamArrangementBuilder {
             feed(int: note.midiNote)
         }
 
-        return hash
+        let mixedGeneration = mixedVariationGeneration(melodyVariation.generation)
+        return hash ^ mixedGeneration
+    }
+
+    private func mixedVariationGeneration(_ generation: UInt64) -> UInt64 {
+        var value = generation &+ 0x9E37_79B9_7F4A_7C15
+        value ^= value >> 30
+        value &*= 0xBF58_476D_1CE4_E5B9
+        value ^= value >> 27
+        value &*= 0x94D0_49BB_1331_11EB
+        value ^= value >> 31
+        return value
+    }
+
+    private func mixedSeed(_ seed: UInt64, salt: UInt64) -> UInt64 {
+        var value = seed &+ salt &+ 0x9E37_79B9_7F4A_7C15
+        value ^= value >> 30
+        value &*= 0xBF58_476D_1CE4_E5B9
+        value ^= value >> 27
+        value &*= 0x94D0_49BB_1331_11EB
+        value ^= value >> 31
+        return value
     }
 
     private func melodyAnchorPitchClass(
@@ -748,7 +827,11 @@ struct JamArrangementBuilder {
         return 4
     }
 
-    private func melodyContour(for region: JamRegion, seed: UInt64) -> MelodyContour {
+    private func melodyContour(
+        for region: JamRegion,
+        seed: UInt64,
+        variationFamily: MelodyVariationFamily
+    ) -> MelodyContour {
         let contours: [MelodyContour]
         switch region {
         case .airy:
@@ -761,7 +844,8 @@ struct JamArrangementBuilder {
             contours = [.ascending, .repeatedAnchor, .pendulum]
         }
 
-        return contours[deterministicIndex(seed: seed, upperBound: contours.count)]
+        let contourSeed = variationFamily.emphasizesContour ? mixedSeed(seed, salt: 0xC0B7_0A11_5EED_0001) : seed
+        return contours[deterministicIndex(seed: contourSeed, upperBound: contours.count)]
     }
 
     private func melodyTemplates(for region: JamRegion) -> [[Int]] {
@@ -796,10 +880,12 @@ struct JamArrangementBuilder {
     private func photoConditionedMelodyTemplate(
         for region: JamRegion,
         seed: UInt64,
+        variationFamily: MelodyVariationFamily,
         transformedSourceNotes: [MelodySourceNote]
     ) -> [Int] {
         let templates = melodyTemplates(for: region)
-        let legacyIndex = deterministicIndex(seed: seed >> 1, upperBound: templates.count)
+        let rhythmSeed = variationFamily.emphasizesRhythm ? mixedSeed(seed, salt: 0x71A2_1A11_7A11_7A11) : seed
+        let legacyIndex = deterministicIndex(seed: rhythmSeed >> 1, upperBound: templates.count)
 
         let signature = photoRhythmSignature(from: transformedSourceNotes)
         let totalWeight = signature.values.reduce(0, +)
@@ -819,7 +905,7 @@ struct JamArrangementBuilder {
             return templates[legacyAmongTied.index]
         }
         let tieIndex = deterministicIndex(
-            seed: seed >> 3,
+            seed: rhythmSeed >> 3,
             upperBound: tied.count
         )
         return templates[tied[tieIndex].index]
@@ -928,9 +1014,21 @@ struct JamArrangementBuilder {
         harmony: GlobalHarmony,
         transformedSourceNotes: [MelodySourceNote],
         registerShift: Int,
-        region: JamRegion
+        region: JamRegion,
+        variationFamily: MelodyVariationFamily,
+        seed: UInt64
     ) -> Int {
-        let preferredCenter = min(96, max(60, regionMelodyCenter(for: region) + registerShift / 2))
+        let registerOffset: Int
+        if variationFamily.emphasizesRegister {
+            switch deterministicIndex(seed: mixedSeed(seed, salt: 0x3344) >> 4, upperBound: 3) {
+            case 0: registerOffset = -5
+            case 1: registerOffset = 0
+            default: registerOffset = 5
+            }
+        } else {
+            registerOffset = 0
+        }
+        let preferredCenter = min(96, max(60, regionMelodyCenter(for: region) + registerShift / 2 + registerOffset))
         let sourceCandidates = transformedSourceNotes
             .map(\.midiNote)
             .filter { PitchClass(normalizing: $0).rawValue == anchorPitchClass }
@@ -972,30 +1070,69 @@ struct JamArrangementBuilder {
         from template: [Int],
         region: JamRegion,
         seed: UInt64,
+        variationFamily: MelodyVariationFamily,
+        buildMode: MelodyVariationBuildMode,
+        preserveLeadingAnchor: Bool,
         kickSteps: Set<Int>
     ) -> [Int] {
-        guard template.count >= 3, seed.isMultiple(of: 4) else { return template }
+        guard template.count >= 2 else { return template }
+        let activeRhythmFamily = variationFamily.emphasizesRhythm || buildMode == .fallback
+        guard activeRhythmFamily else { return template }
 
-        var varied = template
-        let candidateIndices = Array(1..<(template.count - 1))
-        guard !candidateIndices.isEmpty else { return template }
+        var varied = template.sorted()
+        let desiredMutationCount = min(
+            max(2, buildMode == .fallback ? max(2, varied.count / 2) : max(2, Int(ceil(Double(varied.count) * 0.35)))),
+            max(2, min(4, varied.count))
+        )
+        let mutableIndices = varied.indices.filter { index in
+            !(preserveLeadingAnchor && index == 0)
+        }
+        guard !mutableIndices.isEmpty else { return varied }
 
-        let selectedIndex = candidateIndices[deterministicIndex(seed: seed >> 3, upperBound: candidateIndices.count)]
-        let preferredDirection: Int
-        switch region {
-        case .airy, .deep:
-            preferredDirection = template[selectedIndex] < 5 ? 1 : -1
-        case .bright, .intense:
-            preferredDirection = kickSteps.contains(template[selectedIndex] + 8) ? -1 : 1
+        for mutation in 0..<desiredMutationCount {
+            let indexSeed = mixedSeed(seed, salt: UInt64(mutation) &+ 0x5100)
+            let selectedIndex = mutableIndices[deterministicIndex(seed: indexSeed, upperBound: mutableIndices.count)]
+            let stepSeed = mixedSeed(seed, salt: UInt64(mutation) &+ 0x9100)
+            let candidateMoves = movementChoices(for: region, seed: stepSeed, aggressive: buildMode == .fallback)
+
+            for move in candidateMoves {
+                let shiftedStep = varied[selectedIndex] + move
+                guard (0..<8).contains(shiftedStep), !varied.contains(shiftedStep) else { continue }
+                varied[selectedIndex] = shiftedStep
+                break
+            }
         }
 
-        let shiftedStep = template[selectedIndex] + preferredDirection
-        guard (0..<8).contains(shiftedStep), !template.contains(shiftedStep) else {
-            return template
+        if buildMode == .fallback || variationFamily == .full {
+            varied = varied.sorted()
+            if varied.count >= 4 {
+                let removalCandidates = varied.indices.filter { index in
+                    !(preserveLeadingAnchor && index == 0)
+                }
+                if !removalCandidates.isEmpty {
+                    let removalIndex = removalCandidates[
+                        deterministicIndex(
+                            seed: mixedSeed(seed, salt: 0xABCD),
+                            upperBound: removalCandidates.count
+                        )
+                    ]
+                    let removed = varied.remove(at: removalIndex)
+                    let insertionCandidates = Array(0..<8).filter { !varied.contains($0) }
+                    let orderedInsertions = insertionCandidates.sorted { lhs, rhs in
+                        abs(lhs - removed) < abs(rhs - removed)
+                    }
+                    if let insertion = orderedInsertions.first(where: { candidate in
+                        abs(candidate - removed) >= 1 && abs(candidate - removed) <= 3
+                    }) {
+                        varied.append(insertion)
+                    } else {
+                        varied.append(removed)
+                    }
+                }
+            }
         }
 
-        varied[selectedIndex] = shiftedStep
-        return varied.sorted()
+        return Array(Set(varied)).sorted()
     }
 
     private func melodyVariationKind(for region: JamRegion, seed: UInt64) -> MelodyVariationKind {
@@ -1012,16 +1149,30 @@ struct JamArrangementBuilder {
     private func variedMelodyOffsets(
         from offsets: [Int],
         variationKind: MelodyVariationKind,
-        seed: UInt64
+        variationFamily: MelodyVariationFamily,
+        seed: UInt64,
+        buildMode: MelodyVariationBuildMode
     ) -> [Int] {
-        guard variationKind == .pitchChange, offsets.count >= 3 else {
+        guard offsets.count >= 2 else {
+            return offsets
+        }
+
+        guard variationFamily.emphasizesContour || variationKind == .pitchChange || buildMode == .fallback else {
             return offsets
         }
 
         var varied = offsets
-        let targetIndex = min(max(1, offsets.count / 2), offsets.count - 2)
-        let direction = ((seed >> 5) & 1) == 0 ? 1 : -1
-        varied[targetIndex] += direction
+        let candidateIndices = varied.indices.filter { $0 != 0 }
+        let mutationCount = min(candidateIndices.count, max(2, min(4, buildMode == .fallback ? varied.count : Int(ceil(Double(varied.count) * 0.40)))))
+
+        for mutation in 0..<mutationCount {
+            let indexSeed = mixedSeed(seed, salt: UInt64(mutation) &+ 0x4400)
+            let targetIndex = candidateIndices[deterministicIndex(seed: indexSeed, upperBound: candidateIndices.count)]
+            let directionSeed = mixedSeed(seed, salt: UInt64(mutation) &+ 0x5500)
+            let direction = ((directionSeed >> 5) & 1) == 0 ? 1 : -1
+            let magnitude = ((directionSeed >> 9) & 1) == 0 ? 1 : 2
+            varied[targetIndex] += direction * magnitude
+        }
         return varied
     }
 
@@ -1037,6 +1188,8 @@ struct JamArrangementBuilder {
         accompanimentNotes: [MusicNote],
         region: JamRegion,
         variationKind: MelodyVariationKind?,
+        registerPlan: MelodyRegisterPlan,
+        velocitySeed: UInt64,
         octaveJumpUsed: Bool
     ) -> MelodyHalfResult {
         let sourceCandidatesByPitchClass = Dictionary(grouping: transformedSourceNotes.map(\.midiNote)) {
@@ -1097,11 +1250,27 @@ struct JamArrangementBuilder {
                 resolvedMIDINote = softened
             }
 
+            if let preferredDirection = registerPlan.preferredDirectionByIndex[index],
+               let shifted = octaveShiftedMIDINote(
+                from: resolvedMIDINote,
+                preferredDirection: preferredDirection,
+                range: 60...96
+               ) {
+                resolvedMIDINote = resolveMelodyConflict(
+                    shifted,
+                    step: step,
+                    harmony: harmony,
+                    accompanimentNotes: accompanimentNotes,
+                    preferredAnchorMIDINote: anchorMIDINote
+                )
+            }
+
             let velocity = melodyVelocity(
                 baseVelocity: transformedSourceNotes[min(index, transformedSourceNotes.count - 1)].velocity,
                 attackRole: attackRole,
                 region: region,
                 variationKind: variationKind,
+                seed: velocitySeed,
                 attackIndex: index,
                 attackCount: relativeSteps.count
             )
@@ -1296,6 +1465,7 @@ struct JamArrangementBuilder {
         attackRole: MelodyAttackRole,
         region: JamRegion,
         variationKind: MelodyVariationKind?,
+        seed: UInt64,
         attackIndex: Int,
         attackCount: Int
     ) -> Float {
@@ -1315,8 +1485,45 @@ struct JamArrangementBuilder {
         if variationKind == .velocityAccent, attackIndex == max(0, attackCount - 2) {
             velocity *= 1.08
         }
+        let accentSeed = mixedSeed(seed, salt: UInt64(attackIndex) &+ 0x7000)
+        if (accentSeed & 1) == 0 {
+            velocity *= 0.96
+        } else {
+            velocity *= 1.04
+        }
 
         return min(0.94, max(0.48, velocity))
+    }
+
+    private func movementChoices(for region: JamRegion, seed: UInt64, aggressive: Bool) -> [Int] {
+        let base = aggressive ? [-2, 2, -1, 1] : [-1, 1, -2, 2]
+        let rotate = deterministicIndex(seed: seed, upperBound: base.count)
+        return Array(base[rotate...]) + Array(base[..<rotate])
+    }
+
+    private func melodyRegisterPlan(
+        eventCount: Int,
+        seed: UInt64,
+        variationFamily: MelodyVariationFamily,
+        buildMode: MelodyVariationBuildMode
+    ) -> MelodyRegisterPlan {
+        let activeRegisterFamily = variationFamily.emphasizesRegister || buildMode == .fallback
+        guard activeRegisterFamily, eventCount >= 1 else {
+            return MelodyRegisterPlan(preferredDirectionByIndex: [:])
+        }
+
+        let candidateIndices = Array(0..<eventCount)
+        let mutationCount = min(candidateIndices.count, max(2, min(4, buildMode == .fallback ? max(2, eventCount / 2) : Int(ceil(Double(eventCount) * 0.40)))))
+        var result: [Int: Int] = [:]
+
+        for mutation in 0..<mutationCount {
+            let indexSeed = mixedSeed(seed, salt: UInt64(mutation) &+ 0x8800)
+            let index = candidateIndices[deterministicIndex(seed: indexSeed, upperBound: candidateIndices.count)]
+            let directionSeed = mixedSeed(seed, salt: UInt64(mutation) &+ 0x9900)
+            result[index] = ((directionSeed >> 7) & 1) == 0 ? 1 : -1
+        }
+
+        return MelodyRegisterPlan(preferredDirectionByIndex: result)
     }
 
     private func normalizedMelodyHalf(
@@ -1481,6 +1688,52 @@ private enum MelodyVariationKind {
     case rhythmShift
     case octaveShift
     case velocityAccent
+}
+
+enum MelodyVariationFamily {
+    case rhythm
+    case contour
+    case register
+    case full
+
+    init(generation: UInt64) {
+        switch generation % 4 {
+        case 0: self = .rhythm
+        case 1: self = .contour
+        case 2: self = .register
+        default: self = .full
+        }
+    }
+
+    var emphasizesRhythm: Bool {
+        self == .rhythm || self == .full
+    }
+
+    var emphasizesContour: Bool {
+        self == .contour || self == .full
+    }
+
+    var emphasizesRegister: Bool {
+        self == .register || self == .full
+    }
+
+    var logLabel: String {
+        switch self {
+        case .rhythm: "rhythm"
+        case .contour: "contour"
+        case .register: "register"
+        case .full: "full"
+        }
+    }
+}
+
+enum MelodyVariationBuildMode {
+    case standard
+    case fallback
+}
+
+private struct MelodyRegisterPlan {
+    let preferredDirectionByIndex: [Int: Int]
 }
 
 private enum MelodyAttackRole {
