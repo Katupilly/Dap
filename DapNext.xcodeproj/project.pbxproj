@@ -12,6 +12,11 @@
 		AA000001000000000000003A /* GalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003B /* GalleryView.swift */; };
 		AA000001000000000000003C /* PhotoInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003D /* PhotoInspectorView.swift */; };
 		AA000001000000000000004A /* JamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004B /* JamView.swift */; };
+		AA0000010000000000000220 /* JamSequencerSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000221 /* JamSequencerSection.swift */; };
+		AA0000010000000000000222 /* JamDockBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000223 /* JamDockBar.swift */; };
+		AA0000010000000000000224 /* JamControlPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000225 /* JamControlPanels.swift */; };
+		AA0000010000000000000226 /* JamPhotoSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000227 /* JamPhotoSection.swift */; };
+		AA0000010000000000000228 /* JamPanelBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000229 /* JamPanelBackdrop.swift */; };
 		AA000001000000000000004C /* JamArrangementBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004D /* JamArrangementBuilder.swift */; };
 		AA000001000000000000005C /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000005D /* CameraView.swift */; };
 		AA000001000000000000006A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000006B /* Assets.xcassets */; };
@@ -53,6 +58,11 @@
 		AA000001000000000000003B /* GalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryView.swift; sourceTree = "<group>"; };
 		AA000001000000000000003D /* PhotoInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoInspectorView.swift; sourceTree = "<group>"; };
 		AA000001000000000000004B /* JamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamView.swift; sourceTree = "<group>"; };
+		AA0000010000000000000221 /* JamSequencerSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamSequencerSection.swift; sourceTree = "<group>"; };
+		AA0000010000000000000223 /* JamDockBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamDockBar.swift; sourceTree = "<group>"; };
+		AA0000010000000000000225 /* JamControlPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamControlPanels.swift; sourceTree = "<group>"; };
+		AA0000010000000000000227 /* JamPhotoSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPhotoSection.swift; sourceTree = "<group>"; };
+		AA0000010000000000000229 /* JamPanelBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPanelBackdrop.swift; sourceTree = "<group>"; };
 		AA000001000000000000004D /* JamArrangementBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamArrangementBuilder.swift; sourceTree = "<group>"; };
 		AA000001000000000000005D /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		AA000001000000000000006B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -192,6 +202,11 @@
 				AA0000010000000000000209 /* JamVisualTransportState.swift */,
 				AA0000010000000000000199 /* JamPhotoSelectorSheet.swift */,
 				AA000001000000000000004B /* JamView.swift */,
+				AA0000010000000000000225 /* JamControlPanels.swift */,
+				AA0000010000000000000223 /* JamDockBar.swift */,
+				AA0000010000000000000229 /* JamPanelBackdrop.swift */,
+				AA0000010000000000000227 /* JamPhotoSection.swift */,
+				AA0000010000000000000221 /* JamSequencerSection.swift */,
 			);
 			path = Jam;
 			sourceTree = "<group>";
@@ -343,6 +358,11 @@
 				AA0000010000000000000210 /* JamLibraryView.swift in Sources */,
 				AA0000010000000000000212 /* JamCard.swift in Sources */,
 				AA000001000000000000004A /* JamView.swift in Sources */,
+				AA0000010000000000000224 /* JamControlPanels.swift in Sources */,
+				AA0000010000000000000222 /* JamDockBar.swift in Sources */,
+				AA0000010000000000000228 /* JamPanelBackdrop.swift in Sources */,
+				AA0000010000000000000226 /* JamPhotoSection.swift in Sources */,
+				AA0000010000000000000220 /* JamSequencerSection.swift in Sources */,
 				AA0000010000000000000214 /* JamCoverRenderer.swift in Sources */,
 				AA000001000000000000005C /* CameraView.swift in Sources */,
 				AA0000010000000000000190 /* DapLavaLamp.metal in Sources */,
