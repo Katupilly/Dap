@@ -163,6 +163,7 @@ struct JamKitsPanel: View {
                         lineWidth: 1
                     )
             }
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(selection.displayName)

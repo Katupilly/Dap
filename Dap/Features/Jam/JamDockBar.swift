@@ -14,16 +14,29 @@ struct JamDockBar: View {
     private static let iconSlotSize: CGFloat = 20
 
     var body: some View {
-        HStack(spacing: Self.tileSpacing) {
-            kitsTileButton
-            vibeTileButton
-            arrangeTileButton
-            effectsTileButton
+        GeometryReader { geometry in
+            let sideContainerWidth = (geometry.size.width - Self.tileSpacing) / 2
+            let sideTileWidth = (sideContainerWidth - Self.tileSpacing) / 2
+
+            HStack(spacing: Self.tileSpacing) {
+                HStack(spacing: Self.tileSpacing) {
+                    kitsTileButton(width: sideTileWidth)
+                    vibeTileButton(width: sideTileWidth)
+                }
+                .frame(width: sideContainerWidth)
+
+                HStack(spacing: Self.tileSpacing) {
+                    arrangeTileButton(width: sideTileWidth)
+                    effectsTileButton(width: sideTileWidth)
+                }
+                .frame(width: sideContainerWidth)
+            }
         }
+        .frame(height: Self.tileSize)
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
-    private var kitsTileButton: some View {
+    private func kitsTileButton(width: CGFloat) -> some View {
         Button {
             onPanelToggle(.kits)
         } label: {
@@ -34,12 +47,12 @@ struct JamDockBar: View {
             )
         }
         .buttonStyle(.plain)
-        .frame(width: Self.tileSize, height: Self.tileSize)
+        .frame(width: width, height: Self.tileSize)
         .accessibilityLabel("Kits")
         .accessibilityValue("\(selectedPanel == .kits && isPanelPresented ? "Expanded" : "Collapsed")")
     }
 
-    private var vibeTileButton: some View {
+    private func vibeTileButton(width: CGFloat) -> some View {
         Button {
             onPanelToggle(.vibe)
         } label: {
@@ -51,12 +64,12 @@ struct JamDockBar: View {
             )
         }
         .buttonStyle(.plain)
-        .frame(width: Self.tileSize, height: Self.tileSize)
+        .frame(width: width, height: Self.tileSize)
         .accessibilityLabel("Vibe")
         .accessibilityValue(thumbnailLabel)
     }
 
-    private var arrangeTileButton: some View {
+    private func arrangeTileButton(width: CGFloat) -> some View {
         Button {
             onPanelToggle(.arrange)
         } label: {
@@ -69,13 +82,13 @@ struct JamDockBar: View {
         }
         .buttonStyle(.plain)
         .disabled(!canOpenArrangePanel)
-        .frame(width: Self.tileSize, height: Self.tileSize)
+        .frame(width: width, height: Self.tileSize)
         .accessibilityLabel("Arrange")
         .accessibilityValue(arrangeAccessibilityValue)
         .accessibilityHint(arrangeAccessibilityHint)
     }
 
-    private var effectsTileButton: some View {
+    private func effectsTileButton(width: CGFloat) -> some View {
         Button {
             onPanelToggle(.effects)
         } label: {
@@ -86,7 +99,7 @@ struct JamDockBar: View {
             )
         }
         .buttonStyle(.plain)
-        .frame(width: Self.tileSize, height: Self.tileSize)
+        .frame(width: width, height: Self.tileSize)
         .accessibilityLabel("Effects")
         .accessibilityValue("Empty")
     }
