@@ -91,7 +91,7 @@ struct AppRootView: View {
                                         green: 26 / 255,
                                         blue: 30 / 255
                                     )
-                                    .opacity(0.78)
+                                    .opacity(0.62)
                                 )
                                 .interactive(true),
                             in: Circle()

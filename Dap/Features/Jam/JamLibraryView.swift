@@ -152,9 +152,13 @@ struct JamLibraryView: View {
                                 id: draft.id,
                                 name: draft.name,
                                 coverDescriptor: .empty(jamID: draft.id),
+                                detailText: nil,
+                                status: nil,
                                 isEditing: state.editingJamID == draft.id,
                                 editingPlaceholder: PersistedJam.defaultName,
                                 editingName: $state.editingName,
+                                showsActions: false,
+                                isOpenDisabled: true,
                                 onOpen: {},
                                 onRename: {},
                                 onDelete: {
@@ -175,9 +179,13 @@ struct JamLibraryView: View {
                                 id: jam.id,
                                 name: jam.name,
                                 coverDescriptor: coverDescriptor(for: jam),
+                                detailText: nil,
+                                status: nil,
                                 isEditing: state.editingJamID == jam.id,
                                 editingPlaceholder: "Jam name",
                                 editingName: $state.editingName,
+                                showsActions: true,
+                                isOpenDisabled: false,
                                 onOpen: {
                                     dismissSearch()
                                     Task { await state.openJam(jam) }

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import PhotosUI
 import SwiftUI
 
@@ -10,6 +11,15 @@ import SwiftUI
 @MainActor
 @Observable
 final class PhotoLibraryViewModel {
+    enum PhotoMetadataState: Equatable {
+        case idle
+        case generating
+        case available
+        case unavailable
+        case empty
+        case failed
+        case cancelled
+    }
 
     // MARK: Persisted state
 
@@ -30,6 +40,7 @@ final class PhotoLibraryViewModel {
 
     /// IDs whose metadata is currently being generated in the background.
     private(set) var refiningMetadataIDs: Set<UUID> = []
+    private(set) var metadataStateByID: [UUID: PhotoMetadataState] = [:]
 
     /// Live metadata tasks keyed by PhotoSound ID.
     private var metadataTasks: [UUID: Task<Void, Never>] = [:]
@@ -48,6 +59,10 @@ final class PhotoLibraryViewModel {
 
     private let player = MusicPlayer()
     private var hasLoaded = false
+    private let metadataLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Dap",
+        category: "PhotoMetadata"
+    )
 
     // MARK: Init
 
@@ -69,6 +84,9 @@ final class PhotoLibraryViewModel {
             let covers = try await PhotoStore.shared.coverData(for: loaded)
             items         = loaded
             coverDataByID = covers
+            for sound in loaded {
+                metadataStateByID[sound.id] = sound.trimmedName == nil ? .idle : .available
+            }
         } catch {
             // Library may not exist yet on first launch.
             items = []
@@ -132,6 +150,9 @@ final class PhotoLibraryViewModel {
         if importedCount > 0 {
             items = workingItems
             coverDataByID = workingCoverData
+            for sound in workingItems where metadataStateByID[sound.id] == nil {
+                metadataStateByID[sound.id] = sound.trimmedName == nil ? .idle : .available
+            }
             scheduleBatchMetadataRefinement(for: successfulImports)
         }
 
@@ -151,6 +172,7 @@ final class PhotoLibraryViewModel {
         // Update memory only after full disk success.
         coverDataByID[result.sound.id] = result.coverData
         items = updated
+        metadataStateByID[result.sound.id] = .idle
 
         // Kick off background metadata generation (non-throwing, non-blocking).
         scheduleMetadataRefinement(for: result.sound, imageData: imageData)
@@ -195,6 +217,7 @@ final class PhotoLibraryViewModel {
         guard let sound = items.first(where: { $0.id == soundID }) else { return }
 
         refiningMetadataIDs.insert(soundID)
+        metadataStateByID[soundID] = .generating
         let context = MusicalContext(sound: sound)
 
         defer {
@@ -212,19 +235,38 @@ final class PhotoLibraryViewModel {
 
         guard !Task.isCancelled else { return }
 
-        if let metadata = generated {
-            // Persist — errors are silent; fallback stays in place.
-            if let updatedSound = try? await PhotoStore.shared.updateMetadata(
-                id: soundID,
-                name: metadata.name,
-                description: metadata.description
-            ) {
-                // Patch only the matching item in memory.
+        switch generated {
+        case .generated(let metadata):
+            do {
+                let updatedSound = try await PhotoStore.shared.updateMetadata(
+                    id: soundID,
+                    name: metadata.name,
+                    nameSource: .generated,
+                    description: metadata.description,
+                    preserveManualName: true
+                )
                 if let idx = items.firstIndex(where: { $0.id == soundID }) {
                     items[idx] = updatedSound
                 }
+                metadataStateByID[soundID] = .available
+            } catch {
+                metadataLogger.error("Failed to persist generated metadata for \(soundID.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                metadataStateByID[soundID] = .failed
             }
+        case .unavailable:
+            metadataStateByID[soundID] = .unavailable
+        case .empty:
+            metadataStateByID[soundID] = .empty
+        case .failed:
+            metadataStateByID[soundID] = .failed
+        case .cancelled:
+            metadataStateByID[soundID] = .cancelled
         }
+    }
+
+    func metadataState(for sound: PhotoSound) -> PhotoMetadataState {
+        metadataStateByID[sound.id]
+            ?? (sound.trimmedName == nil ? .idle : .available)
     }
 
     func delete(sound: PhotoSound) async throws {
@@ -237,6 +279,7 @@ final class PhotoLibraryViewModel {
         metadataTasks[sound.id]?.cancel()
         metadataTasks.removeValue(forKey: sound.id)
         refiningMetadataIDs.remove(sound.id)
+        metadataStateByID.removeValue(forKey: sound.id)
         coverDataByID.removeValue(forKey: sound.id)
         items = updated
     }

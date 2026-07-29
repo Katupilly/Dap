@@ -2,12 +2,27 @@ import SwiftUI
 import UIKit
 
 struct JamCard: View {
+    struct Status: Equatable {
+        enum Style: Equatable {
+            case neutral
+            case success
+            case warning
+        }
+
+        let text: String
+        let style: Style
+    }
+
     let id: UUID
     let name: String
     let coverDescriptor: JamCoverDescriptor
+    let detailText: String?
+    let status: Status?
     let isEditing: Bool
     let editingPlaceholder: String
     @Binding var editingName: String
+    let showsActions: Bool
+    let isOpenDisabled: Bool
     let onOpen: () -> Void
     let onRename: () -> Void
     let onDelete: () -> Void
@@ -22,6 +37,7 @@ struct JamCard: View {
                 cover
             }
             .buttonStyle(.plain)
+            .disabled(isOpenDisabled)
 
             HStack(alignment: .center, spacing: 8) {
                 if isEditing {
@@ -64,24 +80,28 @@ struct JamCard: View {
                         cardTitle
                     }
                     .buttonStyle(.plain)
+                    .disabled(isOpenDisabled)
 
-                    Menu {
-                        Button("Rename", action: onRename)
-                        Button("Delete", role: .destructive, action: onDelete)
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 28, height: 28)
+                    if showsActions {
+                        Menu {
+                            Button("Rename", action: onRename)
+                            Button("Delete", role: .destructive, action: onDelete)
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Jam actions")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Jam actions")
                 }
             }
             .frame(minHeight: 28)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(name)
+        .accessibilityValue(accessibilityValue)
     }
 
     @ViewBuilder
@@ -103,11 +123,62 @@ struct JamCard: View {
     }
 
     private var cardTitle: some View {
-        Text(name)
-            .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(name)
+                .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if detailText != nil || status != nil {
+                HStack(alignment: .center, spacing: 8) {
+                    if let detailText {
+                        Text(detailText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if let status {
+                        Text(status.text)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(statusForeground(status.style))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(statusBackground(status.style), in: Capsule())
+                    }
+                }
+            }
+        }
+    }
+
+    private func statusForeground(_ style: Status.Style) -> Color {
+        switch style {
+        case .neutral:
+            .secondary
+        case .success:
+            .green
+        case .warning:
+            .orange
+        }
+    }
+
+    private func statusBackground(_ style: Status.Style) -> Color {
+        switch style {
+        case .neutral:
+            Color.secondary.opacity(0.14)
+        case .success:
+            Color.green.opacity(0.14)
+        case .warning:
+            Color.orange.opacity(0.14)
+        }
+    }
+
+    private var accessibilityValue: String {
+        [detailText, status?.text]
+            .compactMap { $0 }
+            .joined(separator: ", ")
     }
 }
 

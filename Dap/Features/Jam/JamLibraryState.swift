@@ -58,7 +58,8 @@ final class JamLibraryState {
         }
     }
 
-    func createJam(named name: String) async {
+    @discardableResult
+    func createJam(named name: String) async -> PersistedJam? {
         let normalizedName = PersistedJam.normalizedName(name)
         do {
             let jam = try await JamStore.shared.create(named: normalizedName)
@@ -66,9 +67,11 @@ final class JamLibraryState {
             jams.insert(jam, at: 0)
             selectedJam = jam
             loadState = .loaded
+            return jam
         } catch {
             errorMessage = "Could not create Jam."
             logger.error("Failed to create Jam: \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 
@@ -90,11 +93,13 @@ final class JamLibraryState {
         }
     }
 
-    func confirmDraftCreation() async {
-        guard draftJam != nil else { return }
-        await createJam(named: editingName)
+    @discardableResult
+    func confirmDraftCreation() async -> PersistedJam? {
+        guard draftJam != nil else { return nil }
+        let jam = await createJam(named: editingName)
         editingJamID = nil
         editingName = ""
+        return jam
     }
 
     func openJam(_ jam: PersistedJam) async {
@@ -154,6 +159,23 @@ final class JamLibraryState {
     func closeSession() async {
         selectedJam = nil
         await reload()
+    }
+
+    @discardableResult
+    func saveJam(_ jam: PersistedJam) async -> PersistedJam? {
+        do {
+            let saved = try await JamStore.shared.save(jam)
+            replaceInList(with: saved)
+            if selectedJam?.id == saved.id {
+                selectedJam = saved
+            }
+            loadState = .loaded
+            return saved
+        } catch {
+            errorMessage = "Could not save Jam."
+            logger.error("Failed to save Jam \(jam.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     private func replaceInList(with jam: PersistedJam) {

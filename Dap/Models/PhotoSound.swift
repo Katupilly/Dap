@@ -211,13 +211,34 @@ struct MusicSequence: Codable, Sendable, Equatable {
 
 // MARK: - PhotoSound
 
+enum PhotoNameSource: String, Codable, Equatable, Sendable {
+    case manual
+    case generated
+}
+
 struct PhotoSound: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     var name: String?
+    var nameSource: PhotoNameSource?
     var description: String?
     let createdAt: Date
     let coverFilename: String
     let sequence: MusicSequence
+
+    var trimmedName: String? {
+        guard let name else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    var displayTitle: String {
+        if let trimmedName {
+            return trimmedName
+        }
+
+        let noteLabel = sequence.displayLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return noteLabel.isEmpty ? "Untitled Photo" : noteLabel
+    }
 }
 
 // MARK: - Pipeline result (not persisted)

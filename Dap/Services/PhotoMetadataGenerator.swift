@@ -1,6 +1,7 @@
 import Foundation
 import Vision
 import FoundationModels
+import OSLog
 
 // MARK: - Visual label (Sendable transport value)
 
@@ -32,20 +33,40 @@ struct GeneratedPhotoMetadata {
 
 // MARK: - PhotoMetadataGenerator
 
+enum PhotoMetadataGenerationResult: Sendable {
+    case generated(GeneratedPhotoMetadata)
+    case unavailable
+    case empty
+    case failed
+    case cancelled
+}
+
 enum PhotoMetadataGenerator {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Dap",
+        category: "PhotoMetadata"
+    )
 
     // MARK: Public entry point
 
     /// Runs Vision classification off-main, then asks Foundation Models for
-    /// a name and description. Returns nil silently on any failure.
+    /// a name and description.
     static func generate(
         imageData: Data,
         musicalContext: MusicalContext
-    ) async -> GeneratedPhotoMetadata? {
-        // Step 1 — Vision (off-main, returns only Sendable values)
-        let labels = await classifyImage(imageData: imageData)
+    ) async -> PhotoMetadataGenerationResult {
+        logger.log("Starting metadata generation")
+        guard !Task.isCancelled else {
+            logger.log("Metadata generation cancelled before start")
+            return .cancelled
+        }
 
-        // Step 2 — Foundation Models
+        let labels = await classifyImage(imageData: imageData)
+        guard !Task.isCancelled else {
+            logger.log("Metadata generation cancelled after classification")
+            return .cancelled
+        }
+
         return await generateMetadata(labels: labels, context: musicalContext)
     }
 
@@ -85,17 +106,18 @@ enum PhotoMetadataGenerator {
     private static func generateMetadata(
         labels: [VisualLabel],
         context: MusicalContext
-    ) async -> GeneratedPhotoMetadata? {
+    ) async -> PhotoMetadataGenerationResult {
         let model = SystemLanguageModel.default
 
-        // Check availability — treat any non-available state as silent skip.
         switch model.availability {
         case .available:
-            break   // proceed
+            break
         case .unavailable:
-            return nil
+            logger.log("Metadata generation unavailable")
+            return .unavailable
         @unknown default:
-            return nil
+            logger.log("Metadata generation unavailable due to unknown model state")
+            return .unavailable
         }
 
         let prompt = buildPrompt(labels: labels, context: context)
@@ -117,10 +139,22 @@ enum PhotoMetadataGenerator {
                 to: prompt,
                 generating: GeneratedPhotoMetadata.self
             )
-            return sanitize(response.content)
+            guard !Task.isCancelled else {
+                logger.log("Metadata generation cancelled after model response")
+                return .cancelled
+            }
+            guard let metadata = sanitize(response.content) else {
+                logger.log("Metadata generation completed without a usable name")
+                return .empty
+            }
+            logger.log("Metadata generation completed successfully")
+            return .generated(metadata)
+        } catch is CancellationError {
+            logger.log("Metadata generation cancelled during model response")
+            return .cancelled
         } catch {
-            // Guardrail violations, generation errors, context size issues — silent failure.
-            return nil
+            logger.error("Metadata generation failed: \(error.localizedDescription, privacy: .public)")
+            return .failed
         }
     }
 

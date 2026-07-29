@@ -90,6 +90,7 @@ enum PhotoMusicPipeline {
             let sound = PhotoSound(
                 id: id,
                 name: nil,
+                nameSource: nil,
                 description: nil,
                 createdAt: .now,
                 coverFilename: "\(id.uuidString).png",

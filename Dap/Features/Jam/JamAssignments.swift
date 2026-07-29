@@ -25,6 +25,8 @@ struct AssignedSound: Identifiable, Equatable {
 /// the user confirms a fresh selection; subsequent renders and arrangement
 /// builds must read from this state instead of recomputing roles.
 struct JamSlotAssignments: Equatable {
+    static let maximumPhotoCount = 3
+
     var bass: UUID?
     var harmony: UUID?
     var melody: UUID?
@@ -80,6 +82,13 @@ struct JamSlotAssignments: Equatable {
         return result
     }
 
+    enum AddPhotoResult: Equatable {
+        case added(JamSlotAssignments)
+        case alreadyIncluded
+        case full
+        case unplayable
+    }
+
     func hasDifferentActiveSlots(from other: JamSlotAssignments) -> Bool {
         bass != other.bass
             || harmony != other.harmony
@@ -92,6 +101,13 @@ struct JamSlotAssignments: Equatable {
         case .harmony: return harmony
         case .melody: return melody
         }
+    }
+
+    func addingPhotoID(_ id: UUID, playable: Bool) -> AddPhotoResult {
+        guard !allPhotoIDs.contains(id) else { return .alreadyIncluded }
+        guard allPhotoIDs.count < Self.maximumPhotoCount else { return .full }
+        guard playable else { return .unplayable }
+        return .added(appendingAddedID(id, playableIDs: [id]))
     }
 
     func swapping(_ first: JamRole, _ second: JamRole) -> JamSlotAssignments {

@@ -96,8 +96,10 @@ actor PhotoStore {
     @discardableResult
     func updateMetadata(
         id: UUID,
-        name: String,
-        description: String
+        name: String? = nil,
+        nameSource: PhotoNameSource? = nil,
+        description: String? = nil,
+        preserveManualName: Bool = false
     ) throws -> PhotoSound {
         let libURL = try libraryURL()
 
@@ -115,8 +117,21 @@ actor PhotoStore {
         }
 
         var updated = library[index]
-        updated.name        = name
-        updated.description = description
+
+        if let name {
+            let shouldPreserveManualName =
+                preserveManualName && updated.nameSource == .manual
+
+            if !shouldPreserveManualName {
+                updated.name = name
+                updated.nameSource = nameSource
+            }
+        }
+
+        if let description {
+            updated.description = description
+        }
+
         library[index]      = updated
 
         // Synchronous atomic write — completes before the actor releases the turn.
