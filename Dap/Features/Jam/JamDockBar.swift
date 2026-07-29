@@ -1,9 +1,9 @@
 import SwiftUI
 
 struct JamDockBar: View {
-    @Binding var selectedPanel: JamControlPanel
-    @Binding var isPanelPresented: Bool
-    let session: JamSessionState
+    let selectedPanel: JamControlPanel
+    let isPanelPresented: Bool
+    let vibePosition: CGPoint
     let canOpenArrangePanel: Bool
     let arrangeAvailability: JamArrangeAvailability
     let onPanelToggle: (JamControlPanel) -> Void
@@ -44,7 +44,7 @@ struct JamDockBar: View {
             onPanelToggle(.vibe)
         } label: {
             VibeDockTile(
-                position: session.vibePosition,
+                position: vibePosition,
                 cornerRadius: Self.cornerRadius,
                 iconSlotSize: Self.iconSlotSize,
                 isActive: selectedPanel == .vibe && isPanelPresented
@@ -92,7 +92,7 @@ struct JamDockBar: View {
     }
 
     private var thumbnailLabel: String {
-        switch JamGrooveLibrary.region(for: session.vibePosition) {
+        switch JamGrooveLibrary.region(for: vibePosition) {
         case .airy: "Airy"
         case .bright: "Bright"
         case .deep: "Deep"
@@ -400,4 +400,3 @@ private struct EffectsDockTile: View {
         .frame(width: iconSlotSize, height: iconSlotSize)
     }
 }
-

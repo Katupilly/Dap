@@ -174,9 +174,9 @@ struct JamView: View {
                     .zIndex(8)
 
                 JamDockBar(
-                    selectedPanel: $selectedPanel,
-                    isPanelPresented: $isPanelPresented,
-                    session: session,
+                    selectedPanel: selectedPanel,
+                    isPanelPresented: isPanelPresented,
+                    vibePosition: session.vibePosition,
                     canOpenArrangePanel: canOpenArrangePanel,
                     arrangeAvailability: arrangeAvailability,
                     onPanelToggle: { target in
@@ -819,7 +819,10 @@ struct JamView: View {
 
     private var vibePanelContent: some View {
         JamVibePanel(
-            session: session,
+            vibePosition: Binding(
+                get: { session.vibePosition },
+                set: { session.vibePosition = $0 }
+            ),
             expandedPanelFill: expandedPanelFill,
             expandedPanelStroke: expandedPanelStroke,
             onPositionChanged: {
@@ -858,8 +861,10 @@ struct JamView: View {
     private var kitsPanelContent: some View {
         let size = panelSize(for: .kits)
         return JamKitsPanel(
-            session: session,
-            playbackController: playbackController,
+            selectedDrumKit: session.drumKitSelection,
+            drumKitOptions: MusicDrumKitSelection.allCases,
+            isDrumKitChangePending: playbackController.isDrumKitChangePending,
+            isPreparedDrumKitChangePending: playbackController.isPreparedDrumKitChangePending,
             colorScheme: colorScheme,
             currentDrumKitSubtitle: currentDrumKitSubtitle,
             width: size.width,
@@ -874,7 +879,10 @@ struct JamView: View {
     private var effectsPanelContent: some View {
         let size = panelSize(for: .effects)
         return JamEffectsPanel(
-            session: session,
+            effectSettings: Binding(
+                get: { session.effectSettings },
+                set: { session.effectSettings = $0 }
+            ),
             colorScheme: colorScheme,
             width: size.width,
             height: size.height,
@@ -964,10 +972,10 @@ struct JamView: View {
     }
 
     private var selectedPhotoArea: some View {
-        JamSelectedPhotoArea(
-            session: session,
+        JamSelectedPhotoAreaHost(
             visualTransport: visualTransport,
-            sounds: library.items,
+            assignments: session.slotAssignments,
+            sounds: selectedSounds,
             imagesByID: selectedPhotoImagesByID,
             reduceMotion: reduceMotion,
             selectedJamRole: selectedJamRole,
@@ -989,18 +997,34 @@ struct JamView: View {
 
     private var sequencerAndStatusContent: some View {
         JamSequencerAndStatus(
-            steps: jamStepsPerBar,
-            session: session,
-            playbackController: playbackController,
-            visualTransport: visualTransport,
-            activeStepsBySoundID: session.activeArrangement?.activeStepsBySoundID ?? [:],
-            roleByID: session.slotAssignments.assignedRolesByID,
-            roleColors: rowColorMap,
+            status: sequencerStatus,
             bpm: Int(jamBPM),
-            reduceMotion: reduceMotion
+            sequencerContent: JamSequencerSnapshotHost(
+                steps: jamStepsPerBar,
+                session: session,
+                visualTransport: visualTransport,
+                roleColors: rowColorMap,
+                reduceMotion: reduceMotion
+            )
         )
         .frame(height: 150)
         .frame(maxWidth: .infinity)
+    }
+
+    private var sequencerStatus: JamSequencerStatus {
+        let assignments = session.slotAssignments
+        let region = JamGrooveLibrary.region(for: session.vibePosition)
+        let drumKit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
+
+        return JamSequencerStatus(
+            hasAnySelection: !assignments.allPhotoIDs.isEmpty,
+            isPlaying: session.isPlaying,
+            isApplyingNextBar: session.isPlaying && playbackController.hasPendingArrangementChanges,
+            activeSlotCount: assignments.activePhotoIDs.count,
+            reserveCount: assignments.reserve.count,
+            region: region,
+            drumKit: drumKit
+        )
     }
 
     private var rowColorMap: [JamRole: Color] {

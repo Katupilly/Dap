@@ -35,8 +35,10 @@ struct JamControlPanelHost<Content: View>: View {
 }
 
 struct JamKitsPanel: View {
-    let session: JamSessionState
-    let playbackController: JamPlaybackController
+    let selectedDrumKit: MusicDrumKitSelection
+    let drumKitOptions: [MusicDrumKitSelection]
+    let isDrumKitChangePending: Bool
+    let isPreparedDrumKitChangePending: Bool
     let colorScheme: ColorScheme
     let currentDrumKitSubtitle: String
     let width: CGFloat
@@ -58,7 +60,7 @@ struct JamKitsPanel: View {
                 alignment: .leading,
                 spacing: 12
             ) {
-                ForEach(MusicDrumKitSelection.allCases, id: \.self) { selection in
+                ForEach(drumKitOptions, id: \.self) { selection in
                     drumKitOptionButton(selection)
                 }
             }
@@ -96,9 +98,9 @@ struct JamKitsPanel: View {
     }
 
     private func drumKitOptionButton(_ selection: MusicDrumKitSelection) -> some View {
-        let isSelected = session.drumKitSelection == selection
-        let detailText: String? = if isSelected && playbackController.isDrumKitChangePending {
-            playbackController.isPreparedDrumKitChangePending ? "Queued" : "Next bar"
+        let isSelected = selectedDrumKit == selection
+        let detailText: String? = if isSelected && isDrumKitChangePending {
+            isPreparedDrumKitChangePending ? "Queued" : "Next bar"
         } else {
             nil
         }
@@ -426,7 +428,7 @@ struct JamArrangePanel: View {
 }
 
 struct JamVibePanel: View {
-    let session: JamSessionState
+    @Binding var vibePosition: CGPoint
     let expandedPanelFill: Color
     let expandedPanelStroke: Color
     let onPositionChanged: () -> Void
@@ -438,10 +440,7 @@ struct JamVibePanel: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(expandedPanelStroke, lineWidth: 1)
             VibeControl(
-                position: Binding(
-                    get: { session.vibePosition },
-                    set: { session.vibePosition = $0 }
-                ),
+                position: $vibePosition,
                 onPositionChanged: onPositionChanged
             )
         }
@@ -452,7 +451,7 @@ struct JamVibePanel: View {
     }
 
     private var thumbnailLabel: String {
-        switch JamGrooveLibrary.region(for: session.vibePosition) {
+        switch JamGrooveLibrary.region(for: vibePosition) {
         case .airy: "Airy"
         case .bright: "Bright"
         case .deep: "Deep"
@@ -462,7 +461,7 @@ struct JamVibePanel: View {
 }
 
 struct JamEffectsPanel: View {
-    let session: JamSessionState
+    @Binding var effectSettings: JamEffectSettings
     let colorScheme: ColorScheme
     let width: CGFloat
     let height: CGFloat
@@ -484,12 +483,12 @@ struct JamEffectsPanel: View {
                 title: "Reverb",
                 description: "Medium Hall",
                 isEnabled: Binding(
-                    get: { session.effectSettings.reverbEnabled },
-                    set: { session.effectSettings.reverbEnabled = $0 }
+                    get: { effectSettings.reverbEnabled },
+                    set: { effectSettings.reverbEnabled = $0 }
                 ),
                 mixValue: Binding(
-                    get: { Double(session.effectSettings.reverbMix) },
-                    set: { session.effectSettings.reverbMix = Float($0) }
+                    get: { Double(effectSettings.reverbMix) },
+                    set: { effectSettings.reverbMix = Float($0) }
                 ),
                 enableLabel: "Reverb",
                 mixLabel: "Reverb Mix"
@@ -504,12 +503,12 @@ struct JamEffectsPanel: View {
                 title: "Delay",
                 description: "Dotted 1/8",
                 isEnabled: Binding(
-                    get: { session.effectSettings.delayEnabled },
-                    set: { session.effectSettings.delayEnabled = $0 }
+                    get: { effectSettings.delayEnabled },
+                    set: { effectSettings.delayEnabled = $0 }
                 ),
                 mixValue: Binding(
-                    get: { Double(session.effectSettings.delayMix) },
-                    set: { session.effectSettings.delayMix = Float($0) }
+                    get: { Double(effectSettings.delayMix) },
+                    set: { effectSettings.delayMix = Float($0) }
                 ),
                 enableLabel: "Delay",
                 mixLabel: "Delay Mix"
@@ -521,12 +520,12 @@ struct JamEffectsPanel: View {
                 title: "LFO",
                 description: "Tremolo · 1/2",
                 isEnabled: Binding(
-                    get: { session.effectSettings.lfoEnabled },
-                    set: { session.effectSettings.lfoEnabled = $0 }
+                    get: { effectSettings.lfoEnabled },
+                    set: { effectSettings.lfoEnabled = $0 }
                 ),
                 mixValue: Binding(
-                    get: { Double(session.effectSettings.lfoAmount) },
-                    set: { session.effectSettings.lfoAmount = Float($0) }
+                    get: { Double(effectSettings.lfoAmount) },
+                    set: { effectSettings.lfoAmount = Float($0) }
                 ),
                 enableLabel: "LFO",
                 mixLabel: "LFO Amount"
@@ -550,9 +549,9 @@ struct JamEffectsPanel: View {
 
     private var activeEffectsCount: Int {
         var count = 0
-        if session.effectSettings.reverbEnabled { count += 1 }
-        if session.effectSettings.delayEnabled { count += 1 }
-        if session.effectSettings.lfoEnabled { count += 1 }
+        if effectSettings.reverbEnabled { count += 1 }
+        if effectSettings.delayEnabled { count += 1 }
+        if effectSettings.lfoEnabled { count += 1 }
         return count
     }
 
@@ -899,4 +898,3 @@ private struct CornerWeights {
     let deep: CGFloat
     let intense: CGFloat
 }
-

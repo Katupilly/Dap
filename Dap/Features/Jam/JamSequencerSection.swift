@@ -1,17 +1,92 @@
 import SwiftUI
 
-struct JamSequencerAndStatus: View {
-    @Environment(\.colorScheme) private var colorScheme
+struct JamSequencerSnapshot: Equatable {
+    let bassSteps: Set<Int>
+    let harmonySteps: Set<Int>
+    let melodySteps: Set<Int>
 
+    init(arrangement: JamArrangement?, assignments: JamSlotAssignments) {
+        self.init(
+            activeStepsBySoundID: arrangement?.activeStepsBySoundID ?? [:],
+            assignments: assignments
+        )
+    }
+
+    private init(
+        activeStepsBySoundID: [UUID: Set<Int>],
+        assignments: JamSlotAssignments
+    ) {
+        let roleByID = assignments.assignedRolesByID
+        var bassSteps: Set<Int> = []
+        var harmonySteps: Set<Int> = []
+        var melodySteps: Set<Int> = []
+
+        for (soundID, steps) in activeStepsBySoundID {
+            switch roleByID[soundID] {
+            case .bass:
+                bassSteps.formUnion(steps)
+            case .harmony:
+                harmonySteps.formUnion(steps)
+            case .melody:
+                melodySteps.formUnion(steps)
+            case nil:
+                break
+            }
+        }
+
+        self.bassSteps = bassSteps
+        self.harmonySteps = harmonySteps
+        self.melodySteps = melodySteps
+    }
+
+    fileprivate func steps(for role: JamRole) -> Set<Int> {
+        switch role {
+        case .bass: bassSteps
+        case .harmony: harmonySteps
+        case .melody: melodySteps
+        }
+    }
+}
+
+struct JamSequencerStatus: Equatable {
+    let hasAnySelection: Bool
+    let isPlaying: Bool
+    let isApplyingNextBar: Bool
+    let activeSlotCount: Int
+    let reserveCount: Int
+    let region: JamRegion
+    let drumKit: MusicDrumKit
+}
+
+struct JamSequencerSnapshotHost: View {
     let steps: Int
     let session: JamSessionState
-    let playbackController: JamPlaybackController
     let visualTransport: JamVisualTransportState
-    let activeStepsBySoundID: [UUID: Set<Int>]
-    let roleByID: [UUID: JamRole]
     let roleColors: [JamRole: Color]
-    let bpm: Int
     let reduceMotion: Bool
+
+    var body: some View {
+        let snapshot = JamSequencerSnapshot(
+            arrangement: session.activeArrangement,
+            assignments: session.slotAssignments
+        )
+
+        JamSequencerPlayheadReader(
+            steps: steps,
+            visualTransport: visualTransport,
+            snapshot: snapshot,
+            roleColors: roleColors,
+            reduceMotion: reduceMotion
+        )
+    }
+}
+
+struct JamSequencerAndStatus<SequencerContent: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let status: JamSequencerStatus
+    let bpm: Int
+    let sequencerContent: SequencerContent
 
     private var structuralCardFill: Color {
         switch colorScheme {
@@ -68,17 +143,6 @@ struct JamSequencerAndStatus: View {
         .accessibilityLabel("\(statusPrimaryText), \(statusSecondaryText), \(bpm) BPM")
     }
 
-    private var sequencerContent: some View {
-        JamSequencerRows(
-            steps: steps,
-            visualTransport: visualTransport,
-            activeStepsBySoundID: activeStepsBySoundID,
-            roleByID: roleByID,
-            roleColors: roleColors,
-            reduceMotion: reduceMotion
-        )
-    }
-
     private var statusContent: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
@@ -103,26 +167,18 @@ struct JamSequencerAndStatus: View {
     }
 
     private var statusPrimaryText: String {
-        if session.slotAssignments.allPhotoIDs.isEmpty { return "READY" }
-        if applyingNextBar { return "NEXT BAR" }
-        return session.isPlaying ? "PLAYING" : "READY"
+        if !status.hasAnySelection { return "READY" }
+        if status.isApplyingNextBar { return "NEXT BAR" }
+        return status.isPlaying ? "PLAYING" : "READY"
     }
 
     private var statusSecondaryText: String {
-        if session.slotAssignments.allPhotoIDs.isEmpty { return "ADD PHOTOS TO START" }
-        if applyingNextBar { return "ARRANGEMENT CHANGE" }
-        if session.isPlaying {
-            let region = JamGrooveLibrary.region(for: session.vibePosition)
-            let drumKit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
-            return "\(regionDisplayName(region)) · \(drumKitDisplayName(drumKit))"
+        if !status.hasAnySelection { return "ADD PHOTOS TO START" }
+        if status.isApplyingNextBar { return "ARRANGEMENT CHANGE" }
+        if status.isPlaying {
+            return "\(regionDisplayName(status.region)) · \(drumKitDisplayName(status.drumKit))"
         }
-        let activeSlotCount = session.slotAssignments.activePhotoIDs.count
-        let reserveCount = session.slotAssignments.reserve.count
-        return "\(activeSlotCount) ACTIVE · \(reserveCount) IN BANK"
-    }
-
-    private var applyingNextBar: Bool {
-        session.isPlaying && playbackController.hasPendingArrangementChanges
+        return "\(status.activeSlotCount) ACTIVE · \(status.reserveCount) IN BANK"
     }
 
     private func regionDisplayName(_ region: JamRegion) -> String {
@@ -143,40 +199,38 @@ struct JamSequencerAndStatus: View {
         }
     }
 
-    private func resolvedDrumKit(
-        selection: MusicDrumKitSelection,
-        region: JamRegion
-    ) -> MusicDrumKit {
-        switch selection {
-        case .auto:
-            switch region {
-            case .airy: .soft
-            case .bright: .club
-            case .deep: .breakbeat
-            case .intense: .metal
-            }
-        case .soft: .soft
-        case .club: .club
-        case .breakbeat: .breakbeat
-        case .metal: .metal
-        }
+}
+
+private struct JamSequencerPlayheadReader: View {
+    let steps: Int
+    let visualTransport: JamVisualTransportState
+    let snapshot: JamSequencerSnapshot
+    let roleColors: [JamRole: Color]
+    let reduceMotion: Bool
+
+    var body: some View {
+        JamSequencerRows(
+            steps: steps,
+            currentStep: visualTransport.currentStep,
+            snapshot: snapshot,
+            roleColors: roleColors,
+            reduceMotion: reduceMotion
+        )
     }
 }
 
 private struct JamSequencerRows: View {
     let steps: Int
-    let visualTransport: JamVisualTransportState
-    let activeStepsBySoundID: [UUID: Set<Int>]
-    let roleByID: [UUID: JamRole]
+    let currentStep: Int?
+    let snapshot: JamSequencerSnapshot
     let roleColors: [JamRole: Color]
     let reduceMotion: Bool
 
     var body: some View {
         JamSequencerGrid(
             steps: steps,
-            currentStep: visualTransport.currentStep,
-            activeStepsBySoundID: activeStepsBySoundID,
-            roleByID: roleByID,
+            currentStep: currentStep,
+            snapshot: snapshot,
             roleColors: roleColors,
             reduceMotion: reduceMotion
         )
@@ -186,8 +240,7 @@ private struct JamSequencerRows: View {
 private struct JamSequencerGrid: View {
     let steps: Int
     let currentStep: Int?
-    let activeStepsBySoundID: [UUID: Set<Int>]
-    let roleByID: [UUID: JamRole]
+    let snapshot: JamSequencerSnapshot
     let roleColors: [JamRole: Color]
     let reduceMotion: Bool
 
@@ -202,7 +255,7 @@ private struct JamSequencerGrid: View {
     }
 
     private func sequencerRow(role: JamRole) -> some View {
-        let activeSteps = activeStepsForRole(role)
+        let activeSteps = snapshot.steps(for: role)
         return HStack(spacing: 8) {
             Text(role.displayName.uppercased())
                 .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
@@ -252,13 +305,4 @@ private struct JamSequencerGrid: View {
             )
             .accessibilityHidden(true)
     }
-
-    private func activeStepsForRole(_ role: JamRole) -> Set<Int> {
-        var result: Set<Int> = []
-        for (soundID, steps) in activeStepsBySoundID where roleByID[soundID] == role {
-            result.formUnion(steps)
-        }
-        return result
-    }
 }
-

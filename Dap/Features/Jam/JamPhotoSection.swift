@@ -261,9 +261,37 @@ private struct JamSelectedPhotoTile: View {
     }
 }
 
-struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
-    let session: JamSessionState
+struct JamSelectedPhotoAreaHost<ChangePhotosButton: View>: View {
     let visualTransport: JamVisualTransportState
+    let assignments: JamSlotAssignments
+    let sounds: [PhotoSound]
+    let imagesByID: [UUID: UIImage]
+    let reduceMotion: Bool
+    let selectedJamRole: JamRole?
+    let changePhotosButton: () -> ChangePhotosButton
+    let onTapRole: (JamRole?) -> Void
+    let onDropPhotoID: (String, JamRole?) -> Void
+    let onSwapForAccessibility: (JamRole, JamRole, UUID) -> Void
+
+    var body: some View {
+        JamSelectedPhotoArea(
+            assignments: assignments,
+            activeSoundIDs: visualTransport.activeSoundIDs,
+            sounds: sounds,
+            imagesByID: imagesByID,
+            reduceMotion: reduceMotion,
+            selectedJamRole: selectedJamRole,
+            changePhotosButton: changePhotosButton,
+            onTapRole: onTapRole,
+            onDropPhotoID: onDropPhotoID,
+            onSwapForAccessibility: onSwapForAccessibility
+        )
+    }
+}
+
+private struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
+    let assignments: JamSlotAssignments
+    let activeSoundIDs: Set<UUID>
     let sounds: [PhotoSound]
     let imagesByID: [UUID: UIImage]
     let reduceMotion: Bool
@@ -288,9 +316,9 @@ struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
 
     @ViewBuilder
     private func roleSlot(for role: JamRole) -> some View {
-        let photoID = session.slotAssignments.photoID(for: role)
+        let photoID = assignments.photoID(for: role)
         let sound = photoID.flatMap { id in sounds.first(where: { $0.id == id }) }
-        let isActive = photoID.map { visualTransport.activeSoundIDs.contains($0) } ?? false
+        let isActive = photoID.map { activeSoundIDs.contains($0) } ?? false
         let color = photoColor(for: role)
 
         JamSelectedPhotoTile(
@@ -316,7 +344,7 @@ struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
     }
 
     private func photoColor(for role: JamRole) -> Color? {
-        guard let roleID = session.slotAssignments.photoID(for: role),
+        guard let roleID = assignments.photoID(for: role),
               let sound = sounds.first(where: { $0.id == roleID })
         else { return nil }
         let pitch = PitchClass(rawValue: sound.sequence.harmony.rootPitchClass) ?? .c
@@ -544,4 +572,3 @@ private struct JamTileAccessibilityActions: ViewModifier {
         }
     }
 }
-
