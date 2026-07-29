@@ -22,9 +22,10 @@ struct JamView: View {
     @State private var visualTransport = JamVisualTransportState()
     @State private var selectedPanel: JamControlPanel = .none
     @State private var isPanelPresented = false
+    @State private var selectedJamRole: JamRole?
+    @State private var selectedMelodyIntent: MelodyPhraseIntent = .subtle
     @State private var playbackController = JamPlaybackController()
     @State private var isPhotoSelectorPresented = false
-    @State private var selectedJamRole: JamRole?
     @State private var swapArrangementVersion = 0
     @State private var transportTask: Task<Void, Never>?
     @State private var autosaveTask: Task<Void, Never>?
@@ -154,6 +155,8 @@ struct JamView: View {
                     selectedPanel: $selectedPanel,
                     isPanelPresented: $isPanelPresented,
                     session: session,
+                    selectedJamRole: selectedJamRole,
+                    canOpenArrangePanel: canOpenArrangePanel,
                     onPanelToggle: { target in
                         handlePanelToggle(target)
                     }
@@ -175,7 +178,7 @@ struct JamView: View {
             library.setJamEffects(newSettings, bpm: bpm)
             scheduleAutosave()
         }
-        .onChange(of: session.slotAssignments) { _, assignments in
+        .onChange(of: session.slotAssignments) { oldAssignments, assignments in
             if !session.isPlaying {
                 session.activeArrangement = buildArrangement(
                     for: assignments,
@@ -183,7 +186,7 @@ struct JamView: View {
                     buildMode: .standard
                 )
             }
-            synchronizeSelectedJamRole()
+            synchronizeSelectionState(previousAssignments: oldAssignments, newAssignments: assignments)
             scheduleAutosave()
         }
         .onChange(of: session.drumKitSelection) { _, _ in
@@ -218,17 +221,23 @@ struct JamView: View {
                 hasAppliedInitialJam = true
                 applyPersistedJam(initialJam)
             }
-            synchronizeSelectedJamRole()
+            synchronizeSelectionState(previousAssignments: session.slotAssignments, newAssignments: session.slotAssignments)
         }
         .onDisappear {
             library.clearTransientLoopUpdatePreparedHandler()
             Task { await flushAutosave() }
             clearTransportAndPlayback()
+            selectedJamRole = nil
+            selectedPanel = .none
+            isPanelPresented = false
         }
         .onChange(of: isActive) { _, isActive in
             guard !isActive else { return }
             Task { await flushAutosave() }
             clearTransportAndPlayback()
+            selectedJamRole = nil
+            selectedPanel = .none
+            isPanelPresented = false
         }
         .onChange(of: library.items.map(\.id)) { _, itemIDs in
             let validIDs = Set(itemIDs)
@@ -256,7 +265,7 @@ struct JamView: View {
             }
 
             session.slotAssignments = cleanedAssignments
-            synchronizeSelectedJamRole()
+            synchronizeSelectionState(previousAssignments: previousAssignments, newAssignments: cleanedAssignments)
             scheduleAutosave()
         }
         .onChange(of: library.isTransientPlaybackActive) { _, isActive in
@@ -398,6 +407,8 @@ struct JamView: View {
         visualTransport.reset()
         playbackController.clearPendingState()
         playbackController.clearDrumKitPendingFeedback()
+        selectedPanel = .none
+        isPanelPresented = false
         selectedJamRole = nil
 
         let validIDs = Set(library.items.map(\.id))
@@ -428,6 +439,7 @@ struct JamView: View {
         Task {
             await flushAutosave()
             clearTransportAndPlayback()
+            selectedJamRole = nil
             selectedPanel = .none
             isPanelPresented = false
             visualTransport.reset()
@@ -549,6 +561,8 @@ struct JamView: View {
         switch panel {
         case .kits:
             return CGSize(width: effectsPanelWidth, height: effectsPanelHeight)
+        case .arrange:
+            return arrangePanelSize
         case .vibe:
             return CGSize(width: 254, height: 254)
         case .effects, .none:
@@ -567,6 +581,8 @@ struct JamView: View {
         switch selectedPanel {
         case .kits:
             kitsPanelContent
+        case .arrange:
+            arrangePanelContent
         case .vibe:
             vibePanelContent
         case .effects:
@@ -605,6 +621,31 @@ struct JamView: View {
                 }
             }
         )
+    }
+
+    private var arrangePanelContent: some View {
+        JamArrangePanel(
+            role: selectedJamRole,
+            selectedIntent: selectedMelodyIntent,
+            isMelodyActionEnabled: isMelodyArrangeAvailable,
+            fill: expandedPanelFill,
+            stroke: expandedPanelStroke,
+            onSelectIntent: { selectedMelodyIntent = $0 },
+            onApply: {
+                applyNextMelodyPhrase(intent: selectedMelodyIntent)
+            }
+        )
+    }
+
+    private var arrangePanelSize: CGSize {
+        switch selectedJamRole {
+        case .bass, .harmony:
+            return CGSize(width: 320, height: 188)
+        case .melody:
+            return CGSize(width: 320, height: 316)
+        case .none:
+            return CGSize(width: 320, height: 188)
+        }
     }
 
     private var kitsPanelContent: some View {
@@ -1009,7 +1050,6 @@ struct JamView: View {
             reduceMotion: reduceMotion,
             selectedJamRole: selectedJamRole,
             changePhotosButton: { changePhotosButton() },
-            newPhraseButton: { newPhraseButton() },
             onTapRole: handleRoleTap,
             onDropPhotoID: handleTileDrop,
             onSwapForAccessibility: performSwapFromAccessibility
@@ -1222,8 +1262,24 @@ struct JamView: View {
     }
 
     private func handleRoleTap(_ role: JamRole?) {
-        guard role == .melody, isMelodyPlayable else { return }
-        selectedJamRole = selectedJamRole == .melody ? nil : .melody
+        guard let role else { return }
+
+        if selectedJamRole == role {
+            selectedJamRole = nil
+            if selectedPanel == .arrange {
+                closePanel()
+            }
+            return
+        }
+
+        let previousRole = selectedJamRole
+        selectedJamRole = role
+        if previousRole != role {
+            selectedMelodyIntent = .subtle
+        }
+        if selectedPanel == .arrange && !canOpenArrangePanel {
+            closePanel()
+        }
     }
 
     private var isMelodyPlayable: Bool {
@@ -1238,36 +1294,28 @@ struct JamView: View {
         playbackController.pendingArrangement ?? session.activeArrangement
     }
 
-    private func newPhraseButton() -> some View {
-        let backgroundFill: Color = colorScheme == .dark
-            ? Color.secondary.opacity(0.12)
-            : Color.black.opacity(0.08)
-        let borderColor: Color = colorScheme == .dark
-            ? Color.white.opacity(0.08)
-            : Color.black.opacity(0.10)
-
-        return Button {
-            applyNextMelodyPhrase()
-        } label: {
-            Text("NEW PHRASE")
-                .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .foregroundStyle(.primary)
-                .background(backgroundFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(borderColor, lineWidth: 1)
-                }
-        }
-        .buttonStyle(.plain)
-        .disabled(!isMelodyPlayable)
+    private var canOpenArrangePanel: Bool {
+        guard let selectedJamRole else { return false }
+        return isRolePlayable(selectedJamRole)
     }
 
-    private func applyNextMelodyPhrase() {
+    private var isMelodyArrangeAvailable: Bool {
+        selectedJamRole == .melody && isMelodyPlayable
+    }
+
+    private func isRolePlayable(_ role: JamRole) -> Bool {
+        guard let roleID = session.slotAssignments.photoID(for: role),
+              let sound = library.items.first(where: { $0.id == roleID }) else {
+            return false
+        }
+        return !sound.sequence.notes.isEmpty
+    }
+
+    private func applyNextMelodyPhrase(intent: MelodyPhraseIntent) {
         guard isMelodyPlayable,
               let result = findNextMelodyVariation(
                 after: session.melodyVariation,
+                intent: intent,
                 referenceArrangement: displayedReferenceArrangement,
                 buildArrangement: { assignments, variation, mode in
                     buildArrangement(for: assignments, melodyVariation: variation, buildMode: mode)
@@ -1464,21 +1512,33 @@ struct JamView: View {
         )
     }
 
-    private func synchronizeSelectedJamRole() {
-        guard selectedJamRole == .melody, !isMelodyPlayable else { return }
-        selectedJamRole = nil
+    private func synchronizeSelectionState(
+        previousAssignments: JamSlotAssignments,
+        newAssignments: JamSlotAssignments
+    ) {
+        if let selectedJamRole,
+           newAssignments.photoID(for: selectedJamRole) == nil {
+            self.selectedJamRole = nil
+        }
+
+        if selectedPanel == .arrange && !canOpenArrangePanel {
+            closePanel()
+        }
     }
 
     private func findNextMelodyVariation(
         after currentVariation: JamMelodyVariation,
+        intent: MelodyPhraseIntent,
         referenceArrangement: JamArrangement?,
         buildArrangement: (JamSlotAssignments, JamMelodyVariation, MelodyVariationBuildMode) -> JamArrangement?
     ) -> MelodyVariationSearchResult? {
         let referenceSequence = referenceArrangement?.sequence
-        var bestAcceptedBelowThreshold: MelodyVariationSearchResult?
-        var bestOverall: MelodyVariationSearchResult?
+        let prioritizedAttempts = prioritizedVariationAttempts(after: currentVariation, intent: intent)
+        var bestAccepted: (result: MelodyVariationSearchResult, fitness: Double)?
+        var bestAcceptedBelowThreshold: (result: MelodyVariationSearchResult, fitness: Double)?
+        var bestOverall: (result: MelodyVariationSearchResult, fitness: Double)?
 
-        for attempt in 1...8 {
+        for attempt in prioritizedAttempts {
             let variation = JamMelodyVariation(generation: currentVariation.generation &+ UInt64(attempt))
             let family = MelodyVariationFamily(generation: variation.generation)
             guard let arrangement = buildArrangement(session.slotAssignments, variation, .standard) else { continue }
@@ -1499,6 +1559,14 @@ struct JamView: View {
             )
             let meetsThreshold = difference.score >= melodyDistanceThreshold
             let accepted = meetsGeneralMinimum && meetsFamilyMinimum && meetsThreshold
+            let fitness = melodyIntentFitness(
+                for: intent,
+                family: family,
+                difference: difference,
+                referenceSequence: referenceSequence,
+                candidateSequence: arrangement.sequence,
+                usedFallback: false
+            )
 
             let result = MelodyVariationSearchResult(
                 variation: variation,
@@ -1515,36 +1583,44 @@ struct JamView: View {
 #endif
 
             if accepted {
-                return result
+                if let existingBestAccepted = bestAccepted {
+                    if fitness > existingBestAccepted.fitness {
+                        bestAccepted = (result, fitness)
+                    }
+                } else {
+                    bestAccepted = (result, fitness)
+                }
             }
 
             if meetsGeneralMinimum && meetsFamilyMinimum {
                 if let existingBestAccepted = bestAcceptedBelowThreshold {
-                    if result.difference.score > existingBestAccepted.difference.score {
-                        bestAcceptedBelowThreshold = result
+                    if fitness > existingBestAccepted.fitness {
+                        bestAcceptedBelowThreshold = (result, fitness)
                     }
                 } else {
-                    bestAcceptedBelowThreshold = result
+                    bestAcceptedBelowThreshold = (result, fitness)
                 }
             }
 
             if let existingBestOverall = bestOverall {
-                if result.difference.changedSteps > existingBestOverall.difference.changedSteps
-                    || (result.difference.changedSteps == existingBestOverall.difference.changedSteps
-                        && result.difference.score > existingBestOverall.difference.score) {
-                    bestOverall = result
+                if fitness > existingBestOverall.fitness {
+                    bestOverall = (result, fitness)
                 }
             } else {
-                bestOverall = result
+                bestOverall = (result, fitness)
             }
         }
 
+        if let bestAccepted {
+            return bestAccepted.result
+        }
+
         if let bestAcceptedBelowThreshold {
-            return bestAcceptedBelowThreshold
+            return bestAcceptedBelowThreshold.result
         }
 
         guard let bestOverall,
-              let fallbackArrangement = buildArrangement(session.slotAssignments, bestOverall.variation, .fallback) else {
+              let fallbackArrangement = buildArrangement(session.slotAssignments, bestOverall.result.variation, .fallback) else {
             return nil
         }
 
@@ -1558,16 +1634,16 @@ struct JamView: View {
         let minimumChangedSteps = minimumChangedSteps(for: comparableEventCount)
         let meetsGeneralMinimum = fallbackDifference.changedSteps >= minimumChangedSteps
         let meetsFamilyMinimum = meetsFamilyRequirement(
-            bestOverall.family,
+            bestOverall.result.family,
             difference: fallbackDifference,
             comparableEventCount: comparableEventCount
         )
         let accepted = meetsGeneralMinimum && meetsFamilyMinimum && fallbackDifference.score >= melodyDistanceThreshold
 
         let fallbackResult = MelodyVariationSearchResult(
-            variation: bestOverall.variation,
+            variation: bestOverall.result.variation,
             arrangement: fallbackArrangement,
-            family: bestOverall.family,
+            family: bestOverall.result.family,
             difference: fallbackDifference,
             minimumChangedSteps: minimumChangedSteps,
             accepted: accepted,
@@ -1579,6 +1655,78 @@ struct JamView: View {
 #endif
 
         return fallbackResult.accepted ? fallbackResult : nil
+    }
+
+    private func prioritizedVariationAttempts(
+        after currentVariation: JamMelodyVariation,
+        intent: MelodyPhraseIntent
+    ) -> [Int] {
+        let familyPriority = Dictionary(
+            uniqueKeysWithValues: intent.preferredFamilies.enumerated().map { ($1, $0) }
+        )
+
+        return Array(1...8).sorted { lhs, rhs in
+            let lhsFamily = MelodyVariationFamily(generation: currentVariation.generation &+ UInt64(lhs))
+            let rhsFamily = MelodyVariationFamily(generation: currentVariation.generation &+ UInt64(rhs))
+            let lhsPriority = familyPriority[lhsFamily] ?? Int.max
+            let rhsPriority = familyPriority[rhsFamily] ?? Int.max
+
+            if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
+            return lhs < rhs
+        }
+    }
+
+    private func melodyIntentFitness(
+        for intent: MelodyPhraseIntent,
+        family: MelodyVariationFamily,
+        difference: MelodyDifference,
+        referenceSequence: MusicSequence?,
+        candidateSequence: MusicSequence,
+        usedFallback: Bool
+    ) -> Double {
+        let previousEventCount = referenceSequence.map { melodyStepProfile(for: $0).count } ?? 0
+        let candidateEventCount = melodyStepProfile(for: candidateSequence).count
+        let eventDelta = candidateEventCount - previousEventCount
+        let registerLift = referenceSequence.map {
+            melodyAverageRepresentativePitch(for: candidateSequence) - melodyAverageRepresentativePitch(for: $0)
+        } ?? 0
+        let familyBonus = intent.preferredFamilies.contains(family)
+            ? Double(intent.preferredFamilies.count - (intent.preferredFamilies.firstIndex(of: family) ?? 0)) * 0.05
+            : 0
+
+        let intentScore: Double
+        switch intent {
+        case .subtle:
+            intentScore =
+                (1 - difference.changedStepRatio) * 0.34
+                + (1 - clampedUnit(Double(max(difference.changedPresenceSteps - 1, 0)) / 4.0)) * 0.26
+                + difference.contourDistance * 0.18
+                + difference.registerDistance * 0.14
+                + (eventDelta == 0 ? 0.08 : 0)
+        case .energetic:
+            intentScore =
+                difference.changedStepRatio * 0.28
+                + clampedUnit(Double(max(eventDelta, 0)) / 3.0) * 0.24
+                + clampedUnit(Double(max(registerLift, 0)) / 12.0) * 0.18
+                + (difference.changedPresenceSteps > 0 ? 0.14 : 0)
+                + difference.contourDistance * 0.08
+        case .sparse:
+            intentScore =
+                clampedUnit(Double(max(previousEventCount - candidateEventCount, 0)) / 3.0) * 0.32
+                + (difference.changedPresenceSteps > 0 ? 0.22 : 0)
+                + (candidateEventCount > 0 ? 0.16 : -1)
+                + (eventDelta <= 0 ? 0.14 : 0)
+                + difference.registerDistance * 0.08
+        case .surprise:
+            intentScore =
+                difference.score * 0.30
+                + difference.changedStepRatio * 0.26
+                + difference.registerDistance * 0.16
+                + difference.contourDistance * 0.12
+                + clampedUnit(Double(abs(eventDelta)) / 4.0) * 0.10
+        }
+
+        return intentScore + familyBonus - (usedFallback ? 0.08 : 0)
     }
 
     private func sendCurrentArrangementToPlayer() {
@@ -1684,6 +1832,11 @@ private struct JamSelectedPhotoTile: View {
             }
             .opacity(role == nil ? 0.58 : 1)
         .frame(maxWidth: .infinity)
+        .scaleEffect(isSelected && !reduceMotion ? 1.015 : 1)
+        .shadow(
+            color: isSelected ? (photoColor ?? .primary).opacity(0.20) : .clear,
+            radius: isSelected && !reduceMotion ? 10 : 0
+        )
         .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .onTapGesture(perform: onTap)
         .modifier(JamTileDragAndDrop(
@@ -1695,6 +1848,7 @@ private struct JamSelectedPhotoTile: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityName)
         .accessibilityValue(accessibilityValue)
+        .accessibilityHint(accessibilityHint)
         .modifier(JamTileAccessibilityActions(
             role: role,
             performSwap: { target in performSwapForAccessibility(target: target) }
@@ -1763,10 +1917,228 @@ private struct JamSelectedPhotoTile: View {
 
     private var accessibilityValue: String {
         if let role {
+            if isSelected {
+                return "Selected"
+            }
             return isActive ? "\(role.displayName), active on this step" : role.displayName
         }
 
         return sound == nil ? "Empty slot" : "No musical material"
+    }
+
+    private var accessibilityHint: String {
+        guard let role, sound != nil else { return "" }
+        return role == .melody
+            ? "Selects this role for arrange controls"
+            : "Selects this role"
+    }
+}
+
+private enum MelodyPhraseIntent: String, CaseIterable, Identifiable {
+    case subtle
+    case energetic
+    case sparse
+    case surprise
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .subtle: "SUBTLE"
+        case .energetic: "ENERGETIC"
+        case .sparse: "SPARSE"
+        case .surprise: "SURPRISE"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .subtle: "Keeps the groove"
+        case .energetic: "More movement"
+        case .sparse: "More space"
+        case .surprise: "Bigger change"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .subtle: "Subtle melody"
+        case .energetic: "Energetic melody"
+        case .sparse: "Sparse melody"
+        case .surprise: "Surprise melody"
+        }
+    }
+
+    var preferredFamilies: [MelodyVariationFamily] {
+        switch self {
+        case .subtle: [.contour, .register, .rhythm, .full]
+        case .energetic: [.rhythm, .full, .contour, .register]
+        case .sparse: [.rhythm, .contour, .register, .full]
+        case .surprise: [.full, .rhythm, .contour, .register]
+        }
+    }
+}
+
+private struct JamArrangePanel: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let role: JamRole?
+    let selectedIntent: MelodyPhraseIntent
+    let isMelodyActionEnabled: Bool
+    let fill: Color
+    let stroke: Color
+    let onSelectIntent: (MelodyPhraseIntent) -> Void
+    let onApply: () -> Void
+
+    private let cornerRadius: CGFloat = 22
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 14)
+
+            switch role {
+            case .melody:
+                LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                    alignment: .leading,
+                    spacing: 12
+                ) {
+                    ForEach(MelodyPhraseIntent.allCases) { intent in
+                        intentButton(intent)
+                    }
+                }
+                .padding(.horizontal, 18)
+
+                Button(action: onApply) {
+                    Text("NEW PHRASE")
+                        .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .foregroundStyle(.white)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.black.opacity(isMelodyActionEnabled ? 0.92 : 0.42))
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.white.opacity(isMelodyActionEnabled ? 0.10 : 0.05), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .disabled(!isMelodyActionEnabled)
+                .padding(.horizontal, 18)
+                .padding(.top, 16)
+                .padding(.bottom, 18)
+                .accessibilityLabel("New phrase")
+                .accessibilityHint("Generates the next melody phrase using the selected intent")
+
+            case .bass:
+                placeholderBody("Bass variations coming next.")
+
+            case .harmony:
+                placeholderBody("Harmony variations coming next.")
+
+            case .none:
+                placeholderBody("Select a playable photo to arrange.")
+            }
+        }
+        .frame(width: 320, alignment: .topLeading)
+        .background {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(fill)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(stroke, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Arrange controls")
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(roleTitle)
+                .font(.custom("ZTTalk-Bold", size: 20, relativeTo: .title3))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Text(roleSubtitle)
+                .font(.custom("ZTTalk-Regular", size: 12, relativeTo: .caption))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func placeholderBody(_ message: String) -> some View {
+        Text(message)
+            .font(.custom("ZTTalk-Regular", size: 14, relativeTo: .body))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
+            .accessibilityLabel(message)
+    }
+
+    private var roleTitle: String {
+        switch role {
+        case .bass: "BASS"
+        case .harmony: "HARMONY"
+        case .melody: "MELODY"
+        case .none: "ARRANGE"
+        }
+    }
+
+    private var roleSubtitle: String {
+        switch role {
+        case .bass: "Shape the bass pattern"
+        case .harmony: "Shape the harmony"
+        case .melody: "Shape the next phrase"
+        case .none: "Select a playable photo"
+        }
+    }
+
+    private func intentButton(_ intent: MelodyPhraseIntent) -> some View {
+        let isSelected = selectedIntent == intent
+        let selectedFill = colorScheme == .dark
+            ? Color.white.opacity(0.12)
+            : Color.black.opacity(0.07)
+        let selectedStroke = colorScheme == .dark
+            ? Color.white.opacity(0.22)
+            : Color.black.opacity(0.14)
+
+        return Button {
+            onSelectIntent(intent)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(intent.title)
+                    .font(.custom("ZTTalk-Bold", size: 13, relativeTo: .footnote))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(intent.subtitle)
+                    .font(.custom("ZTTalk-Regular", size: 11, relativeTo: .caption2))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+            .padding(.horizontal, 12)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isSelected ? selectedFill : Color.clear)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isSelected ? selectedStroke : stroke, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(intent.accessibilityLabel)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
 }
 
@@ -1806,7 +2178,7 @@ private struct JamVibePanelContent: View {
     }
 }
 
-private struct JamSelectedPhotoArea<ChangePhotosButton: View, NewPhraseButton: View>: View {
+private struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
     let session: JamSessionState
     let visualTransport: JamVisualTransportState
     let sounds: [PhotoSound]
@@ -1814,7 +2186,6 @@ private struct JamSelectedPhotoArea<ChangePhotosButton: View, NewPhraseButton: V
     let reduceMotion: Bool
     let selectedJamRole: JamRole?
     let changePhotosButton: () -> ChangePhotosButton
-    let newPhraseButton: () -> NewPhraseButton
     let onTapRole: (JamRole?) -> Void
     let onDropPhotoID: (String, JamRole?) -> Void
     let onSwapForAccessibility: (JamRole, JamRole, UUID) -> Void
@@ -1827,10 +2198,6 @@ private struct JamSelectedPhotoArea<ChangePhotosButton: View, NewPhraseButton: V
                 }
             }
             .frame(maxWidth: .infinity)
-
-            if selectedJamRole == .melody, melodyIsPlayable {
-                newPhraseButton()
-            }
 
             changePhotosButton()
         }
@@ -1863,14 +2230,6 @@ private struct JamSelectedPhotoArea<ChangePhotosButton: View, NewPhraseButton: V
             }
         )
         .id(role)
-    }
-
-    private var melodyIsPlayable: Bool {
-        guard let melodyID = session.slotAssignments.melody,
-              let sound = sounds.first(where: { $0.id == melodyID }) else {
-            return false
-        }
-        return !sound.sequence.notes.isEmpty
     }
 
     private func photoColor(for role: JamRole) -> Color? {
@@ -2065,6 +2424,15 @@ private func melodyStepProfile(for sequence: MusicSequence) -> [Int: MelodyStepP
     return profile
 }
 
+private func melodyAverageRepresentativePitch(for sequence: MusicSequence) -> Double {
+    let profile = melodyStepProfile(for: sequence)
+    guard !profile.isEmpty else { return 0 }
+    let total = profile.values.reduce(0.0) { partial, step in
+        partial + Double(step.representativePitch)
+    }
+    return total / Double(profile.count)
+}
+
 private func melodyIntervals(
     from profile: [Int: MelodyStepProfile],
     orderedSteps: [Int]
@@ -2161,6 +2529,7 @@ private enum JamControlPanel: Equatable {
     case none
     case kits
     case vibe
+    case arrange
     case effects
 }
 
@@ -2417,17 +2786,20 @@ private struct JamDockBar: View {
     @Binding var selectedPanel: JamControlPanel
     @Binding var isPanelPresented: Bool
     let session: JamSessionState
+    let selectedJamRole: JamRole?
+    let canOpenArrangePanel: Bool
     let onPanelToggle: (JamControlPanel) -> Void
 
-    private static let tileSize: CGFloat = 68
-    private static let tileSpacing: CGFloat = 12
+    private static let tileSize: CGFloat = 62
+    private static let tileSpacing: CGFloat = 8
     private static let cornerRadius: CGFloat = 18
-    private static let iconSlotSize: CGFloat = 22
+    private static let iconSlotSize: CGFloat = 20
 
     var body: some View {
         HStack(spacing: Self.tileSpacing) {
             kitsTileButton
             vibeTileButton
+            arrangeTileButton
             effectsTileButton
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -2466,6 +2838,25 @@ private struct JamDockBar: View {
         .accessibilityValue(thumbnailLabel)
     }
 
+    private var arrangeTileButton: some View {
+        Button {
+            onPanelToggle(.arrange)
+        } label: {
+            ArrangeDockTile(
+                cornerRadius: Self.cornerRadius,
+                iconSlotSize: Self.iconSlotSize,
+                isActive: selectedPanel == .arrange && isPanelPresented,
+                isEnabled: canOpenArrangePanel
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!canOpenArrangePanel)
+        .frame(width: Self.tileSize, height: Self.tileSize)
+        .accessibilityLabel("Arrange")
+        .accessibilityValue(arrangeAccessibilityValue)
+        .accessibilityHint(arrangeAccessibilityHint)
+    }
+
     private var effectsTileButton: some View {
         Button {
             onPanelToggle(.effects)
@@ -2488,6 +2879,30 @@ private struct JamDockBar: View {
         case .bright: "Bright"
         case .deep: "Deep"
         case .intense: "Intense"
+        }
+    }
+
+    private var arrangeAccessibilityValue: String {
+        if selectedPanel == .arrange && isPanelPresented {
+            return "Expanded"
+        }
+        if canOpenArrangePanel {
+            return "Available"
+        }
+        return "Unavailable"
+    }
+
+    private var arrangeAccessibilityHint: String {
+        guard !canOpenArrangePanel else { return "Opens arrange controls for the selected photo." }
+        switch selectedJamRole {
+        case .bass:
+            return "Select a playable Bass photo to use Arrange."
+        case .harmony:
+            return "Select a playable Harmony photo to use Arrange."
+        case .melody:
+            return "Select a playable Melody photo to use Arrange."
+        case .none:
+            return "Select a playable photo to use Arrange."
         }
     }
 }
@@ -2621,6 +3036,67 @@ private struct VibeDockTile: View {
                     .lineLimit(1)
             }
         }
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(tileStroke, lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func dockIconSlot<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack {
+            content()
+        }
+        .frame(width: iconSlotSize, height: iconSlotSize)
+    }
+}
+
+private struct ArrangeDockTile: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let cornerRadius: CGFloat
+    let iconSlotSize: CGFloat
+    var isActive: Bool = false
+    var isEnabled: Bool = true
+
+    private var tileFill: Color {
+        switch colorScheme {
+        case .dark:
+            Color.secondary.opacity(isActive ? 0.16 : 0.10)
+        default:
+            Color.black.opacity(isActive ? 0.09 : 0.075)
+        }
+    }
+
+    private var tileStroke: Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(isActive ? 0.22 : 0.10)
+        default:
+            Color.black.opacity(isActive ? 0.12 : 0.10)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(tileFill)
+
+            VStack(spacing: 3) {
+                dockIconSlot {
+                    Image(systemName: "waveform.badge.plus")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+
+                Text("Arrange")
+                    .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+        }
+        .opacity(isEnabled ? 1 : 0.48)
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(tileStroke, lineWidth: 1)
