@@ -9,6 +9,8 @@ final class JamSessionState {
     var jamName = "Untitled Jam"
     var jamCreatedAt: Date?
     var slotAssignments = JamSlotAssignments()
+    var bassVariation = JamBassVariation.initial
+    var harmonyVariation = JamHarmonyVariation.initial
     var melodyVariation = JamMelodyVariation.initial
     var drumKitSelection: MusicDrumKitSelection = .auto
     var effectSettings = JamEffectSettings.default

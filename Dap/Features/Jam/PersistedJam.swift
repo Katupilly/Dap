@@ -13,13 +13,116 @@ struct PersistedJam: Codable, Identifiable, Hashable {
     var vibePosition: PersistedPoint
     var drumKitSelection: String
     var effectSettings: PersistedJamEffectSettings
-    var melodyVariation: JamMelodyVariation?
+    var melodyVariation: JamMelodyVariation
+    var bassVariation: JamBassVariation
+    var harmonyVariation: JamHarmonyVariation
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case id
+        case name
+        case createdAt
+        case updatedAt
+        case slotAssignments
+        case vibePosition
+        case drumKitSelection
+        case effectSettings
+        case melodyVariation
+        case bassVariation
+        case harmonyVariation
+    }
+
+    init(
+        schemaVersion: Int,
+        id: UUID,
+        name: String,
+        createdAt: Date,
+        updatedAt: Date,
+        slotAssignments: PersistedJamSlotAssignments,
+        vibePosition: PersistedPoint,
+        drumKitSelection: String,
+        effectSettings: PersistedJamEffectSettings,
+        melodyVariation: JamMelodyVariation,
+        bassVariation: JamBassVariation = .initial,
+        harmonyVariation: JamHarmonyVariation = .initial
+    ) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.name = name
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.slotAssignments = slotAssignments
+        self.vibePosition = vibePosition
+        self.drumKitSelection = drumKitSelection
+        self.effectSettings = effectSettings
+        self.melodyVariation = melodyVariation
+        self.bassVariation = bassVariation
+        self.harmonyVariation = harmonyVariation
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        slotAssignments = try container.decode(PersistedJamSlotAssignments.self, forKey: .slotAssignments)
+        vibePosition = try container.decode(PersistedPoint.self, forKey: .vibePosition)
+        drumKitSelection = try container.decode(String.self, forKey: .drumKitSelection)
+        effectSettings = try container.decode(PersistedJamEffectSettings.self, forKey: .effectSettings)
+        melodyVariation = try container.decodeIfPresent(JamMelodyVariation.self, forKey: .melodyVariation) ?? .initial
+        bassVariation = try container.decodeIfPresent(JamBassVariation.self, forKey: .bassVariation) ?? .initial
+        harmonyVariation = try container.decodeIfPresent(JamHarmonyVariation.self, forKey: .harmonyVariation) ?? .initial
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encode(slotAssignments, forKey: .slotAssignments)
+        try container.encode(vibePosition, forKey: .vibePosition)
+        try container.encode(drumKitSelection, forKey: .drumKitSelection)
+        try container.encode(effectSettings, forKey: .effectSettings)
+        try container.encode(melodyVariation, forKey: .melodyVariation)
+        try container.encode(bassVariation, forKey: .bassVariation)
+        try container.encode(harmonyVariation, forKey: .harmonyVariation)
+    }
 }
 
 struct JamMelodyVariation: Codable, Hashable, Sendable {
     var generation: UInt64
 
     static let initial = JamMelodyVariation(generation: 0)
+}
+
+enum BassPatternIntent: String, Codable, Hashable, CaseIterable, Sendable {
+    case steady
+    case syncopated
+    case driving
+}
+
+struct JamBassVariation: Codable, Hashable, Sendable {
+    var generation: UInt64
+    var intent: BassPatternIntent?
+
+    static let initial = JamBassVariation(generation: 0, intent: nil)
+}
+
+enum HarmonyPatternIntent: String, Codable, Hashable, CaseIterable, Sendable {
+    case sustained
+    case rhythmic
+    case open
+}
+
+struct JamHarmonyVariation: Codable, Hashable, Sendable {
+    var generation: UInt64
+    var intent: HarmonyPatternIntent?
+
+    static let initial = JamHarmonyVariation(generation: 0, intent: nil)
 }
 
 struct PersistedJamSlotAssignments: Codable, Hashable {

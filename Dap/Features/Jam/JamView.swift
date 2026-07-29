@@ -8,6 +8,7 @@ private let jamBPM = 96.0
 struct JamView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
     @Environment(\.scenePhase) private var scenePhase
 
     let library: PhotoLibraryViewModel
@@ -23,6 +24,8 @@ struct JamView: View {
     @State private var selectedPanel: JamControlPanel = .none
     @State private var isPanelPresented = false
     @State private var selectedJamRole: JamRole?
+    @State private var selectedBassIntent: BassPatternIntent = .steady
+    @State private var selectedHarmonyIntent: HarmonyPatternIntent = .sustained
     @State private var selectedMelodyIntent: MelodyPhraseIntent = .subtle
     @State private var playbackController = JamPlaybackController()
     @State private var isPhotoSelectorPresented = false
@@ -31,6 +34,9 @@ struct JamView: View {
     @State private var autosaveTask: Task<Void, Never>?
     @State private var persistenceError: JamPersistenceError?
     @State private var hasAppliedInitialJam = false
+    @State private var panelBackdropImage: UIImage?
+    @State private var jamViewportSize: CGSize = .zero
+    @State private var selectedPhotoImagesByID: [UUID: UIImage] = [:]
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Dap", category: "JamView")
     private let transportPollInterval: Duration = .milliseconds(33)
@@ -129,7 +135,7 @@ struct JamView: View {
         ZStack(alignment: .bottom) {
             Color(uiColor: .systemBackground)
 
-            GeometryReader { geometry in
+            GeometryReader { _ in
                 ViewThatFits(in: .vertical) {
                     fixedSessionLayout
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -140,8 +146,11 @@ struct JamView: View {
                     .scrollIndicators(.hidden)
                 }
             }
-            .blur(radius: isPanelPresented ? 2.5 : 0)
-            .animation(.easeInOut(duration: 0.18), value: isPanelPresented)
+
+            if isPanelPresented || selectedPanel != .none {
+                panelBackdropLayer
+                    .zIndex(6)
+            }
 
             if isPanelPresented {
                 Color.clear
@@ -150,32 +159,37 @@ struct JamView: View {
                     .onTapGesture {
                         closePanel()
                     }
-                    .zIndex(1)
+                    .zIndex(7)
             }
 
             if hasAnySelection {
                 panelLayer
-                    .zIndex(3)
+                    .zIndex(8)
 
                 JamDockBar(
                     selectedPanel: $selectedPanel,
                     isPanelPresented: $isPanelPresented,
                     session: session,
-                    selectedJamRole: selectedJamRole,
                     canOpenArrangePanel: canOpenArrangePanel,
+                    arrangeAvailability: arrangeAvailability,
                     onPanelToggle: { target in
                         handlePanelToggle(target)
                     }
                 )
                 .padding(.horizontal, 20)
                 .padding(.bottom, 82)
-                .zIndex(4)
+                .zIndex(9)
 
                 playbackButton
                     .padding(.horizontal, 20)
                     .padding(.bottom, 16)
                     .zIndex(5)
             }
+        }
+        .onGeometryChange(for: CGSize.self) { geometry in
+            geometry.size
+        } action: { size in
+            jamViewportSize = size
         }
         .sensoryFeedback(.selection, trigger: playbackController.appliedArrangementVersion)
         .sensoryFeedback(.success, trigger: swapArrangementVersion)
@@ -188,11 +202,14 @@ struct JamView: View {
             if !session.isPlaying {
                 session.activeArrangement = buildArrangement(
                     for: assignments,
+                    bassVariation: session.bassVariation,
+                    harmonyVariation: session.harmonyVariation,
                     melodyVariation: session.melodyVariation,
                     buildMode: .standard
                 )
             }
             synchronizeSelectionState(previousAssignments: oldAssignments, newAssignments: assignments)
+            refreshSelectedPhotoImages()
             scheduleAutosave()
         }
         .onChange(of: session.drumKitSelection) { _, _ in
@@ -227,7 +244,9 @@ struct JamView: View {
                 hasAppliedInitialJam = true
                 applyPersistedJam(initialJam)
             }
+            syncAllArrangeDrafts()
             synchronizeSelectionState(previousAssignments: session.slotAssignments, newAssignments: session.slotAssignments)
+            refreshSelectedPhotoImages()
         }
         .onDisappear {
             library.clearTransientLoopUpdatePreparedHandler()
@@ -236,14 +255,21 @@ struct JamView: View {
             selectedJamRole = nil
             selectedPanel = .none
             isPanelPresented = false
+            panelBackdropImage = nil
+            selectedPhotoImagesByID = [:]
         }
         .onChange(of: isActive) { _, isActive in
-            guard !isActive else { return }
+            if isActive {
+                refreshSelectedPhotoImages()
+                return
+            }
             Task { await flushAutosave() }
             clearTransportAndPlayback()
             selectedJamRole = nil
             selectedPanel = .none
             isPanelPresented = false
+            panelBackdropImage = nil
+            selectedPhotoImagesByID = [:]
         }
         .onChange(of: library.items.map(\.id)) { _, itemIDs in
             let validIDs = Set(itemIDs)
@@ -265,6 +291,8 @@ struct JamView: View {
             } else if !session.isPlaying {
                 session.activeArrangement = buildArrangement(
                     for: cleanedAssignments,
+                    bassVariation: session.bassVariation,
+                    harmonyVariation: session.harmonyVariation,
                     melodyVariation: session.melodyVariation,
                     buildMode: .standard
                 )
@@ -272,6 +300,7 @@ struct JamView: View {
 
             session.slotAssignments = cleanedAssignments
             synchronizeSelectionState(previousAssignments: previousAssignments, newAssignments: cleanedAssignments)
+            refreshSelectedPhotoImages()
             scheduleAutosave()
         }
         .onChange(of: library.isTransientPlaybackActive) { _, isActive in
@@ -408,14 +437,18 @@ struct JamView: View {
         session.vibePosition = jam.vibePosition.cgPoint
         session.drumKitSelection = MusicDrumKitSelection(persistedValue: jam.drumKitSelection)
         session.effectSettings = jam.effectSettings.jamEffectSettings
-        session.melodyVariation = jam.melodyVariation ?? .initial
+        session.bassVariation = jam.bassVariation
+        session.harmonyVariation = jam.harmonyVariation
+        session.melodyVariation = jam.melodyVariation
         session.isPlaying = false
         visualTransport.reset()
         playbackController.clearPendingState()
         playbackController.clearDrumKitPendingFeedback()
         selectedPanel = .none
         isPanelPresented = false
+        panelBackdropImage = nil
         selectedJamRole = nil
+        syncAllArrangeDrafts()
 
         let validIDs = Set(library.items.map(\.id))
         let playableIDs = Set(
@@ -430,8 +463,11 @@ struct JamView: View {
         )
 
         session.slotAssignments = reconciledAssignments
+        refreshSelectedPhotoImages()
         session.activeArrangement = buildArrangement(
             for: reconciledAssignments,
+            bassVariation: session.bassVariation,
+            harmonyVariation: session.harmonyVariation,
             melodyVariation: session.melodyVariation,
             buildMode: .standard
         )
@@ -448,6 +484,8 @@ struct JamView: View {
             selectedJamRole = nil
             selectedPanel = .none
             isPanelPresented = false
+            panelBackdropImage = nil
+            selectedPhotoImagesByID = [:]
             visualTransport.reset()
             await onClose?()
         }
@@ -470,7 +508,9 @@ struct JamView: View {
             vibePosition: PersistedPoint(session.vibePosition),
             drumKitSelection: session.drumKitSelection.persistedValue,
             effectSettings: PersistedJamEffectSettings(session.effectSettings),
-            melodyVariation: session.melodyVariation
+            melodyVariation: session.melodyVariation,
+            bassVariation: session.bassVariation,
+            harmonyVariation: session.harmonyVariation
         )
     }
 
@@ -522,7 +562,9 @@ struct JamView: View {
             || snapshot.vibePosition != jam.vibePosition
             || snapshot.drumKitSelection != jam.drumKitSelection
             || snapshot.effectSettings != jam.effectSettings
-            || snapshot.melodyVariation != (jam.melodyVariation ?? .initial)
+            || snapshot.melodyVariation != jam.melodyVariation
+            || snapshot.bassVariation != jam.bassVariation
+            || snapshot.harmonyVariation != jam.harmonyVariation
     }
 
     @MainActor
@@ -546,6 +588,155 @@ struct JamView: View {
     }
 
     // MARK: - Panel presentation
+
+    @MainActor
+    private func renderPanelBackdrop() -> UIImage? {
+        guard jamViewportSize.width > 0,
+              jamViewportSize.height > 0,
+              jamViewportSize.width.isFinite,
+              jamViewportSize.height.isFinite,
+              displayScale > 0 else {
+            return nil
+        }
+
+        let status = panelBackdropStatus
+        let content = JamPanelBackdropContent(
+            displayName: sessionDisplayName,
+            photos: panelBackdropPhotos(),
+            hasAnySelection: hasAnySelection,
+            hasSelectedSounds: !selectedSounds.isEmpty,
+            activeStepsBySoundID: session.activeArrangement?.activeStepsBySoundID ?? [:],
+            roleByID: session.slotAssignments.assignedRolesByID,
+            roleColors: rowColorMap,
+            currentStep: visualTransport.currentStep,
+            statusPrimaryText: status.primary,
+            statusSecondaryText: status.secondary,
+            playbackAction: playbackAction,
+            canPlay: canPlay,
+            colorScheme: colorScheme,
+            reduceMotion: reduceMotion
+        )
+        .frame(
+            width: jamViewportSize.width,
+            height: jamViewportSize.height,
+            alignment: .topLeading
+        )
+        .blur(radius: 2.5)
+        .clipped()
+        .environment(\.colorScheme, colorScheme)
+        .environment(\.displayScale, displayScale)
+
+        let renderer = ImageRenderer(content: content)
+        renderer.proposedSize = ProposedViewSize(jamViewportSize)
+        renderer.scale = displayScale
+        renderer.isOpaque = true
+        return renderer.uiImage
+    }
+
+    private func panelBackdropPhotos() -> [JamPanelBackdropPhoto] {
+        JamRole.allCases.map { role in
+            let photoID = session.slotAssignments.photoID(for: role)
+            let sound = photoID.flatMap { id in
+                library.items.first(where: { $0.id == id })
+            }
+            let pitch = sound.flatMap { PitchClass(rawValue: $0.sequence.harmony.rootPitchClass) } ?? .c
+
+            return JamPanelBackdropPhoto(
+                role: role,
+                hasPhoto: photoID != nil,
+                image: photoID.flatMap { selectedPhotoImagesByID[$0] },
+                noteLabel: sound?.sequence.harmony.rootName ?? "",
+                accentColor: sound == nil ? nil : Color(RetroCoverRenderer.tonalPalette(for: pitch).base),
+                isActive: photoID.map { visualTransport.activeSoundIDs.contains($0) } ?? false,
+                isSelected: selectedJamRole == role
+            )
+        }
+    }
+
+    private var panelBackdropStatus: (primary: String, secondary: String) {
+        if session.slotAssignments.allPhotoIDs.isEmpty {
+            return ("READY", "ADD PHOTOS TO START")
+        }
+        if session.isPlaying && playbackController.hasPendingArrangementChanges {
+            return ("NEXT BAR", "ARRANGEMENT CHANGE")
+        }
+        if session.isPlaying {
+            let region = JamGrooveLibrary.region(for: session.vibePosition)
+            let kit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
+            return ("PLAYING", "\(panelBackdropRegionName(region)) · \(panelBackdropDrumKitName(kit))")
+        }
+
+        let activeCount = session.slotAssignments.activePhotoIDs.count
+        let reserveCount = session.slotAssignments.reserve.count
+        return ("READY", "\(activeCount) ACTIVE · \(reserveCount) IN BANK")
+    }
+
+    private func panelBackdropRegionName(_ region: JamRegion) -> String {
+        switch region {
+        case .airy: "Airy"
+        case .bright: "Bright"
+        case .deep: "Deep"
+        case .intense: "Intense"
+        }
+    }
+
+    private func panelBackdropDrumKitName(_ kit: MusicDrumKit) -> String {
+        switch kit {
+        case .soft: "Soft"
+        case .club: "Club"
+        case .breakbeat: "Break"
+        case .metal: "Metal"
+        }
+    }
+
+    private func refreshSelectedPhotoImages() {
+        let selectedIDs = Set(session.slotAssignments.allPhotoIDs)
+        var nextImages = selectedPhotoImagesByID.filter { selectedIDs.contains($0.key) }
+        var didChange = nextImages.count != selectedPhotoImagesByID.count
+
+        for id in selectedIDs where nextImages[id] == nil {
+            guard let data = library.coverDataByID[id], let image = UIImage(data: data) else { continue }
+            nextImages[id] = image
+            didChange = true
+        }
+
+        if didChange {
+            selectedPhotoImagesByID = nextImages
+        }
+    }
+
+    private var panelBackdropLayer: some View {
+        ZStack(alignment: .topLeading) {
+            if let panelBackdropImage {
+                Image(uiImage: panelBackdropImage)
+                    .resizable()
+                    .frame(
+                        width: jamViewportSize.width,
+                        height: jamViewportSize.height,
+                        alignment: .topLeading
+                    )
+                    .clipped()
+            }
+
+            Color(uiColor: .systemBackground)
+                .opacity(0.12)
+        }
+        .frame(
+            width: jamViewportSize.width,
+            height: jamViewportSize.height,
+            alignment: .topLeading
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
+        .opacity(isPanelPresented ? 1 : 0)
+        .animation(backdropFadeAnimation, value: isPanelPresented)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var backdropFadeAnimation: Animation {
+        .easeOut(duration: reduceMotion ? 0.12 : 0.16)
+    }
 
     @ViewBuilder
     private var panelLayer: some View {
@@ -630,24 +821,24 @@ struct JamView: View {
     }
 
     private var arrangePanelContent: some View {
-        JamArrangePanel(
-            role: selectedJamRole,
-            selectedIntent: selectedMelodyIntent,
-            isMelodyActionEnabled: isMelodyArrangeAvailable,
+        let context = arrangePanelContext
+        return JamArrangePanel(
+            title: context.title,
+            subtitle: context.subtitle,
+            options: context.options,
+            selectedOption: context.selectedOption,
+            buttonTitle: context.buttonTitle,
+            isActionEnabled: context.isActionEnabled,
             fill: expandedPanelFill,
             stroke: expandedPanelStroke,
-            onSelectIntent: { selectedMelodyIntent = $0 },
-            onApply: {
-                applyNextMelodyPhrase(intent: selectedMelodyIntent)
-            }
+            onSelectOption: updateArrangeDraft,
+            onApply: applySelectedArrangeVariation
         )
     }
 
     private var arrangePanelSize: CGSize {
-        switch selectedJamRole {
-        case .bass, .harmony:
-            return CGSize(width: 320, height: 188)
-        case .melody:
+        switch arrangePanelContext.role {
+        case .bass, .harmony, .melody:
             return CGSize(width: 320, height: 316)
         case .none:
             return CGSize(width: 320, height: 188)
@@ -987,6 +1178,9 @@ struct JamView: View {
     }
 
     private func handlePanelToggle(_ target: JamControlPanel) {
+        if target == .arrange, let selectedJamRole {
+            syncArrangeDraft(for: selectedJamRole)
+        }
         if selectedPanel == target && isPanelPresented {
             closePanel()
         } else if selectedPanel != .none && isPanelPresented {
@@ -995,6 +1189,7 @@ struct JamView: View {
             }
         } else {
             selectedPanel = target
+            panelBackdropImage = renderPanelBackdrop()
             withAnimation(panelRevealAnimation) {
                 isPanelPresented = true
             }
@@ -1007,6 +1202,7 @@ struct JamView: View {
         } completion: {
             if !isPanelPresented {
                 selectedPanel = .none
+                panelBackdropImage = nil
             }
         }
     }
@@ -1052,7 +1248,7 @@ struct JamView: View {
             session: session,
             visualTransport: visualTransport,
             sounds: library.items,
-            coverDataByID: library.coverDataByID,
+            imagesByID: selectedPhotoImagesByID,
             reduceMotion: reduceMotion,
             selectedJamRole: selectedJamRole,
             changePhotosButton: { changePhotosButton() },
@@ -1286,19 +1482,14 @@ struct JamView: View {
         let previousRole = selectedJamRole
         selectedJamRole = role
         if previousRole != role {
-            selectedMelodyIntent = .subtle
+            syncArrangeDraft(for: role)
+            if selectedPanel == .arrange {
+                closePanel()
+            }
         }
         if selectedPanel == .arrange && !canOpenArrangePanel {
             closePanel()
         }
-    }
-
-    private var isMelodyPlayable: Bool {
-        guard let melodyID = session.slotAssignments.melody,
-              let sound = library.items.first(where: { $0.id == melodyID }) else {
-            return false
-        }
-        return !sound.sequence.notes.isEmpty
     }
 
     private var displayedReferenceArrangement: JamArrangement? {
@@ -1310,10 +1501,6 @@ struct JamView: View {
         return isRolePlayable(selectedJamRole)
     }
 
-    private var isMelodyArrangeAvailable: Bool {
-        selectedJamRole == .melody && isMelodyPlayable
-    }
-
     private func isRolePlayable(_ role: JamRole) -> Bool {
         guard let roleID = session.slotAssignments.photoID(for: role),
               let sound = library.items.first(where: { $0.id == roleID }) else {
@@ -1322,14 +1509,162 @@ struct JamView: View {
         return !sound.sequence.notes.isEmpty
     }
 
+    private var selectedArrangePhotoID: UUID? {
+        guard let selectedJamRole else { return nil }
+        return session.slotAssignments.photoID(for: selectedJamRole)
+    }
+
+    private var selectedArrangeSound: PhotoSound? {
+        guard let selectedArrangePhotoID else { return nil }
+        return library.items.first(where: { $0.id == selectedArrangePhotoID })
+    }
+
+    private var arrangeAvailability: JamArrangeAvailability {
+        guard let selectedJamRole else { return .noRoleSelected }
+        guard selectedArrangePhotoID != nil else {
+            return .roleHasNoPhoto(selectedJamRole)
+        }
+        guard let sound = selectedArrangeSound else {
+            return .missingPhoto(selectedJamRole)
+        }
+        guard !sound.sequence.notes.isEmpty else {
+            return .roleHasNoMusicalMaterial(selectedJamRole)
+        }
+        return .available(selectedJamRole)
+    }
+
+    private var arrangePanelContext: JamArrangePanelContext {
+        guard let role = selectedJamRole else {
+            return JamArrangePanelContext(
+                role: nil,
+                title: "ARRANGE",
+                subtitle: "Select a playable photo",
+                options: [],
+                selectedOption: nil,
+                buttonTitle: "NEW PATTERN",
+                isActionEnabled: false
+            )
+        }
+
+        switch role {
+        case .bass:
+            return JamArrangePanelContext(
+                role: .bass,
+                title: "BASS",
+                subtitle: "Shape the low-end pattern",
+                options: BassPatternIntent.allCases.map { .bass($0) },
+                selectedOption: .bass(selectedBassIntent),
+                buttonTitle: "NEW PATTERN",
+                isActionEnabled: canOpenArrangePanel
+            )
+        case .harmony:
+            return JamArrangePanelContext(
+                role: .harmony,
+                title: "HARMONY",
+                subtitle: "Shape the harmonic rhythm",
+                options: HarmonyPatternIntent.allCases.map { .harmony($0) },
+                selectedOption: .harmony(selectedHarmonyIntent),
+                buttonTitle: "NEW PATTERN",
+                isActionEnabled: canOpenArrangePanel
+            )
+        case .melody:
+            return JamArrangePanelContext(
+                role: .melody,
+                title: "MELODY",
+                subtitle: "Shape the next phrase",
+                options: MelodyPhraseIntent.allCases.map { .melody($0) },
+                selectedOption: .melody(selectedMelodyIntent),
+                buttonTitle: "NEW PHRASE",
+                isActionEnabled: canOpenArrangePanel
+            )
+        }
+    }
+
+    private func syncAllArrangeDrafts() {
+        syncArrangeDraft(for: .bass)
+        syncArrangeDraft(for: .harmony)
+        syncArrangeDraft(for: .melody)
+    }
+
+    private func syncArrangeDraft(for role: JamRole) {
+        switch role {
+        case .bass:
+            selectedBassIntent = session.bassVariation.intent ?? .steady
+        case .harmony:
+            selectedHarmonyIntent = session.harmonyVariation.intent ?? .sustained
+        case .melody:
+            selectedMelodyIntent = .subtle
+        }
+    }
+
+    private func updateArrangeDraft(_ option: JamArrangeOption) {
+        switch option {
+        case .bass(let intent):
+            selectedBassIntent = intent
+        case .harmony(let intent):
+            selectedHarmonyIntent = intent
+        case .melody(let intent):
+            selectedMelodyIntent = intent
+        }
+    }
+
+    private func applySelectedArrangeVariation() {
+        guard let selectedJamRole else { return }
+
+        switch selectedJamRole {
+        case .bass:
+            applyNextBassPattern(intent: selectedBassIntent)
+        case .harmony:
+            applyNextHarmonyPattern(intent: selectedHarmonyIntent)
+        case .melody:
+            applyNextMelodyPhrase(intent: selectedMelodyIntent)
+        }
+    }
+
+    private func applyNextBassPattern(intent: BassPatternIntent) {
+        guard isRolePlayable(.bass) else { return }
+        session.bassVariation = JamBassVariation(
+            generation: session.bassVariation.generation &+ 1,
+            intent: intent
+        )
+        scheduleAutosave()
+
+        if session.isPlaying {
+            sendPendingArrangementToPlayer()
+        } else {
+            session.activeArrangement = buildArrangement()
+        }
+    }
+
+    private func applyNextHarmonyPattern(intent: HarmonyPatternIntent) {
+        guard isRolePlayable(.harmony) else { return }
+        session.harmonyVariation = JamHarmonyVariation(
+            generation: session.harmonyVariation.generation &+ 1,
+            intent: intent
+        )
+        scheduleAutosave()
+
+        if session.isPlaying {
+            sendPendingArrangementToPlayer()
+        } else {
+            session.activeArrangement = buildArrangement()
+        }
+    }
+
     private func applyNextMelodyPhrase(intent: MelodyPhraseIntent) {
-        guard isMelodyPlayable,
+        guard isRolePlayable(.melody),
               let result = findNextMelodyVariation(
                 after: session.melodyVariation,
                 intent: intent,
                 referenceArrangement: displayedReferenceArrangement,
-                buildArrangement: { assignments, variation, mode in
-                    buildArrangement(for: assignments, melodyVariation: variation, buildMode: mode)
+                buildArrangement: { assignments, bassVariation, harmonyVariation, variation, mode in
+                    buildArrangement(
+                        for: assignments,
+                        bassVariation: bassVariation,
+                        harmonyVariation: harmonyVariation,
+                        melodyVariation: variation,
+                        buildMode: mode
+                    )
                 }
               ) else {
             return
@@ -1489,6 +1824,8 @@ struct JamView: View {
     private func buildArrangement() -> JamArrangement? {
         buildArrangement(
             for: session.slotAssignments,
+            bassVariation: session.bassVariation,
+            harmonyVariation: session.harmonyVariation,
             melodyVariation: session.melodyVariation,
             buildMode: .standard
         )
@@ -1496,6 +1833,8 @@ struct JamView: View {
 
     private func buildArrangement(
         for assignments: JamSlotAssignments,
+        bassVariation: JamBassVariation,
+        harmonyVariation: JamHarmonyVariation,
         melodyVariation: JamMelodyVariation,
         buildMode: MelodyVariationBuildMode
     ) -> JamArrangement? {
@@ -1518,6 +1857,8 @@ struct JamView: View {
             assignedSounds: orderedAssignedSounds,
             vibePosition: session.vibePosition,
             drumKit: drumKit,
+            bassVariation: bassVariation,
+            harmonyVariation: harmonyVariation,
             melodyVariation: melodyVariation,
             buildMode: buildMode
         )
@@ -1541,7 +1882,7 @@ struct JamView: View {
         after currentVariation: JamMelodyVariation,
         intent: MelodyPhraseIntent,
         referenceArrangement: JamArrangement?,
-        buildArrangement: (JamSlotAssignments, JamMelodyVariation, MelodyVariationBuildMode) -> JamArrangement?
+        buildArrangement: (JamSlotAssignments, JamBassVariation, JamHarmonyVariation, JamMelodyVariation, MelodyVariationBuildMode) -> JamArrangement?
     ) -> MelodyVariationSearchResult? {
         let referenceSequence = referenceArrangement?.sequence
         let prioritizedAttempts = prioritizedVariationAttempts(after: currentVariation, intent: intent)
@@ -1552,7 +1893,13 @@ struct JamView: View {
         for attempt in prioritizedAttempts {
             let variation = JamMelodyVariation(generation: currentVariation.generation &+ UInt64(attempt))
             let family = MelodyVariationFamily(generation: variation.generation)
-            guard let arrangement = buildArrangement(session.slotAssignments, variation, .standard) else { continue }
+            guard let arrangement = buildArrangement(
+                session.slotAssignments,
+                session.bassVariation,
+                session.harmonyVariation,
+                variation,
+                .standard
+            ) else { continue }
 
             let difference = referenceSequence.map {
                 melodyDifference(from: $0, to: arrangement.sequence)
@@ -1631,7 +1978,13 @@ struct JamView: View {
         }
 
         guard let bestOverall,
-              let fallbackArrangement = buildArrangement(session.slotAssignments, bestOverall.result.variation, .fallback) else {
+              let fallbackArrangement = buildArrangement(
+                session.slotAssignments,
+                session.bassVariation,
+                session.harmonyVariation,
+                bestOverall.result.variation,
+                .fallback
+              ) else {
             return nil
         }
 
@@ -1778,11 +2131,387 @@ struct JamView: View {
     }
 }
 
+private struct JamPanelBackdropPhoto {
+    let role: JamRole
+    let hasPhoto: Bool
+    let image: UIImage?
+    let noteLabel: String
+    let accentColor: Color?
+    let isActive: Bool
+    let isSelected: Bool
+}
+
+private struct JamPanelBackdropContent: View {
+    let displayName: String
+    let photos: [JamPanelBackdropPhoto]
+    let hasAnySelection: Bool
+    let hasSelectedSounds: Bool
+    let activeStepsBySoundID: [UUID: Set<Int>]
+    let roleByID: [UUID: JamRole]
+    let roleColors: [JamRole: Color]
+    let currentStep: Int?
+    let statusPrimaryText: String
+    let statusSecondaryText: String
+    let playbackAction: PlaybackAction
+    let canPlay: Bool
+    let colorScheme: ColorScheme
+    let reduceMotion: Bool
+
+    private let bottomReserve: CGFloat = 168
+    private let topHeaderInset: CGFloat = 18
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color(uiColor: .systemBackground)
+
+            ViewThatFits(in: .vertical) {
+                fixedLayout
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+                scrollingLayout
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .clipped()
+            }
+
+            if hasAnySelection {
+                playbackButtonVisual
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
+            }
+        }
+    }
+
+    private var fixedLayout: some View {
+        VStack(spacing: 18) {
+            header
+            sessionBody
+            Spacer(minLength: bottomReserve)
+        }
+        .padding(.top, topHeaderInset)
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var scrollingLayout: some View {
+        VStack(spacing: 18) {
+            header
+            sessionBody
+        }
+        .padding(.top, topHeaderInset)
+        .padding(.horizontal, 20)
+        .padding(.bottom, bottomReserve)
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 36, height: 36)
+                .background(.secondary.opacity(0.12), in: Circle())
+
+            Rectangle()
+                .fill(.secondary.opacity(0.15))
+                .frame(width: 24, height: 24)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(.white.opacity(0.10), lineWidth: 1)
+                }
+
+            Text(displayName)
+                .font(.custom("ZTTalk-Bold", size: 22, relativeTo: .title2))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .layoutPriority(1)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var sessionBody: some View {
+        if hasAnySelection {
+            JamPanelBackdropSequencer(
+                activeStepsBySoundID: activeStepsBySoundID,
+                roleByID: roleByID,
+                roleColors: roleColors,
+                currentStep: currentStep,
+                primaryText: statusPrimaryText,
+                secondaryText: statusSecondaryText,
+                reduceMotion: reduceMotion,
+                colorScheme: colorScheme
+            )
+            .frame(height: 150)
+            .frame(maxWidth: .infinity)
+        }
+
+        if hasSelectedSounds {
+            photoArea
+        } else {
+            emptyState
+        }
+    }
+
+    private var photoArea: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                ForEach(photos, id: \.role) { photo in
+                    JamPanelBackdropPhotoTile(
+                        photo: photo,
+                        colorScheme: colorScheme,
+                        reduceMotion: reduceMotion
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            changePhotosButtonVisual
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 20) {
+            ContentUnavailableView(
+                "Choose one to three photos to shape the jam vibe.",
+                systemImage: "waveform.path.ecg"
+            )
+            .frame(maxWidth: .infinity)
+
+            HStack(spacing: 8) {
+                Image(systemName: "plus")
+                    .font(.system(size: 16, weight: .semibold))
+                Text("Add Photos")
+                    .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .headline))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .foregroundStyle(.white)
+            .background(Color.black.opacity(0.92), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var changePhotosButtonVisual: some View {
+        let backgroundFill: Color = colorScheme == .dark
+            ? Color.secondary.opacity(0.12)
+            : Color.black.opacity(0.08)
+        let borderColor: Color = colorScheme == .dark
+            ? Color.white.opacity(0.08)
+            : Color.black.opacity(0.10)
+
+        return HStack(spacing: 8) {
+            Image(systemName: "photo.stack")
+                .font(.system(size: 14, weight: .semibold))
+            Text("Change Photos")
+                .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .foregroundStyle(.primary)
+        .background(backgroundFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(borderColor, lineWidth: 1)
+        }
+    }
+
+    private var playbackButtonVisual: some View {
+        HStack(spacing: 10) {
+            Image(systemName: playbackAction.systemImage)
+                .font(.headline.weight(.semibold))
+            Text(playbackAction.title)
+                .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .headline))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .foregroundStyle(.white.opacity(canPlay ? 1 : 0.5))
+        .background(Color.black.opacity(0.92), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        }
+    }
+}
+
+private struct JamPanelBackdropPhotoTile: View {
+    let photo: JamPanelBackdropPhoto
+    let colorScheme: ColorScheme
+    let reduceMotion: Bool
+
+    var body: some View {
+        Color.clear
+            .aspectRatio(4.0 / 5.0, contentMode: .fit)
+            .overlay {
+                photoContent
+            }
+            .overlay(alignment: .topLeading) {
+                if photo.hasPhoto {
+                    Text(photo.role.displayName)
+                        .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.64), in: Capsule())
+                        .padding(6)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if !photo.noteLabel.isEmpty {
+                    Text(photo.noteLabel)
+                        .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.64), in: Capsule())
+                        .padding(6)
+                }
+            }
+            .opacity(photo.hasPhoto ? 1 : 0.58)
+            .frame(maxWidth: .infinity)
+    }
+
+    private var photoContent: some View {
+        let style = JamTileVisualStyle(
+            colorScheme: colorScheme,
+            reduceMotion: reduceMotion,
+            accentColor: photo.accentColor,
+            hasRole: photo.hasPhoto,
+            isSelected: photo.isSelected,
+            isActive: photo.isActive
+        )
+
+        return image
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .shadow(color: style.shadowColor, radius: style.shadowRadius, y: style.shadowYOffset)
+            .scaleEffect(style.baseScale)
+            .offset(y: style.baseYOffset)
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(style.selectionFill)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(style.contrastFill)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(style.borderColor, lineWidth: style.borderWidth)
+            }
+            .overlay {
+                if style.haloOpacity > 0 {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(style.haloColor.opacity(style.haloOpacity), lineWidth: style.haloLineWidth)
+                        .blur(radius: style.haloBlurRadius)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var image: some View {
+        GeometryReader { geometry in
+            if let image = photo.image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+            } else {
+                Rectangle()
+                    .fill(.secondary.opacity(0.18))
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+            }
+        }
+    }
+}
+
+private struct JamPanelBackdropSequencer: View {
+    let activeStepsBySoundID: [UUID: Set<Int>]
+    let roleByID: [UUID: JamRole]
+    let roleColors: [JamRole: Color]
+    let currentStep: Int?
+    let primaryText: String
+    let secondaryText: String
+    let reduceMotion: Bool
+    let colorScheme: ColorScheme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            JamSequencerGrid(
+                steps: jamStepsPerBar,
+                currentStep: currentStep,
+                activeStepsBySoundID: activeStepsBySoundID,
+                roleByID: roleByID,
+                roleColors: roleColors,
+                reduceMotion: reduceMotion
+            )
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            Rectangle()
+                .fill(structuralDivider)
+                .frame(height: 1)
+                .padding(.horizontal, 14)
+
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(primaryText)
+                        .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(secondaryText)
+                        .font(.custom("ZTTalk-Medium", size: 12, relativeTo: .caption))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text("\(Int(jamBPM)) BPM")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(structuralCardFill)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(structuralCardStroke, lineWidth: 1)
+        }
+    }
+
+    private var structuralCardFill: Color {
+        colorScheme == .dark ? Color.secondary.opacity(0.06) : Color.black.opacity(0.05)
+    }
+
+    private var structuralCardStroke: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.10)
+    }
+
+    private var structuralDivider: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.07)
+    }
+}
+
 private struct JamSelectedPhotoTile: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let sound: PhotoSound?
-    let coverData: Data?
+    let image: UIImage?
     let role: JamRole?
     let isActive: Bool
     let isSelected: Bool
@@ -2002,7 +2731,7 @@ private struct JamSelectedPhotoTile: View {
     @ViewBuilder
     private var coverImage: some View {
         GeometryReader { geometry in
-            if let coverData, let image = UIImage(data: coverData) {
+            if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -2034,9 +2763,7 @@ private struct JamSelectedPhotoTile: View {
 
     private var accessibilityHint: String {
         guard let role, sound != nil else { return "" }
-        return role == .melody
-            ? "Selects this role for arrange controls"
-            : "Selects this role"
+        return "Selects the \(role.displayName) role for arrange controls"
     }
 }
 
@@ -2085,15 +2812,89 @@ private enum MelodyPhraseIntent: String, CaseIterable, Identifiable {
     }
 }
 
+private enum JamArrangeOption: Hashable, Identifiable {
+    case bass(BassPatternIntent)
+    case harmony(HarmonyPatternIntent)
+    case melody(MelodyPhraseIntent)
+
+    var id: String {
+        switch self {
+        case .bass(let intent):
+            return "bass-\(intent.rawValue)"
+        case .harmony(let intent):
+            return "harmony-\(intent.rawValue)"
+        case .melody(let intent):
+            return "melody-\(intent.rawValue)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .bass(.steady): "STEADY"
+        case .bass(.syncopated): "SYNCOPATED"
+        case .bass(.driving): "DRIVING"
+        case .harmony(.sustained): "SUSTAINED"
+        case .harmony(.rhythmic): "RHYTHMIC"
+        case .harmony(.open): "OPEN"
+        case .melody(let intent): intent.title
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .bass(.steady): "Anchored low-end"
+        case .bass(.syncopated): "Offbeat accents"
+        case .bass(.driving): "More forward motion"
+        case .harmony(.sustained): "Longer chord holds"
+        case .harmony(.rhythmic): "More chord attacks"
+        case .harmony(.open): "Wider voicing spread"
+        case .melody(let intent): intent.subtitle
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .bass(.steady): "Steady bass pattern"
+        case .bass(.syncopated): "Syncopated bass pattern"
+        case .bass(.driving): "Driving bass pattern"
+        case .harmony(.sustained): "Sustained harmony pattern"
+        case .harmony(.rhythmic): "Rhythmic harmony pattern"
+        case .harmony(.open): "Open harmony pattern"
+        case .melody(let intent): intent.accessibilityLabel
+        }
+    }
+}
+
+private struct JamArrangePanelContext {
+    let role: JamRole?
+    let title: String
+    let subtitle: String
+    let options: [JamArrangeOption]
+    let selectedOption: JamArrangeOption?
+    let buttonTitle: String
+    let isActionEnabled: Bool
+}
+
+private enum JamArrangeAvailability {
+    case available(JamRole)
+    case noRoleSelected
+    case roleHasNoPhoto(JamRole)
+    case missingPhoto(JamRole)
+    case roleHasNoMusicalMaterial(JamRole)
+}
+
 private struct JamArrangePanel: View {
     @Environment(\.colorScheme) private var colorScheme
 
-    let role: JamRole?
-    let selectedIntent: MelodyPhraseIntent
-    let isMelodyActionEnabled: Bool
+    let title: String
+    let subtitle: String
+    let options: [JamArrangeOption]
+    let selectedOption: JamArrangeOption?
+    let buttonTitle: String
+    let isActionEnabled: Bool
     let fill: Color
     let stroke: Color
-    let onSelectIntent: (MelodyPhraseIntent) -> Void
+    let onSelectOption: (JamArrangeOption) -> Void
     let onApply: () -> Void
 
     private let cornerRadius: CGFloat = 22
@@ -2105,21 +2906,20 @@ private struct JamArrangePanel: View {
                 .padding(.top, 18)
                 .padding(.bottom, 14)
 
-            switch role {
-            case .melody:
+            if !options.isEmpty {
                 LazyVGrid(
                     columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
                     alignment: .leading,
                     spacing: 12
                 ) {
-                    ForEach(MelodyPhraseIntent.allCases) { intent in
-                        intentButton(intent)
+                    ForEach(options) { option in
+                        optionButton(option)
                     }
                 }
                 .padding(.horizontal, 18)
 
                 Button(action: onApply) {
-                    Text("NEW PHRASE")
+                    Text(buttonTitle)
                         .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
@@ -2127,28 +2927,21 @@ private struct JamArrangePanel: View {
                         .foregroundStyle(.white)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.black.opacity(isMelodyActionEnabled ? 0.92 : 0.42))
+                                .fill(Color.black.opacity(isActionEnabled ? 0.92 : 0.42))
                         )
                         .overlay {
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.white.opacity(isMelodyActionEnabled ? 0.10 : 0.05), lineWidth: 1)
+                                .stroke(Color.white.opacity(isActionEnabled ? 0.10 : 0.05), lineWidth: 1)
                         }
                 }
                 .buttonStyle(.plain)
-                .disabled(!isMelodyActionEnabled)
+                .disabled(!isActionEnabled)
                 .padding(.horizontal, 18)
                 .padding(.top, 16)
                 .padding(.bottom, 18)
-                .accessibilityLabel("New phrase")
-                .accessibilityHint("Generates the next melody phrase using the selected intent")
-
-            case .bass:
-                placeholderBody("Bass variations coming next.")
-
-            case .harmony:
-                placeholderBody("Harmony variations coming next.")
-
-            case .none:
+                .accessibilityLabel(buttonTitle.capitalized)
+                .accessibilityHint("Applies a new arrangement variation for the selected role.")
+            } else {
                 placeholderBody("Select a playable photo to arrange.")
             }
         }
@@ -2168,12 +2961,12 @@ private struct JamArrangePanel: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(roleTitle)
+            Text(title)
                 .font(.custom("ZTTalk-Bold", size: 20, relativeTo: .title3))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
 
-            Text(roleSubtitle)
+            Text(subtitle)
                 .font(.custom("ZTTalk-Regular", size: 12, relativeTo: .caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -2190,26 +2983,8 @@ private struct JamArrangePanel: View {
             .accessibilityLabel(message)
     }
 
-    private var roleTitle: String {
-        switch role {
-        case .bass: "BASS"
-        case .harmony: "HARMONY"
-        case .melody: "MELODY"
-        case .none: "ARRANGE"
-        }
-    }
-
-    private var roleSubtitle: String {
-        switch role {
-        case .bass: "Shape the bass pattern"
-        case .harmony: "Shape the harmony"
-        case .melody: "Shape the next phrase"
-        case .none: "Select a playable photo"
-        }
-    }
-
-    private func intentButton(_ intent: MelodyPhraseIntent) -> some View {
-        let isSelected = selectedIntent == intent
+    private func optionButton(_ option: JamArrangeOption) -> some View {
+        let isSelected = selectedOption == option
         let selectedFill = colorScheme == .dark
             ? Color.white.opacity(0.12)
             : Color.black.opacity(0.07)
@@ -2218,15 +2993,15 @@ private struct JamArrangePanel: View {
             : Color.black.opacity(0.14)
 
         return Button {
-            onSelectIntent(intent)
+            onSelectOption(option)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
-                Text(intent.title)
+                Text(option.title)
                     .font(.custom("ZTTalk-Bold", size: 13, relativeTo: .footnote))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                Text(intent.subtitle)
+                Text(option.subtitle)
                     .font(.custom("ZTTalk-Regular", size: 11, relativeTo: .caption2))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -2243,7 +3018,7 @@ private struct JamArrangePanel: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(intent.accessibilityLabel)
+        .accessibilityLabel(option.accessibilityLabel)
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
 }
@@ -2288,7 +3063,7 @@ private struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
     let session: JamSessionState
     let visualTransport: JamVisualTransportState
     let sounds: [PhotoSound]
-    let coverDataByID: [UUID: Data]
+    let imagesByID: [UUID: UIImage]
     let reduceMotion: Bool
     let selectedJamRole: JamRole?
     let changePhotosButton: () -> ChangePhotosButton
@@ -2318,7 +3093,7 @@ private struct JamSelectedPhotoArea<ChangePhotosButton: View>: View {
 
         JamSelectedPhotoTile(
             sound: sound,
-            coverData: sound.flatMap { coverDataByID[$0.id] },
+            image: sound.flatMap { imagesByID[$0.id] },
             role: photoID == nil ? nil : role,
             isActive: photoID != nil && isActive,
             isSelected: selectedJamRole == role,
@@ -2978,6 +3753,26 @@ private struct JamSequencerRows: View {
     let roleColors: [JamRole: Color]
     let reduceMotion: Bool
 
+    var body: some View {
+        JamSequencerGrid(
+            steps: steps,
+            currentStep: visualTransport.currentStep,
+            activeStepsBySoundID: activeStepsBySoundID,
+            roleByID: roleByID,
+            roleColors: roleColors,
+            reduceMotion: reduceMotion
+        )
+    }
+}
+
+private struct JamSequencerGrid: View {
+    let steps: Int
+    let currentStep: Int?
+    let activeStepsBySoundID: [UUID: Set<Int>]
+    let roleByID: [UUID: JamRole]
+    let roleColors: [JamRole: Color]
+    let reduceMotion: Bool
+
     private static let rowOrder: [JamRole] = [.bass, .harmony, .melody]
 
     var body: some View {
@@ -3006,7 +3801,7 @@ private struct JamSequencerRows: View {
     }
 
     private func stepCell(role: JamRole, step: Int, isActiveInRow: Bool) -> some View {
-        let isPlayhead = step == visualTransport.currentStep
+        let isPlayhead = step == currentStep
         let rowColor = roleColors[role]
         let inactiveColor = Color.secondary.opacity(0.16)
         let activeColor = (rowColor ?? .secondary).opacity(0.55)
@@ -3053,8 +3848,8 @@ private struct JamDockBar: View {
     @Binding var selectedPanel: JamControlPanel
     @Binding var isPanelPresented: Bool
     let session: JamSessionState
-    let selectedJamRole: JamRole?
     let canOpenArrangePanel: Bool
+    let arrangeAvailability: JamArrangeAvailability
     let onPanelToggle: (JamControlPanel) -> Void
 
     private static let tileSize: CGFloat = 62
@@ -3153,23 +3948,36 @@ private struct JamDockBar: View {
         if selectedPanel == .arrange && isPanelPresented {
             return "Expanded"
         }
-        if canOpenArrangePanel {
-            return "Available"
+        switch arrangeAvailability {
+        case .available(let role):
+            return "Available for \(role.displayName)"
+        case .noRoleSelected:
+            return "No role selected"
+        case .roleHasNoPhoto(let role):
+            return "\(role.displayName) has no photo"
+        case .missingPhoto(let role):
+            return "\(role.displayName) photo unavailable"
+        case .roleHasNoMusicalMaterial(let role):
+            return "\(role.displayName) has no musical material"
         }
-        return "Unavailable"
     }
 
     private var arrangeAccessibilityHint: String {
-        guard !canOpenArrangePanel else { return "Opens arrange controls for the selected photo." }
-        switch selectedJamRole {
-        case .bass:
-            return "Select a playable Bass photo to use Arrange."
-        case .harmony:
-            return "Select a playable Harmony photo to use Arrange."
-        case .melody:
-            return "Select a playable Melody photo to use Arrange."
-        case .none:
-            return "Select a playable photo to use Arrange."
+        switch arrangeAvailability {
+        case .available(.bass):
+            return "Open Arrange for the selected Bass photo."
+        case .available(.harmony):
+            return "Open Arrange for the selected Harmony photo."
+        case .available(.melody):
+            return "Open Arrange for the selected Melody photo."
+        case .noRoleSelected:
+            return "Select a playable Bass, Harmony, or Melody photo to use Arrange."
+        case .roleHasNoPhoto(let role):
+            return "Select a photo for \(role.displayName) to use Arrange."
+        case .missingPhoto(let role):
+            return "The selected \(role.displayName) photo is no longer available."
+        case .roleHasNoMusicalMaterial(let role):
+            return "The selected \(role.displayName) photo has no musical material to arrange."
         }
     }
 }

@@ -43,6 +43,8 @@ struct JamArrangementBuilder {
         sounds: [PhotoSound],
         vibePosition: CGPoint,
         drumKit: MusicDrumKit,
+        bassVariation: JamBassVariation = .initial,
+        harmonyVariation: JamHarmonyVariation = .initial,
         melodyVariation: JamMelodyVariation = .initial,
         buildMode: MelodyVariationBuildMode = .standard
     ) -> JamArrangement? {
@@ -51,6 +53,8 @@ struct JamArrangementBuilder {
             assignedSounds: assignedSounds,
             vibePosition: vibePosition,
             drumKit: drumKit,
+            bassVariation: bassVariation,
+            harmonyVariation: harmonyVariation,
             melodyVariation: melodyVariation,
             buildMode: buildMode
         )
@@ -60,6 +64,8 @@ struct JamArrangementBuilder {
         assignedSounds: [AssignedSound],
         vibePosition: CGPoint,
         drumKit: MusicDrumKit,
+        bassVariation: JamBassVariation = .initial,
+        harmonyVariation: JamHarmonyVariation = .initial,
         melodyVariation: JamMelodyVariation = .initial,
         buildMode: MelodyVariationBuildMode = .standard
     ) -> JamArrangement? {
@@ -91,17 +97,23 @@ struct JamArrangementBuilder {
             switch assignedSound.role {
             case .bass:
                 builtNotes = buildBassNotes(
+                    soundID: assignedSound.sound.id,
                     from: sourceNotes,
                     harmony: harmony,
                     registerShift: registerShift,
-                    vibePosition: vibePosition
+                    vibePosition: vibePosition,
+                    region: region,
+                    variation: bassVariation
                 )
             case .harmony:
                 builtNotes = buildHarmonyNotes(
+                    soundID: assignedSound.sound.id,
                     from: sourceNotes,
                     harmony: harmony,
                     registerShift: registerShift,
-                    vibePosition: vibePosition
+                    vibePosition: vibePosition,
+                    region: region,
+                    variation: harmonyVariation
                 )
             case .melody:
                 builtNotes = buildMelodyNotes(
@@ -158,6 +170,85 @@ struct JamArrangementBuilder {
     }
 
     private func buildBassNotes(
+        soundID: UUID,
+        from sourceNotes: [MusicNote],
+        harmony: GlobalHarmony,
+        registerShift: Int,
+        vibePosition: CGPoint,
+        region: JamRegion,
+        variation: JamBassVariation
+    ) -> [MusicNote] {
+        guard let intent = variation.intent, variation != .initial else {
+            return buildLegacyBassNotes(
+                from: sourceNotes,
+                harmony: harmony,
+                registerShift: registerShift,
+                vibePosition: vibePosition
+            )
+        }
+
+        let stepNotes = representativeNotesByStep(from: sourceNotes)
+        guard !stepNotes.isEmpty else { return [] }
+
+        let seed = stableRoleVariationSeed(
+            soundID: soundID,
+            roleLabel: "bass",
+            intentLabel: intent.rawValue,
+            generation: variation.generation,
+            harmony: harmony,
+            region: region,
+            sourceNotes: sourceNotes
+        )
+        let patternSteps = bassPatternSteps(for: intent, seed: seed)
+        let totalCount = patternSteps.count
+        var previousMIDINote: Int?
+
+        return patternSteps.enumerated().map { index, step in
+            let note = nearestNote(to: step, from: stepNotes)
+            let sourcePitchClass = PitchClass(normalizing: note.midiNote).rawValue
+            let chosenPitchClass = variedBassPitchClass(
+                for: intent,
+                sourcePitchClass: sourcePitchClass,
+                harmony: harmony,
+                step: step,
+                noteIndex: index,
+                seed: seed
+            )
+            let targetMIDINote = variedBassMIDINote(
+                for: intent,
+                pitchClass: chosenPitchClass,
+                previousMIDINote: previousMIDINote,
+                registerShift: registerShift,
+                step: step
+            )
+            previousMIDINote = targetMIDINote
+
+            return MusicNote(
+                step: step,
+                row: row(for: targetMIDINote),
+                midiNote: targetMIDINote,
+                velocity: transformedVelocity(
+                    note.velocity,
+                    multiplier: bassVelocityMultiplier(
+                        for: intent,
+                        step: step,
+                        noteIndex: index,
+                        totalCount: totalCount
+                    ),
+                    role: .bass
+                ),
+                voiceRole: .bass,
+                timingOffsetSteps: bassTimingOffsetSteps(
+                    for: intent,
+                    step: step,
+                    noteIndex: index,
+                    totalCount: totalCount
+                )
+            )
+        }
+    }
+
+    private func buildLegacyBassNotes(
         from sourceNotes: [MusicNote],
         harmony: GlobalHarmony,
         registerShift: Int,
@@ -216,6 +307,65 @@ struct JamArrangementBuilder {
     }
 
     private func buildHarmonyNotes(
+        soundID: UUID,
+        from sourceNotes: [MusicNote],
+        harmony: GlobalHarmony,
+        registerShift: Int,
+        vibePosition: CGPoint,
+        region: JamRegion,
+        variation: JamHarmonyVariation
+    ) -> [MusicNote] {
+        guard let intent = variation.intent, variation != .initial else {
+            return buildLegacyHarmonyNotes(
+                from: sourceNotes,
+                harmony: harmony,
+                registerShift: registerShift,
+                vibePosition: vibePosition
+            )
+        }
+
+        let sourceEvents = harmonySourceEvents(from: sourceNotes)
+        guard !sourceEvents.isEmpty else { return [] }
+
+        let seed = stableRoleVariationSeed(
+            soundID: soundID,
+            roleLabel: "harmony",
+            intentLabel: intent.rawValue,
+            generation: variation.generation,
+            harmony: harmony,
+            region: region,
+            sourceNotes: sourceNotes
+        )
+        let patternSteps = harmonyPatternSteps(for: intent, seed: seed)
+
+        return patternSteps.flatMap { step in
+            let sourceEvent = nearestHarmonyEvent(to: step, from: sourceEvents)
+            let voicedNotes = transformedHarmonyVoicing(
+                from: sourceEvent.notes,
+                harmony: harmony,
+                registerShift: registerShift,
+                intent: intent
+            )
+
+            guard !voicedNotes.isEmpty else { return [MusicNote]() }
+
+            return voicedNotes.map { midiNote in
+                MusicNote(
+                    step: step,
+                    row: row(for: midiNote),
+                    midiNote: midiNote,
+                    velocity: transformedVelocity(
+                        sourceEvent.velocity,
+                        multiplier: harmonyVelocityMultiplier(for: intent, eventSize: voicedNotes.count),
+                        role: .harmony
+                    ),
+                    voiceRole: .harmony
+                )
+            }
+        }
+    }
+
+    private func buildLegacyHarmonyNotes(
         from sourceNotes: [MusicNote],
         harmony: GlobalHarmony,
         registerShift: Int,
@@ -437,6 +587,25 @@ struct JamArrangementBuilder {
         return min(clampedOffset, latestOffset)
     }
 
+    private func bassTimingOffsetSteps(
+        for intent: BassPatternIntent,
+        step: Int,
+        noteIndex: Int,
+        totalCount: Int
+    ) -> Float? {
+        let offset: Float
+        switch intent {
+        case .steady:
+            offset = 0
+        case .syncopated:
+            offset = bassTimingOffsetSteps(for: step, noteIndex: noteIndex, totalCount: totalCount)
+        case .driving:
+            offset = step % 4 == 2 ? 0.03 : 0
+        }
+
+        return offset == 0 ? nil : offset
+    }
+
     private func bassVelocityMultiplier(for step: Int, noteIndex: Int) -> Float {
         let base: Float = 0.70
         let accent: Float
@@ -451,6 +620,298 @@ struct JamArrangementBuilder {
         }
 
         return base * accent
+    }
+
+    private func bassVelocityMultiplier(
+        for intent: BassPatternIntent,
+        step: Int,
+        noteIndex: Int,
+        totalCount: Int
+    ) -> Float {
+        switch intent {
+        case .steady:
+            return step.isMultiple(of: 4) ? 0.82 : 0.68
+        case .syncopated:
+            return bassVelocityMultiplier(for: step, noteIndex: noteIndex)
+        case .driving:
+            return step.isMultiple(of: 4) ? 0.86 : (noteIndex == totalCount - 1 ? 0.72 : 0.78)
+        }
+    }
+
+    private func bassPatternSteps(for intent: BassPatternIntent, seed: UInt64) -> [Int] {
+        let templates: [[Int]]
+        switch intent {
+        case .steady:
+            templates = [
+                [0, 4, 8, 12],
+                [0, 4, 10, 12],
+                [0, 5, 8, 13]
+            ]
+        case .syncopated:
+            templates = [
+                [2, 6, 10, 14],
+                [0, 3, 7, 10, 14],
+                [1, 6, 9, 13]
+            ]
+        case .driving:
+            templates = [
+                [0, 2, 4, 6, 8, 10, 12, 14],
+                [0, 2, 3, 6, 8, 10, 11, 14],
+                [0, 2, 5, 6, 8, 10, 13, 14]
+            ]
+        }
+
+        return templates[deterministicIndex(seed: seed, upperBound: templates.count)]
+    }
+
+    private func variedBassPitchClass(
+        for intent: BassPatternIntent,
+        sourcePitchClass: Int,
+        harmony: GlobalHarmony,
+        step: Int,
+        noteIndex: Int,
+        seed: UInt64
+    ) -> Int {
+        let rootPitchClass = harmony.rootPitchClass
+        let fifthPitchClass = (harmony.rootPitchClass + 7) % 12
+
+        switch intent {
+        case .steady:
+            if step.isMultiple(of: 8) { return rootPitchClass }
+            let useFifth = ((seed >> (noteIndex % 8)) & 1) == 1
+            return useFifth ? fifthPitchClass : rootPitchClass
+        case .syncopated:
+            if noteIndex.isMultiple(of: 2) {
+                return preferredBassPitchClass(
+                    for: sourcePitchClass,
+                    rootPitchClass: rootPitchClass,
+                    fifthPitchClass: fifthPitchClass
+                )
+            }
+            return fifthPitchClass
+        case .driving:
+            return step.isMultiple(of: 4) ? rootPitchClass : fifthPitchClass
+        }
+    }
+
+    private func variedBassMIDINote(
+        for intent: BassPatternIntent,
+        pitchClass: Int,
+        previousMIDINote: Int?,
+        registerShift: Int,
+        step: Int
+    ) -> Int {
+        let baseMIDINote = bassMIDINote(
+            pitchClass: pitchClass,
+            previousMIDINote: previousMIDINote,
+            registerShift: registerShift
+        )
+
+        switch intent {
+        case .steady, .syncopated:
+            return baseMIDINote
+        case .driving:
+            let lowered = baseMIDINote - 12
+            if step.isMultiple(of: 4), lowered >= 48 {
+                return lowered
+            }
+            return baseMIDINote
+        }
+    }
+
+    private func nearestNote(to targetStep: Int, from notes: [MusicNote]) -> MusicNote {
+        notes.min { lhs, rhs in
+            let lhsDistance = circularStepDistance(lhs.step, targetStep)
+            let rhsDistance = circularStepDistance(rhs.step, targetStep)
+            if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+            if lhs.step != rhs.step { return lhs.step < rhs.step }
+            return lhs.midiNote < rhs.midiNote
+        } ?? notes[0]
+    }
+
+    private func harmonyPatternSteps(for intent: HarmonyPatternIntent, seed: UInt64) -> [Int] {
+        let templates: [[Int]]
+        switch intent {
+        case .sustained:
+            templates = [
+                [0, 8],
+                [0, 6, 12],
+                [2, 8, 14]
+            ]
+        case .rhythmic:
+            templates = [
+                [0, 4, 6, 8, 12, 14],
+                [2, 4, 8, 10, 12, 15],
+                [0, 3, 7, 8, 11, 15]
+            ]
+        case .open:
+            templates = [
+                [0, 8, 12],
+                [0, 4, 8, 12],
+                [2, 8, 14]
+            ]
+        }
+
+        return templates[deterministicIndex(seed: seed, upperBound: templates.count)]
+    }
+
+    private func transformedHarmonyVoicing(
+        from sourceNotes: [MusicNote],
+        harmony: GlobalHarmony,
+        registerShift: Int,
+        intent: HarmonyPatternIntent
+    ) -> [Int] {
+        let preferredCenter = 66 + registerShift
+        let transformed = sourceNotes.map { note in
+            nearestScaleMIDINote(
+                to: note.midiNote + registerShift,
+                rootPitchClass: harmony.rootPitchClass,
+                scale: harmony.scale,
+                range: 54...90
+            )
+        }
+
+        var voicing = sanitizeHarmonyVoicing(
+            transformed,
+            preferredCenter: preferredCenter,
+            limit: sourceNotes.count > 1 ? 4 : 1
+        )
+
+        if intent == .open {
+            voicing = openedHarmonyVoicing(voicing)
+        }
+
+        return voicing.isEmpty ? [min(90, max(54, preferredCenter))] : voicing
+    }
+
+    private func sanitizeHarmonyVoicing(
+        _ notes: [Int],
+        preferredCenter: Int,
+        limit: Int
+    ) -> [Int] {
+        var sanitized: [Int] = []
+        for note in notes.sorted() {
+            let clamped = min(90, max(54, note))
+            guard sanitized.last != clamped else { continue }
+            sanitized.append(clamped)
+            if sanitized.count == limit { break }
+        }
+
+        guard !sanitized.isEmpty else {
+            return [min(90, max(54, preferredCenter))]
+        }
+
+        return sanitized
+    }
+
+    private func openedHarmonyVoicing(_ notes: [Int]) -> [Int] {
+        guard notes.count >= 2 else { return notes }
+        var opened = notes.sorted()
+        let highestIndex = opened.count - 1
+        let lifted = opened[highestIndex] + 12
+        if lifted <= 90, !opened.contains(lifted) {
+            opened[highestIndex] = lifted
+        }
+        return opened.sorted()
+    }
+
+    private func harmonyVelocityMultiplier(for intent: HarmonyPatternIntent, eventSize: Int) -> Float {
+        let sizeTrim: Float = eventSize >= 3 ? 0.92 : 1.0
+        switch intent {
+        case .sustained:
+            return 0.50 * sizeTrim
+        case .rhythmic:
+            return 0.60 * sizeTrim
+        case .open:
+            return 0.54 * sizeTrim
+        }
+    }
+
+    private func nearestHarmonyEvent(to targetStep: Int, from events: [HarmonySourceEvent]) -> HarmonySourceEvent {
+        events.min { lhs, rhs in
+            let lhsDistance = circularStepDistance(lhs.step, targetStep)
+            let rhsDistance = circularStepDistance(rhs.step, targetStep)
+            if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+            return lhs.step < rhs.step
+        } ?? events[0]
+    }
+
+    private func harmonySourceEvents(from notes: [MusicNote]) -> [HarmonySourceEvent] {
+        let sorted = sortedNotes(from: notes)
+        let notesByStep = Dictionary(grouping: sorted, by: \.step)
+
+        return notesByStep.keys
+            .sorted()
+            .compactMap { step in
+                guard let stepNotes = notesByStep[step], !stepNotes.isEmpty else {
+                    return nil
+                }
+                let orderedNotes = stepNotes.sorted { lhs, rhs in
+                    if lhs.midiNote != rhs.midiNote { return lhs.midiNote < rhs.midiNote }
+                    return lhs.row < rhs.row
+                }
+                let dedupedNotes = orderedNotes.reduce(into: [MusicNote]()) { result, note in
+                    if result.last?.midiNote != note.midiNote {
+                        result.append(note)
+                    }
+                }
+                return HarmonySourceEvent(
+                    step: step,
+                    notes: Array(dedupedNotes.prefix(4)),
+                    velocity: dedupedNotes.map(\.velocity).max() ?? 0.55
+                )
+            }
+    }
+
+    private func circularStepDistance(_ lhs: Int, _ rhs: Int) -> Int {
+        let direct = abs(lhs - rhs)
+        return min(direct, MusicSequence.steps - direct)
+    }
+
+    private func stableRoleVariationSeed(
+        soundID: UUID,
+        roleLabel: String,
+        intentLabel: String,
+        generation: UInt64,
+        harmony: GlobalHarmony,
+        region: JamRegion,
+        sourceNotes: [MusicNote]
+    ) -> UInt64 {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+
+        func feed(byte: UInt8) {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+
+        func feed(string: String) {
+            for byte in string.utf8 {
+                feed(byte: byte)
+            }
+            feed(byte: 0xFF)
+        }
+
+        func feed(int: Int) {
+            var value = UInt64(bitPattern: Int64(int))
+            for _ in 0..<8 {
+                feed(byte: UInt8(truncatingIfNeeded: value))
+                value >>= 8
+            }
+        }
+
+        feed(string: soundID.uuidString)
+        feed(string: roleLabel)
+        feed(string: intentLabel)
+        feed(int: harmony.rootPitchClass)
+        feed(string: harmony.scale.rawValue)
+        feed(string: region.seedLabel)
+
+        for note in sortedNotes(from: sourceNotes) {
+            feed(int: note.step)
+            feed(int: note.midiNote)
+        }
+
+        return hash ^ mixedVariationGeneration(generation)
     }
 
     private func effectiveDensity(for role: JamRole, sourceCount: Int, vibePosition: CGPoint) -> Double {
@@ -1666,6 +2127,12 @@ private struct VibePreset {
 private struct MelodySourceNote {
     let step: Int
     let midiNote: Int
+    let velocity: Float
+}
+
+private struct HarmonySourceEvent {
+    let step: Int
+    let notes: [MusicNote]
     let velocity: Float
 }
 

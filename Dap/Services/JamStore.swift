@@ -70,7 +70,9 @@ actor JamStore {
                 lfoEnabled: false,
                 lfoAmount: 0.35
             ),
-            melodyVariation: .initial
+            melodyVariation: .initial,
+            bassVariation: .initial,
+            harmonyVariation: .initial
         )
 
         try write(jam)
