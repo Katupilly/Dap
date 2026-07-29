@@ -14,10 +14,8 @@ struct PhotoInspectorView: View {
     let sound: PhotoSound
     let coverData: Data?
     let library: PhotoLibraryViewModel
-    let namespace: Namespace.ID
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var isShowingDeleteConfirmation = false
     @State private var isShowingDeleteError = false
@@ -97,6 +95,7 @@ struct PhotoInspectorView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationTitle("Photo Inspector")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationTransition(.automatic)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -144,7 +143,6 @@ struct PhotoInspectorView: View {
         } message: {
             Text("Try again.")
         }
-        .conditionalZoom(!reduceMotion, sourceID: sound.id, namespace: namespace)
     }
 
     private var cover: some View {
@@ -258,17 +256,6 @@ private struct InspectorButtonStyle: ButtonStyle {
             .padding(.horizontal, 14)
             .foregroundStyle(foreground)
             .background(background.opacity(configuration.isPressed ? 0.78 : 1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func conditionalZoom(_ enabled: Bool, sourceID: UUID, namespace: Namespace.ID) -> some View {
-        if enabled {
-            navigationTransition(.zoom(sourceID: sourceID, in: namespace))
-        } else {
-            self
-        }
     }
 }
 

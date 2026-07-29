@@ -5,8 +5,6 @@ struct GalleryView: View {
     let library: PhotoLibraryViewModel
     @Binding var path: [UUID]
 
-    @Namespace private var namespace
-
     private let columns = [
         GridItem(.flexible(), spacing: 8),
         GridItem(.flexible(), spacing: 8),
@@ -34,8 +32,7 @@ struct GalleryView: View {
                                     sound: sound,
                                     coverData: library.coverDataByID[sound.id],
                                     isPlaying: library.playingID == sound.id,
-                                    isRefining: library.refiningMetadataIDs.contains(sound.id),
-                                    namespace: namespace
+                                    isRefining: library.refiningMetadataIDs.contains(sound.id)
                                 )
                             }
                             .buttonStyle(.plain)
@@ -74,8 +71,7 @@ struct GalleryView: View {
                         PhotoInspectorView(
                             sound: sound,
                             coverData: library.coverDataByID[id],
-                            library: library,
-                            namespace: namespace
+                            library: library
                         )
                     }
                 }
@@ -92,7 +88,6 @@ private struct SoundCellView: View {
     let coverData: Data?
     let isPlaying: Bool
     let isRefining: Bool
-    let namespace: Namespace.ID
 
     var body: some View {
         Color.clear
@@ -100,7 +95,6 @@ private struct SoundCellView: View {
             .overlay {
                 ZStack(alignment: .topLeading) {
                     coverImage
-                        .matchedTransitionSource(id: sound.id, in: namespace)
 
                     if isRefining {
                         ProgressView()
