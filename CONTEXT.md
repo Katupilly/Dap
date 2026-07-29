@@ -116,6 +116,7 @@ Current behavior:
 - display a local transport step indicator;
 - queue selection, Vibe, and kit changes while playing;
 - schedule the latest rendered replacement for the next loop boundary;
+- export a static 1080×1920 Jam Story image with Instagram Stories handoff and Share Sheet fallback;
 - stop transient playback when Jam disappears or loses root focus.
 
 Jam state is not persisted. Studio does not exist in the current code.
@@ -837,7 +838,7 @@ The following are not implemented and must not be assumed to exist:
 - global Jam effects;
 - Studio mode;
 - saved Jam documents;
-- export of images, audio, MIDI, or animations;
+- export of audio, MIDI, video, or animations;
 - Gallery selection, delete, share, grouping, and reordering;
 - direct Inspector-to-Jam insertion;
 - cloud sync;

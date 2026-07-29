@@ -39,7 +39,7 @@ struct JamSequencerSnapshot: Equatable {
         self.melodySteps = melodySteps
     }
 
-    fileprivate func steps(for role: JamRole) -> Set<Int> {
+    func steps(for role: JamRole) -> Set<Int> {
         switch role {
         case .bass: bassSteps
         case .harmony: harmonySteps

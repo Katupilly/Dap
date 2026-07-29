@@ -41,6 +41,7 @@ struct JamView: View {
     @State private var resolvedJamCoverImage: UIImage?
     @State private var panelBackdropTask: Task<Void, Never>?
     @State private var selectedPhotoImagesByID: [UUID: UIImage] = [:]
+    @State private var storyExportSnapshot: JamStoryExportSnapshot?
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Dap", category: "JamView")
     private let transportPollInterval: Duration = .milliseconds(33)
@@ -102,6 +103,10 @@ struct JamView: View {
 
     private var hasAnySelection: Bool {
         !selectedSounds.isEmpty
+    }
+
+    private var canExportStory: Bool {
+        hasAnySelection && sessionHeaderCoverDescriptor != nil
     }
 
     private func photoColor(for role: JamRole) -> Color? {
@@ -211,6 +216,14 @@ struct JamView: View {
                 onConfirmSelection: confirmPhotoSelection
             )
         }
+        .sheet(isPresented: storyExportPresented) {
+            if let storyExportSnapshot {
+                JamStoryExportSheet(
+                    snapshot: storyExportSnapshot,
+                    isPresented: storyExportPresented
+                )
+            }
+        }
         .modifier(
             JamLifecycleModifier(
                 isActive: isActive,
@@ -285,6 +298,17 @@ struct JamView: View {
                 .layoutPriority(1)
 
             Spacer(minLength: 0)
+
+            Button(action: presentStoryExport) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
+                    .background(.secondary.opacity(0.12), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canExportStory)
+            .accessibilityLabel("Export Jam story")
         }
     }
 
@@ -316,6 +340,68 @@ struct JamView: View {
                         .stroke(.white.opacity(0.10), lineWidth: 1)
                 }
         }
+    }
+
+    private var storyExportPresented: Binding<Bool> {
+        Binding(
+            get: { storyExportSnapshot != nil },
+            set: { if !$0 { storyExportSnapshot = nil } }
+        )
+    }
+
+    private func presentStoryExport() {
+        guard let snapshot = makeStoryExportSnapshot() else { return }
+        storyExportSnapshot = snapshot
+    }
+
+    private func makeStoryExportSnapshot() -> JamStoryExportSnapshot? {
+        guard let coverDescriptor = sessionHeaderCoverDescriptor else { return nil }
+
+        let assignments = session.slotAssignments
+        let roleColors = storyRoleColors(for: assignments)
+        let arrangement = session.activeArrangement ?? buildArrangement()
+        let region = JamGrooveLibrary.region(for: session.vibePosition)
+        let drumKit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
+
+        return JamStoryExportSnapshot(
+            jamName: sessionDisplayName,
+            coverDescriptor: coverDescriptor,
+            photos: storyPhotos(for: assignments),
+            sequencerSnapshot: JamSequencerSnapshot(arrangement: arrangement, assignments: assignments),
+            roleColors: roleColors,
+            region: region,
+            drumKit: drumKit,
+            bpm: Int(jamBPM)
+        )
+    }
+
+    private func storyPhotos(for assignments: JamSlotAssignments) -> [JamStoryExportSnapshot.Photo] {
+        assignments.allPhotoIDs.compactMap { id in
+            guard let sound = library.items.first(where: { $0.id == id }) else { return nil }
+            let role = assignments.assignedRolesByID[id]
+            let pitch = PitchClass(rawValue: sound.sequence.harmony.rootPitchClass) ?? sound.sequence.dominantPitchClass
+            return JamStoryExportSnapshot.Photo(
+                id: id,
+                role: role,
+                title: sound.displayTitle,
+                noteLabel: sound.sequence.harmony.rootName,
+                image: selectedPhotoImagesByID[id],
+                accentColor: RetroCoverRenderer.tonalPalette(for: pitch).base
+            )
+        }
+    }
+
+    private func storyRoleColors(for assignments: JamSlotAssignments) -> [JamRole: RGBColor] {
+        var result: [JamRole: RGBColor] = [:]
+        for role in JamRole.allCases {
+            guard let id = assignments.photoID(for: role),
+                  let sound = library.items.first(where: { $0.id == id }) else {
+                continue
+            }
+            let pitch = PitchClass(rawValue: sound.sequence.harmony.rootPitchClass) ?? sound.sequence.dominantPitchClass
+            result[role] = RetroCoverRenderer.tonalPalette(for: pitch).base
+        }
+        return result
     }
 
     @ViewBuilder

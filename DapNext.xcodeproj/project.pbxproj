@@ -17,6 +17,11 @@
 		AA0000010000000000000224 /* JamControlPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000225 /* JamControlPanels.swift */; };
 		AA0000010000000000000226 /* JamPhotoSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000227 /* JamPhotoSection.swift */; };
 		AA0000010000000000000228 /* JamPanelBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000229 /* JamPanelBackdrop.swift */; };
+		AA0000010000000000000230 /* JamStoryExportSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000231 /* JamStoryExportSnapshot.swift */; };
+		AA0000010000000000000232 /* JamStoryExportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000233 /* JamStoryExportView.swift */; };
+		AA0000010000000000000234 /* JamStoryRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000235 /* JamStoryRenderer.swift */; };
+		AA0000010000000000000236 /* InstagramStoryExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000237 /* InstagramStoryExporter.swift */; };
+		AA0000010000000000000238 /* JamStoryExportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000239 /* JamStoryExportSheet.swift */; };
 		AA000001000000000000004C /* JamArrangementBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004D /* JamArrangementBuilder.swift */; };
 		AA000001000000000000005C /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000005D /* CameraView.swift */; };
 		AA000001000000000000006A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000006B /* Assets.xcassets */; };
@@ -63,6 +68,11 @@
 		AA0000010000000000000225 /* JamControlPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamControlPanels.swift; sourceTree = "<group>"; };
 		AA0000010000000000000227 /* JamPhotoSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPhotoSection.swift; sourceTree = "<group>"; };
 		AA0000010000000000000229 /* JamPanelBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPanelBackdrop.swift; sourceTree = "<group>"; };
+		AA0000010000000000000231 /* JamStoryExportSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportSnapshot.swift; sourceTree = "<group>"; };
+		AA0000010000000000000233 /* JamStoryExportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportView.swift; sourceTree = "<group>"; };
+		AA0000010000000000000235 /* JamStoryRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryRenderer.swift; sourceTree = "<group>"; };
+		AA0000010000000000000237 /* InstagramStoryExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstagramStoryExporter.swift; sourceTree = "<group>"; };
+		AA0000010000000000000239 /* JamStoryExportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportSheet.swift; sourceTree = "<group>"; };
 		AA000001000000000000004D /* JamArrangementBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamArrangementBuilder.swift; sourceTree = "<group>"; };
 		AA000001000000000000005D /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		AA000001000000000000006B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -189,6 +199,7 @@
 		AA0000010000000000000095 /* Jam */ = {
 			isa = PBXGroup;
 			children = (
+				AA000001000000000000023A /* Export */,
 				AA0000010000000000000213 /* JamCard.swift */,
 				AA000001000000000000020F /* JamLibraryState.swift */,
 				AA0000010000000000000211 /* JamLibraryView.swift */,
@@ -209,6 +220,18 @@
 				AA0000010000000000000221 /* JamSequencerSection.swift */,
 			);
 			path = Jam;
+			sourceTree = "<group>";
+		};
+		AA000001000000000000023A /* Export */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000010000000000000231 /* JamStoryExportSnapshot.swift */,
+				AA0000010000000000000233 /* JamStoryExportView.swift */,
+				AA0000010000000000000235 /* JamStoryRenderer.swift */,
+				AA0000010000000000000237 /* InstagramStoryExporter.swift */,
+				AA0000010000000000000239 /* JamStoryExportSheet.swift */,
+			);
+			path = Export;
 			sourceTree = "<group>";
 		};
 		AA0000010000000000000096 /* Capture */ = {
@@ -358,6 +381,11 @@
 				AA0000010000000000000210 /* JamLibraryView.swift in Sources */,
 				AA0000010000000000000212 /* JamCard.swift in Sources */,
 				AA000001000000000000004A /* JamView.swift in Sources */,
+				AA0000010000000000000230 /* JamStoryExportSnapshot.swift in Sources */,
+				AA0000010000000000000232 /* JamStoryExportView.swift in Sources */,
+				AA0000010000000000000234 /* JamStoryRenderer.swift in Sources */,
+				AA0000010000000000000236 /* InstagramStoryExporter.swift in Sources */,
+				AA0000010000000000000238 /* JamStoryExportSheet.swift in Sources */,
 				AA0000010000000000000224 /* JamControlPanels.swift in Sources */,
 				AA0000010000000000000222 /* JamDockBar.swift in Sources */,
 				AA0000010000000000000228 /* JamPanelBackdrop.swift in Sources */,
