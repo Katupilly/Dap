@@ -88,23 +88,6 @@ struct JamView: View {
         selectedSounds.filter { !$0.sequence.notes.isEmpty }
     }
 
-    private var assignedSounds: [AssignedSound] {
-        let roleByID = session.slotAssignments.assignedRolesByID
-        let orderedRoles: [JamRole] = [.bass, .harmony, .melody]
-        var seen: Set<UUID> = []
-        var result: [AssignedSound] = []
-
-        for sound in playableSelectedSounds where !seen.contains(sound.id) {
-            guard let role = roleByID[sound.id] else { continue }
-            seen.insert(sound.id)
-            result.append(AssignedSound(sound: sound, role: role))
-        }
-
-        return orderedRoles.compactMap { role in
-            result.first(where: { $0.role == role })
-        }
-    }
-
     private var canPlay: Bool {
         !playableSelectedSounds.isEmpty
     }
@@ -163,9 +146,7 @@ struct JamView: View {
                 Color.clear
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        closePanel()
-                    }
+                    .onTapGesture(perform: closePanel)
                     .zIndex(7)
             }
 
@@ -179,9 +160,7 @@ struct JamView: View {
                     vibePosition: session.vibePosition,
                     canOpenArrangePanel: canOpenArrangePanel,
                     arrangeAvailability: arrangeAvailability,
-                    onPanelToggle: { target in
-                        handlePanelToggle(target)
-                    }
+                    onPanelToggle: handlePanelToggle
                 )
                 .padding(.horizontal, 20)
                 .padding(.bottom, 82)
@@ -201,40 +180,28 @@ struct JamView: View {
         }
         .sensoryFeedback(.selection, trigger: playbackController.appliedArrangementVersion)
         .sensoryFeedback(.success, trigger: swapArrangementVersion)
-        .onChange(of: session.effectSettings) { _, newSettings in
-            let bpm = session.activeArrangement.map { Double($0.sequence.harmony.bpm) } ?? 96.0
-            library.setJamEffects(newSettings, bpm: bpm)
-            scheduleAutosave()
-        }
-        .onChange(of: session.slotAssignments) { oldAssignments, assignments in
-            if !session.isPlaying {
-                session.activeArrangement = buildArrangement(
-                    for: assignments,
-                    bassVariation: session.bassVariation,
-                    harmonyVariation: session.harmonyVariation,
-                    melodyVariation: session.melodyVariation,
-                    buildMode: .standard
-                )
-            }
-            synchronizeSelectionState(previousAssignments: oldAssignments, newAssignments: assignments)
-            refreshSelectedPhotoImages()
-            scheduleAutosave()
-        }
-        .onChange(of: session.drumKitSelection) { _, _ in
-            if !session.isPlaying {
-                session.activeArrangement = buildArrangement()
-            }
-            scheduleAutosave()
-        }
-        .onChange(of: session.vibePosition) { _, _ in
-            if !session.isPlaying {
-                session.activeArrangement = buildArrangement()
-            }
-            scheduleAutosave()
-        }
-        .onChange(of: session.jamName) { _, _ in
-            scheduleAutosave()
-        }
+        .modifier(
+            JamEffectsChangeModifier(
+                settings: session.effectSettings,
+                onSettingsChanged: handleEffectSettingsChanged
+            )
+        )
+        .modifier(
+            JamArrangementInputChangesModifier(
+                slotAssignments: session.slotAssignments,
+                drumKitSelection: session.drumKitSelection,
+                vibePosition: session.vibePosition,
+                onSlotAssignmentsChanged: handleSlotAssignmentsChanged,
+                onDrumKitSelectionChanged: handleDrumKitSelectionChanged,
+                onVibePositionChanged: handleVibePositionChanged
+            )
+        )
+        .modifier(
+            JamNameAutosaveModifier(
+                jamName: session.jamName,
+                onJamNameChanged: handleJamNameChanged
+            )
+        )
         .sheet(isPresented: $isPhotoSelectorPresented) {
             JamPhotoSelectorSheet(
                 sounds: library.items,
@@ -244,90 +211,31 @@ struct JamView: View {
                 onConfirmSelection: confirmPhotoSelection
             )
         }
-        .onAppear {
-            library.setTransientLoopUpdatePreparedHandler {
-                playbackController.markLoopUpdatePrepared()
-            }
-            if !hasAppliedInitialJam, let initialJam {
-                hasAppliedInitialJam = true
-                applyPersistedJam(initialJam)
-            }
-            syncAllArrangeDrafts()
-            synchronizeSelectionState(previousAssignments: session.slotAssignments, newAssignments: session.slotAssignments)
-            refreshSelectedPhotoImages()
-        }
-        .onDisappear {
-            library.clearTransientLoopUpdatePreparedHandler()
-            Task { await flushAutosave() }
-            clearTransportAndPlayback()
-            selectedJamRole = nil
-            selectedPanel = .none
-            isPanelPresented = false
-            cancelPanelBackdropTask()
-            panelBackdropImage = nil
-            resolvedJamCoverDescriptor = nil
-            resolvedJamCoverImage = nil
-            selectedPhotoImagesByID = [:]
-        }
-        .onChange(of: isActive) { _, isActive in
-            if isActive {
-                refreshSelectedPhotoImages()
-                return
-            }
-            Task { await flushAutosave() }
-            clearTransportAndPlayback()
-            selectedJamRole = nil
-            selectedPanel = .none
-            isPanelPresented = false
-            cancelPanelBackdropTask()
-            panelBackdropImage = nil
-            resolvedJamCoverDescriptor = nil
-            resolvedJamCoverImage = nil
-            selectedPhotoImagesByID = [:]
-        }
-        .onChange(of: library.items.map(\.id)) { _, itemIDs in
-            let validIDs = Set(itemIDs)
-            let playableIDs = Set(
-                library.items.compactMap { sound in
-                    sound.sequence.notes.isEmpty ? nil : sound.id
-                }
+        .modifier(
+            JamLifecycleModifier(
+                isActive: isActive,
+                onAppear: handleJamAppear,
+                onDisappear: handleJamDisappear,
+                onActiveStateChanged: handleJamActiveStateChanged
             )
-            let previousAssignments = session.slotAssignments
-            let cleanedAssignments = session.slotAssignments.pruningInvalidIDs(
-                validIDs: validIDs,
-                playableIDs: playableIDs
+        )
+        .modifier(
+            JamLibraryReconciliationModifier(
+                itemIDs: library.items.map(\.id),
+                isTransientPlaybackActive: library.isTransientPlaybackActive,
+                onItemIDsChanged: handleLibraryItemIDsChanged,
+                onTransientPlaybackChanged: handleTransientPlaybackActivityChanged
             )
-
-            guard cleanedAssignments != previousAssignments else { return }
-
-            if session.isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
-                sendPendingArrangementToPlayer()
-            } else if !session.isPlaying {
-                session.activeArrangement = buildArrangement(
-                    for: cleanedAssignments,
-                    bassVariation: session.bassVariation,
-                    harmonyVariation: session.harmonyVariation,
-                    melodyVariation: session.melodyVariation,
-                    buildMode: .standard
-                )
-            }
-
-            session.slotAssignments = cleanedAssignments
-            synchronizeSelectionState(previousAssignments: previousAssignments, newAssignments: cleanedAssignments)
-            refreshSelectedPhotoImages()
-            scheduleAutosave()
-        }
-        .onChange(of: library.isTransientPlaybackActive) { _, isActive in
-            guard !isActive, session.isPlaying else { return }
-            clearTransportState()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .background else { return }
-            Task { await flushAutosave() }
-        }
+        )
+        .modifier(
+            JamScenePersistenceModifier(
+                scenePhase: scenePhase,
+                onScenePhaseChanged: handleScenePhaseChanged
+            )
+        )
     }
 
-    // MARK: - Jam persistence
+    // MARK: - Session presentation
 
     private var fixedSessionLayout: some View {
         VStack(spacing: 18) {
@@ -424,6 +332,8 @@ struct JamView: View {
             }
         }
     }
+
+    // MARK: - Persistence
 
     private func loadPersistedJam(id: UUID) {
         Task {
@@ -825,11 +735,7 @@ struct JamView: View {
             ),
             expandedPanelFill: expandedPanelFill,
             expandedPanelStroke: expandedPanelStroke,
-            onPositionChanged: {
-                if session.isPlaying {
-                    sendPendingArrangementToPlayer()
-                }
-            }
+            onPositionChanged: handleVibeControlPositionChanged
         )
     }
 
@@ -1093,14 +999,7 @@ struct JamView: View {
     }
 
     private var playbackButton: some View {
-        Button {
-            switch playbackAction {
-            case .play:
-                startPlaybackIfPossible()
-            case .stop:
-                clearTransportAndPlayback()
-            }
-        } label: {
+        Button(action: handlePlaybackButtonTapped) {
             HStack(spacing: 10) {
                 Image(systemName: playbackAction.systemImage)
                     .font(.headline.weight(.semibold))
@@ -1119,6 +1018,8 @@ struct JamView: View {
         .buttonStyle(.plain)
         .disabled(!canPlay)
     }
+
+    // MARK: - Slot and role actions
 
     private func confirmPhotoSelection(_ newSelectionIDs: [UUID]) {
         let stableSelection = newSelectionIDs.sorted { $0.uuidString < $1.uuidString }
@@ -1244,6 +1145,8 @@ struct JamView: View {
             closePanel()
         }
     }
+
+    // MARK: - Arrange
 
     private var displayedReferenceArrangement: JamArrangement? {
         playbackController.pendingArrangement ?? session.activeArrangement
@@ -1443,6 +1346,8 @@ struct JamView: View {
             session.activeArrangement = result.arrangement
         }
     }
+
+    // MARK: - Playback and arrangement
 
     private func startPlaybackIfPossible() {
         cancelTransportTask()
@@ -1881,6 +1786,248 @@ struct JamView: View {
         case .breakbeat: .breakbeat
         case .metal: .metal
         }
+    }
+}
+
+private extension JamView {
+    // MARK: - Action routing
+
+    func handlePlaybackButtonTapped() {
+        switch playbackAction {
+        case .play:
+            startPlaybackIfPossible()
+        case .stop:
+            clearTransportAndPlayback()
+        }
+    }
+
+    func handleVibeControlPositionChanged() {
+        if session.isPlaying {
+            sendPendingArrangementToPlayer()
+        }
+    }
+}
+
+private extension JamView {
+    // MARK: - Reactive state handlers
+
+    func handleEffectSettingsChanged(_ settings: JamEffectSettings) {
+        let bpm = session.activeArrangement.map { Double($0.sequence.harmony.bpm) } ?? 96.0
+        library.setJamEffects(settings, bpm: bpm)
+        scheduleAutosave()
+    }
+
+    func handleSlotAssignmentsChanged(
+        from previousAssignments: JamSlotAssignments,
+        to assignments: JamSlotAssignments
+    ) {
+        if !session.isPlaying {
+            session.activeArrangement = buildArrangement(
+                for: assignments,
+                bassVariation: session.bassVariation,
+                harmonyVariation: session.harmonyVariation,
+                melodyVariation: session.melodyVariation,
+                buildMode: .standard
+            )
+        }
+        synchronizeSelectionState(previousAssignments: previousAssignments, newAssignments: assignments)
+        refreshSelectedPhotoImages()
+        scheduleAutosave()
+    }
+
+    func handleDrumKitSelectionChanged() {
+        if !session.isPlaying {
+            session.activeArrangement = buildArrangement()
+        }
+        scheduleAutosave()
+    }
+
+    func handleVibePositionChanged() {
+        if !session.isPlaying {
+            session.activeArrangement = buildArrangement()
+        }
+        scheduleAutosave()
+    }
+
+    func handleJamNameChanged() {
+        scheduleAutosave()
+    }
+
+    func handleJamAppear() {
+        library.setTransientLoopUpdatePreparedHandler {
+            playbackController.markLoopUpdatePrepared()
+        }
+        if !hasAppliedInitialJam, let initialJam {
+            hasAppliedInitialJam = true
+            applyPersistedJam(initialJam)
+        }
+        syncAllArrangeDrafts()
+        synchronizeSelectionState(
+            previousAssignments: session.slotAssignments,
+            newAssignments: session.slotAssignments
+        )
+        refreshSelectedPhotoImages()
+    }
+
+    func handleJamDisappear() {
+        library.clearTransientLoopUpdatePreparedHandler()
+        Task { await flushAutosave() }
+        resetInactiveJamState()
+    }
+
+    func handleJamActiveStateChanged(_ isActive: Bool) {
+        if isActive {
+            refreshSelectedPhotoImages()
+            return
+        }
+        Task { await flushAutosave() }
+        resetInactiveJamState()
+    }
+
+    func resetInactiveJamState() {
+        clearTransportAndPlayback()
+        selectedJamRole = nil
+        selectedPanel = .none
+        isPanelPresented = false
+        cancelPanelBackdropTask()
+        panelBackdropImage = nil
+        resolvedJamCoverDescriptor = nil
+        resolvedJamCoverImage = nil
+        selectedPhotoImagesByID = [:]
+    }
+
+    func handleLibraryItemIDsChanged(_ itemIDs: [UUID]) {
+        let validIDs = Set(itemIDs)
+        let playableIDs = Set(
+            library.items.compactMap { sound in
+                sound.sequence.notes.isEmpty ? nil : sound.id
+            }
+        )
+        let previousAssignments = session.slotAssignments
+        let cleanedAssignments = session.slotAssignments.pruningInvalidIDs(
+            validIDs: validIDs,
+            playableIDs: playableIDs
+        )
+
+        guard cleanedAssignments != previousAssignments else { return }
+
+        if session.isPlaying && cleanedAssignments.hasDifferentActiveSlots(from: previousAssignments) {
+            sendPendingArrangementToPlayer()
+        } else if !session.isPlaying {
+            session.activeArrangement = buildArrangement(
+                for: cleanedAssignments,
+                bassVariation: session.bassVariation,
+                harmonyVariation: session.harmonyVariation,
+                melodyVariation: session.melodyVariation,
+                buildMode: .standard
+            )
+        }
+
+        session.slotAssignments = cleanedAssignments
+        synchronizeSelectionState(previousAssignments: previousAssignments, newAssignments: cleanedAssignments)
+        refreshSelectedPhotoImages()
+        scheduleAutosave()
+    }
+
+    func handleTransientPlaybackActivityChanged(_ isActive: Bool) {
+        guard !isActive, session.isPlaying else { return }
+        clearTransportState()
+    }
+
+    func handleScenePhaseChanged(_ phase: ScenePhase) {
+        guard phase == .background else { return }
+        Task { await flushAutosave() }
+    }
+}
+
+private struct JamEffectsChangeModifier: ViewModifier {
+    let settings: JamEffectSettings
+    let onSettingsChanged: (JamEffectSettings) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: settings) { _, settings in
+                onSettingsChanged(settings)
+            }
+    }
+}
+
+private struct JamArrangementInputChangesModifier: ViewModifier {
+    let slotAssignments: JamSlotAssignments
+    let drumKitSelection: MusicDrumKitSelection
+    let vibePosition: CGPoint
+    let onSlotAssignmentsChanged: (JamSlotAssignments, JamSlotAssignments) -> Void
+    let onDrumKitSelectionChanged: () -> Void
+    let onVibePositionChanged: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: slotAssignments) { previousAssignments, assignments in
+                onSlotAssignmentsChanged(previousAssignments, assignments)
+            }
+            .onChange(of: drumKitSelection) { _, _ in
+                onDrumKitSelectionChanged()
+            }
+            .onChange(of: vibePosition) { _, _ in
+                onVibePositionChanged()
+            }
+    }
+}
+
+private struct JamNameAutosaveModifier: ViewModifier {
+    let jamName: String
+    let onJamNameChanged: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: jamName) { _, _ in
+                onJamNameChanged()
+            }
+    }
+}
+
+private struct JamLifecycleModifier: ViewModifier {
+    let isActive: Bool
+    let onAppear: () -> Void
+    let onDisappear: () -> Void
+    let onActiveStateChanged: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear(perform: onAppear)
+            .onDisappear(perform: onDisappear)
+            .onChange(of: isActive) { _, isActive in
+                onActiveStateChanged(isActive)
+            }
+    }
+}
+
+private struct JamLibraryReconciliationModifier: ViewModifier {
+    let itemIDs: [UUID]
+    let isTransientPlaybackActive: Bool
+    let onItemIDsChanged: ([UUID]) -> Void
+    let onTransientPlaybackChanged: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: itemIDs) { _, itemIDs in
+                onItemIDsChanged(itemIDs)
+            }
+            .onChange(of: isTransientPlaybackActive) { _, isActive in
+                onTransientPlaybackChanged(isActive)
+            }
+    }
+}
+
+private struct JamScenePersistenceModifier: ViewModifier {
+    let scenePhase: ScenePhase
+    let onScenePhaseChanged: (ScenePhase) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: scenePhase) { _, phase in
+                onScenePhaseChanged(phase)
+            }
     }
 }
 
