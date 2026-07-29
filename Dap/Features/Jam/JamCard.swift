@@ -26,7 +26,7 @@ struct JamCard: View {
             HStack(alignment: .center, spacing: 8) {
                 if isEditing {
                     TextField(editingPlaceholder, text: $editingName)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
                         .focused($isNameFocused)
@@ -104,7 +104,7 @@ struct JamCard: View {
 
     private var cardTitle: some View {
         Text(name)
-            .font(.subheadline.weight(.semibold))
+            .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
             .foregroundStyle(.primary)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 60;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -81,6 +81,10 @@
 		AA0000010000000000000213 /* JamCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamCard.swift; sourceTree = "<group>"; };
 		AA0000010000000000000215 /* JamCoverRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamCoverRenderer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		9FB8E9BF30198DFC008959F1 /* Fonts */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Fonts; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AA0000010000000000000070 /* Frameworks */ = {
@@ -184,6 +188,7 @@
 		AA000001000000000000018E /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				9FB8E9BF30198DFC008959F1 /* Fonts */,
 				AA000001000000000000018F /* Audio */,
 			);
 			path = Resources;
@@ -237,6 +242,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				9FB8E9BF30198DFC008959F1 /* Fonts */,
 			);
 			name = Dap;
 			productName = Dap;

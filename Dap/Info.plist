@@ -20,6 +20,13 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Dap uses the camera to turn your photos into music.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>ZTTalk-Bold.otf</string>
+		<string>ZTTalk-SemiBold.otf</string>
+		<string>ZTTalk-Medium.otf</string>
+		<string>ZTTalk-Regular.otf</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

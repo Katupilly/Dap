@@ -158,7 +158,7 @@ private struct SectionSwitcher: View {
 
                 if isSelected {
                     Text(title)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.custom("ZTTalk-Bold", size: 16,))
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                         .transition(

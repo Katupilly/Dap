@@ -301,7 +301,7 @@ struct JamView: View {
             sessionHeaderCover
 
             Text(sessionDisplayName)
-                .font(.title2.weight(.semibold))
+                .font(.custom("ZTTalk-Bold", size: 22, relativeTo: .title2))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .layoutPriority(1)
@@ -628,12 +628,12 @@ struct JamView: View {
     private var kitsHeader: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Drum Kits")
-                .font(.title3.weight(.semibold))
+                .font(.custom("ZTTalk-Bold", size: 20, relativeTo: .title3))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
 
             Text(currentDrumKitSubtitle)
-                .font(.caption.weight(.medium))
+                .font(.custom("ZTTalk-Medium", size: 12, relativeTo: .caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
@@ -653,18 +653,18 @@ struct JamView: View {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(selection.displayName)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     if let detailText {
                         Text(detailText)
-                            .font(.caption.weight(.medium))
+                            .font(.custom("ZTTalk-Medium", size: 12, relativeTo: .caption))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     } else {
                         Text(" ")
-                            .font(.caption.weight(.medium))
+                            .font(.custom("ZTTalk-Medium", size: 12, relativeTo: .caption))
                     }
                 }
 
@@ -803,11 +803,11 @@ struct JamView: View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Effects")
-                    .font(.title3.weight(.semibold))
+                    .font(.custom("ZTTalk-Bold", size: 20, relativeTo: .title3))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text(activeEffectsDescription(activeCount: activeCount))
-                    .font(.caption)
+                    .font(.custom("ZTTalk-Regular", size: 12, relativeTo: .caption))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -854,11 +854,11 @@ struct JamView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     Text(description)
-                        .font(.caption)
+                        .font(.custom("ZTTalk-Regular", size: 12, relativeTo: .caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -1027,7 +1027,11 @@ struct JamView: View {
                 Image(systemName: "plus")
                     .font(.system(size: isLarge ? 16 : 14, weight: .semibold))
                 Text("Add Photos")
-                    .font(isLarge ? .headline : .subheadline.weight(.semibold))
+                    .font(
+                        isLarge
+                            ? .custom("ZTTalk-Bold", size: 17, relativeTo: .headline)
+                            : .custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline)
+                    )
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, minHeight: isLarge ? 52 : 44)
@@ -1056,7 +1060,7 @@ struct JamView: View {
                 Image(systemName: "photo.stack")
                     .font(.system(size: 14, weight: .semibold))
                 Text("Change Photos")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, minHeight: 44)
@@ -1083,7 +1087,7 @@ struct JamView: View {
                 Image(systemName: playbackAction.systemImage)
                     .font(.headline.weight(.semibold))
                 Text(playbackAction.title)
-                    .font(.headline.weight(.semibold))
+                    .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .headline))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, minHeight: 52)
@@ -1421,7 +1425,7 @@ private struct JamSelectedPhotoTile: View {
             .overlay(alignment: .topLeading) {
                 if let role {
                     Text(role.displayName)
-                        .font(.caption2.weight(.semibold))
+                        .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 4)
@@ -1432,7 +1436,7 @@ private struct JamSelectedPhotoTile: View {
             .overlay(alignment: .topTrailing) {
                 if !noteLabel.isEmpty {
                     Text(noteLabel)
-                        .font(.caption2.weight(.semibold))
+                        .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 4)
@@ -1631,7 +1635,7 @@ private struct JamTileDragAndDrop: ViewModifier {
             content
                 .draggable(photoID.uuidString) {
                     Text(role.displayName)
-                        .font(.caption2.weight(.semibold))
+                        .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
                         .opacity(0.90)
                 }
                 .dropDestination(for: String.self) { items, _ in
@@ -1776,11 +1780,11 @@ private struct JamSequencerAndStatus: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(statusPrimaryText)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text(statusSecondaryText)
-                    .font(.caption.weight(.medium))
+                    .font(.custom("ZTTalk-Medium", size: 12, relativeTo: .caption))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1878,7 +1882,7 @@ private struct JamSequencerRows: View {
         let activeSteps = activeStepsForRole(role)
         return HStack(spacing: 8) {
             Text(role.displayName.uppercased())
-                .font(.caption2.weight(.semibold))
+                .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
                 .foregroundStyle(.secondary)
                 .frame(width: 64, alignment: .leading)
 
@@ -2055,7 +2059,7 @@ private struct KitsDockTile: View {
                 }
 
                 Text("Kits")
-                    .font(.caption2.weight(.semibold))
+                    .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
@@ -2138,7 +2142,7 @@ private struct VibeDockTile: View {
                 }
 
                 Text("Vibe")
-                    .font(.caption2.weight(.semibold))
+                    .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
@@ -2196,7 +2200,7 @@ private struct EffectsDockTile: View {
                 }
 
                 Text("Effects")
-                    .font(.caption2.weight(.semibold))
+                    .font(.custom("ZTTalk-Bold", size: 11, relativeTo: .caption2))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
@@ -2391,7 +2395,7 @@ private struct VibeControl: View {
         let prominence = 0.42 + weight * 0.58
 
         return Text(title)
-            .font(.footnote.weight(weight > 0.55 ? .bold : .semibold))
+            .font(.custom("ZTTalk-Bold", size: 13, relativeTo: .footnote))
             .foregroundStyle(Color.primary.opacity(prominence))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
