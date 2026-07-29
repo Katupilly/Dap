@@ -6,11 +6,13 @@ enum AppSection {
 }
 
 struct AppRootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var section: AppSection = .gallery
     @State private var isCapturePresented = false
     @State private var galleryPath: [UUID] = []
     @State private var library = PhotoLibraryViewModel()
     @State private var isJamSessionPresented = false
+    @State private var createJamTrigger: UUID?
 
     private var isGalleryInspectorPresented: Bool {
         !galleryPath.isEmpty
@@ -36,6 +38,7 @@ struct AppRootView: View {
                 JamLibraryView(
                     library: library,
                     isActive: section == .jam,
+                    createJamTrigger: createJamTrigger,
                     onSessionPresentationChange: { isPresented in
                         isJamSessionPresented = isPresented
                     }
@@ -121,7 +124,39 @@ struct AppRootView: View {
         .task {
             await library.loadLibrary()
         }
+        .task {
+            consumePendingActionIfNeeded()
+        }
+        .task {
+            for await _ in NotificationCenter.default.notifications(named: UserDefaults.didChangeNotification) {
+                consumePendingActionIfNeeded()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            consumePendingActionIfNeeded()
+        }
         .statusBarHidden(true)
+    }
+
+    @MainActor
+    private func consumePendingActionIfNeeded() {
+        guard scenePhase == .active,
+              let request = DapPendingActionStore.consume() else {
+            return
+        }
+
+        switch request.action {
+        case .openCapture:
+            galleryPath.removeAll()
+            section = .gallery
+            isCapturePresented = true
+        case .createJam:
+            isCapturePresented = false
+            galleryPath.removeAll()
+            section = .jam
+            createJamTrigger = request.id
+        }
     }
 }
 

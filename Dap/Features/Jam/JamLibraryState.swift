@@ -161,6 +161,13 @@ final class JamLibraryState {
         await reload()
     }
 
+    func presentNewJamFlow() async {
+        cancelRename()
+        draftJam = nil
+        selectedJam = nil
+        beginDraftCreation()
+    }
+
     @discardableResult
     func saveJam(_ jam: PersistedJam) async -> PersistedJam? {
         do {

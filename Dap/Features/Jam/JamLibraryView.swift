@@ -3,10 +3,12 @@ import SwiftUI
 struct JamLibraryView: View {
     let library: PhotoLibraryViewModel
     let isActive: Bool
+    let createJamTrigger: UUID?
     let onSessionPresentationChange: (Bool) -> Void
 
     @State private var state = JamLibraryState()
     @State private var pendingDelete: PersistedJam?
+    @State private var lastHandledCreateJamTrigger: UUID?
     @FocusState private var isSearchFocused: Bool
 
     private let horizontalPadding: CGFloat = 20
@@ -62,9 +64,13 @@ struct JamLibraryView: View {
         }
         .onAppear {
             onSessionPresentationChange(state.selectedJam != nil)
+            handleCreateJamTrigger(createJamTrigger)
         }
         .onDisappear {
             onSessionPresentationChange(false)
+        }
+        .onChange(of: createJamTrigger) { _, newValue in
+            handleCreateJamTrigger(newValue)
         }
         .task {
             await state.loadIfNeeded()
@@ -320,6 +326,17 @@ struct JamLibraryView: View {
     private func dismissSearch() {
         guard isSearchFocused else { return }
         isSearchFocused = false
+    }
+
+    private func handleCreateJamTrigger(_ trigger: UUID?) {
+        guard let trigger, trigger != lastHandledCreateJamTrigger else { return }
+        lastHandledCreateJamTrigger = trigger
+
+        Task { @MainActor in
+            dismissSearch()
+            await state.loadIfNeeded()
+            await state.presentNewJamFlow()
+        }
     }
 
     private var deleteConfirmationPresented: Binding<Bool> {
