@@ -119,7 +119,9 @@ struct PhotoInspectorView: View {
                     }
 
                     Button(role: .destructive) {
-                        isShowingDeleteConfirmation = true
+                        DispatchQueue.main.async {
+                            isShowingDeleteConfirmation = true
+                        }
                     } label: {
                         Label("Delete Photo", systemImage: "trash")
                     }
@@ -130,9 +132,10 @@ struct PhotoInspectorView: View {
                 .accessibilityLabel("Photo options")
             }
         }
-        .confirmationDialog("Delete Photo?", isPresented: $isShowingDeleteConfirmation) {
-            Button("Delete Photo", role: .destructive, action: deletePhoto)
+        .alert("Delete Photo?", isPresented: $isShowingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
+
+            Button("Delete", role: .destructive, action: deletePhoto)
         } message: {
             Text("This action cannot be undone.")
         }
@@ -354,14 +357,16 @@ private struct PhotoInspectorJamPickerSheet: View {
             .navigationTitle("Add to Jam")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         isPresented = false
                     }
                     label: {
                         Image(systemName: "xmark")
+                            .frame(width: 44, height: 44)
                     }
-                    .accessibilityLabel("Close Add to Jam")
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close")
                 }
             }
         }

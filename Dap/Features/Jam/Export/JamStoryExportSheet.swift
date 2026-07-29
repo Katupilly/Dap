@@ -29,10 +29,15 @@ struct JamStoryExportSheet: View {
             .navigationTitle("Export Story")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
                         isPresented = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 44, height: 44)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close")
                 }
             }
         }

@@ -78,19 +78,22 @@ struct JamPhotoSelectorSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .sensoryFeedback(.selection, trigger: pendingSelectionIDs)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        isPresented = false
-                    }
-                }
-
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button("Use") {
                         let stableSelection = pendingSelectionIDs.sorted { $0.uuidString < $1.uuidString }
                         onConfirmSelection(stableSelection)
                         isPresented = false
                     }
                     .disabled(pendingSelectionIDs.isEmpty)
+
+                    Button {
+                        isPresented = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close")
                 }
             }
         }
