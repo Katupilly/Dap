@@ -48,6 +48,7 @@ struct CameraView: View {
                     .ignoresSafeArea(edges: .horizontal)
                     .padding(.top, 98)
                     .padding(.bottom, 189)
+                    .background(Color.cameraChrome)
                     .overlay {
                         if isCameraObscured {
                             Color.cameraChrome
@@ -875,7 +876,7 @@ private struct CameraLavaLampView: View {
 
     private func lavaLamp(time: TimeInterval) -> some View {
         Rectangle()
-            .fill(.white)
+            .fill(Color.black)
             .colorEffect(
                 ShaderLibrary.dapLavaLamp(
                     .boundingRect,
