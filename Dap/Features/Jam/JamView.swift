@@ -36,6 +36,10 @@ struct JamView: View {
     @State private var hasAppliedInitialJam = false
     @State private var panelBackdropImage: UIImage?
     @State private var jamViewportSize: CGSize = .zero
+    @State private var jamSequencerFrame: CGRect = .zero
+    @State private var resolvedJamCoverDescriptor: JamCoverDescriptor?
+    @State private var resolvedJamCoverImage: UIImage?
+    @State private var panelBackdropTask: Task<Void, Never>?
     @State private var selectedPhotoImagesByID: [UUID: UIImage] = [:]
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Dap", category: "JamView")
@@ -150,6 +154,9 @@ struct JamView: View {
             if isPanelPresented || selectedPanel != .none {
                 panelBackdropLayer
                     .zIndex(6)
+
+                liveSequencerOverlay
+                    .zIndex(6.5)
             }
 
             if isPanelPresented {
@@ -186,6 +193,7 @@ struct JamView: View {
                     .zIndex(5)
             }
         }
+        .coordinateSpace(.named("jamViewport"))
         .onGeometryChange(for: CGSize.self) { geometry in
             geometry.size
         } action: { size in
@@ -255,7 +263,10 @@ struct JamView: View {
             selectedJamRole = nil
             selectedPanel = .none
             isPanelPresented = false
+            cancelPanelBackdropTask()
             panelBackdropImage = nil
+            resolvedJamCoverDescriptor = nil
+            resolvedJamCoverImage = nil
             selectedPhotoImagesByID = [:]
         }
         .onChange(of: isActive) { _, isActive in
@@ -268,7 +279,10 @@ struct JamView: View {
             selectedJamRole = nil
             selectedPanel = .none
             isPanelPresented = false
+            cancelPanelBackdropTask()
             panelBackdropImage = nil
+            resolvedJamCoverDescriptor = nil
+            resolvedJamCoverImage = nil
             selectedPhotoImagesByID = [:]
         }
         .onChange(of: library.items.map(\.id)) { _, itemIDs in
@@ -446,7 +460,10 @@ struct JamView: View {
         playbackController.clearDrumKitPendingFeedback()
         selectedPanel = .none
         isPanelPresented = false
+        cancelPanelBackdropTask()
         panelBackdropImage = nil
+        resolvedJamCoverDescriptor = nil
+        resolvedJamCoverImage = nil
         selectedJamRole = nil
         syncAllArrangeDrafts()
 
@@ -484,7 +501,10 @@ struct JamView: View {
             selectedJamRole = nil
             selectedPanel = .none
             isPanelPresented = false
+            cancelPanelBackdropTask()
             panelBackdropImage = nil
+            resolvedJamCoverDescriptor = nil
+            resolvedJamCoverImage = nil
             selectedPhotoImagesByID = [:]
             visualTransport.reset()
             await onClose?()
@@ -590,7 +610,7 @@ struct JamView: View {
     // MARK: - Panel presentation
 
     @MainActor
-    private func renderPanelBackdrop() -> UIImage? {
+    private func renderPanelBackdrop(jamCoverImage: UIImage?) -> UIImage? {
         guard jamViewportSize.width > 0,
               jamViewportSize.height > 0,
               jamViewportSize.width.isFinite,
@@ -599,18 +619,12 @@ struct JamView: View {
             return nil
         }
 
-        let status = panelBackdropStatus
         let content = JamPanelBackdropContent(
             displayName: sessionDisplayName,
+            jamCoverImage: jamCoverImage,
             photos: panelBackdropPhotos(),
             hasAnySelection: hasAnySelection,
             hasSelectedSounds: !selectedSounds.isEmpty,
-            activeStepsBySoundID: session.activeArrangement?.activeStepsBySoundID ?? [:],
-            roleByID: session.slotAssignments.assignedRolesByID,
-            roleColors: rowColorMap,
-            currentStep: visualTransport.currentStep,
-            statusPrimaryText: status.primary,
-            statusSecondaryText: status.secondary,
             playbackAction: playbackAction,
             canPlay: canPlay,
             colorScheme: colorScheme,
@@ -633,6 +647,29 @@ struct JamView: View {
         return renderer.uiImage
     }
 
+    @MainActor
+    private func resolvedJamCoverImageForBackdrop() async -> UIImage? {
+        guard let descriptor = sessionHeaderCoverDescriptor else { return nil }
+
+        if resolvedJamCoverDescriptor == descriptor, let resolvedJamCoverImage {
+            return resolvedJamCoverImage
+        }
+
+        let data = await JamCoverRenderer.shared.data(
+            for: descriptor,
+            size: CGSize(width: 320, height: 320),
+            scale: displayScale
+        )
+        guard !Task.isCancelled,
+              let image = UIImage(data: data, scale: displayScale) else {
+            return nil
+        }
+
+        resolvedJamCoverDescriptor = descriptor
+        resolvedJamCoverImage = image
+        return image
+    }
+
     private func panelBackdropPhotos() -> [JamPanelBackdropPhoto] {
         JamRole.allCases.map { role in
             let photoID = session.slotAssignments.photoID(for: role)
@@ -650,42 +687,6 @@ struct JamView: View {
                 isActive: photoID.map { visualTransport.activeSoundIDs.contains($0) } ?? false,
                 isSelected: selectedJamRole == role
             )
-        }
-    }
-
-    private var panelBackdropStatus: (primary: String, secondary: String) {
-        if session.slotAssignments.allPhotoIDs.isEmpty {
-            return ("READY", "ADD PHOTOS TO START")
-        }
-        if session.isPlaying && playbackController.hasPendingArrangementChanges {
-            return ("NEXT BAR", "ARRANGEMENT CHANGE")
-        }
-        if session.isPlaying {
-            let region = JamGrooveLibrary.region(for: session.vibePosition)
-            let kit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
-            return ("PLAYING", "\(panelBackdropRegionName(region)) · \(panelBackdropDrumKitName(kit))")
-        }
-
-        let activeCount = session.slotAssignments.activePhotoIDs.count
-        let reserveCount = session.slotAssignments.reserve.count
-        return ("READY", "\(activeCount) ACTIVE · \(reserveCount) IN BANK")
-    }
-
-    private func panelBackdropRegionName(_ region: JamRegion) -> String {
-        switch region {
-        case .airy: "Airy"
-        case .bright: "Bright"
-        case .deep: "Deep"
-        case .intense: "Intense"
-        }
-    }
-
-    private func panelBackdropDrumKitName(_ kit: MusicDrumKit) -> String {
-        switch kit {
-        case .soft: "Soft"
-        case .club: "Club"
-        case .breakbeat: "Break"
-        case .metal: "Metal"
         }
     }
 
@@ -732,6 +733,19 @@ struct JamView: View {
         .animation(backdropFadeAnimation, value: isPanelPresented)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var liveSequencerOverlay: some View {
+        if hasAnySelection,
+           jamSequencerFrame.width > 0,
+           jamSequencerFrame.height > 0 {
+            sequencerAndStatusContent
+                .frame(width: jamSequencerFrame.width, height: jamSequencerFrame.height)
+                .position(x: jamSequencerFrame.midX, y: jamSequencerFrame.midY)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 
     private var backdropFadeAnimation: Animation {
@@ -1188,15 +1202,22 @@ struct JamView: View {
                 selectedPanel = target
             }
         } else {
-            selectedPanel = target
-            panelBackdropImage = renderPanelBackdrop()
-            withAnimation(panelRevealAnimation) {
-                isPanelPresented = true
+            cancelPanelBackdropTask()
+            panelBackdropTask = Task { @MainActor in
+                let jamCoverImage = await resolvedJamCoverImageForBackdrop()
+                guard !Task.isCancelled else { return }
+
+                selectedPanel = target
+                panelBackdropImage = renderPanelBackdrop(jamCoverImage: jamCoverImage)
+                withAnimation(panelRevealAnimation) {
+                    isPanelPresented = true
+                }
             }
         }
     }
 
     private func closePanel() {
+        cancelPanelBackdropTask()
         withAnimation(panelRevealAnimation) {
             isPanelPresented = false
         } completion: {
@@ -1211,6 +1232,12 @@ struct JamView: View {
         reduceMotion
             ? .easeOut(duration: 0.15)
             : .spring(response: 0.26, dampingFraction: 0.96)
+    }
+
+    @MainActor
+    private func cancelPanelBackdropTask() {
+        panelBackdropTask?.cancel()
+        panelBackdropTask = nil
     }
 
     private var emptyState: some View {
@@ -1259,6 +1286,15 @@ struct JamView: View {
     }
 
     private var sequencerAndStatus: some View {
+        sequencerAndStatusContent
+            .onGeometryChange(for: CGRect.self) { geometry in
+                geometry.frame(in: .named("jamViewport"))
+            } action: { frame in
+                jamSequencerFrame = frame
+            }
+    }
+
+    private var sequencerAndStatusContent: some View {
         JamSequencerAndStatus(
             steps: jamStepsPerBar,
             session: session,
@@ -2143,15 +2179,10 @@ private struct JamPanelBackdropPhoto {
 
 private struct JamPanelBackdropContent: View {
     let displayName: String
+    let jamCoverImage: UIImage?
     let photos: [JamPanelBackdropPhoto]
     let hasAnySelection: Bool
     let hasSelectedSounds: Bool
-    let activeStepsBySoundID: [UUID: Set<Int>]
-    let roleByID: [UUID: JamRole]
-    let roleColors: [JamRole: Color]
-    let currentStep: Int?
-    let statusPrimaryText: String
-    let statusSecondaryText: String
     let playbackAction: PlaybackAction
     let canPlay: Bool
     let colorScheme: ColorScheme
@@ -2211,14 +2242,7 @@ private struct JamPanelBackdropContent: View {
                 .frame(width: 36, height: 36)
                 .background(.secondary.opacity(0.12), in: Circle())
 
-            Rectangle()
-                .fill(.secondary.opacity(0.15))
-                .frame(width: 24, height: 24)
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .stroke(.white.opacity(0.10), lineWidth: 1)
-                }
+            headerCover
 
             Text(displayName)
                 .font(.custom("ZTTalk-Bold", size: 22, relativeTo: .title2))
@@ -2231,20 +2255,39 @@ private struct JamPanelBackdropContent: View {
     }
 
     @ViewBuilder
+    private var headerCover: some View {
+        if let jamCoverImage {
+            Image(uiImage: jamCoverImage)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 24, height: 24)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(.white.opacity(0.10), lineWidth: 1)
+                }
+        } else {
+            Rectangle()
+                .fill(fallbackHeaderCoverFill)
+                .frame(width: 24, height: 24)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(.white.opacity(0.10), lineWidth: 1)
+                }
+        }
+    }
+
+    private var fallbackHeaderCoverFill: Color {
+        photos.first(where: { $0.accentColor != nil })?.accentColor?.opacity(0.70) ?? .secondary.opacity(0.15)
+    }
+
+    @ViewBuilder
     private var sessionBody: some View {
         if hasAnySelection {
-            JamPanelBackdropSequencer(
-                activeStepsBySoundID: activeStepsBySoundID,
-                roleByID: roleByID,
-                roleColors: roleColors,
-                currentStep: currentStep,
-                primaryText: statusPrimaryText,
-                secondaryText: statusSecondaryText,
-                reduceMotion: reduceMotion,
-                colorScheme: colorScheme
-            )
-            .frame(height: 150)
-            .frame(maxWidth: .infinity)
+            Color.clear
+                .frame(height: 150)
+                .frame(maxWidth: .infinity)
         }
 
         if hasSelectedSounds {
@@ -2429,81 +2472,6 @@ private struct JamPanelBackdropPhotoTile: View {
                     .clipped()
             }
         }
-    }
-}
-
-private struct JamPanelBackdropSequencer: View {
-    let activeStepsBySoundID: [UUID: Set<Int>]
-    let roleByID: [UUID: JamRole]
-    let roleColors: [JamRole: Color]
-    let currentStep: Int?
-    let primaryText: String
-    let secondaryText: String
-    let reduceMotion: Bool
-    let colorScheme: ColorScheme
-
-    var body: some View {
-        VStack(spacing: 0) {
-            JamSequencerGrid(
-                steps: jamStepsPerBar,
-                currentStep: currentStep,
-                activeStepsBySoundID: activeStepsBySoundID,
-                roleByID: roleByID,
-                roleColors: roleColors,
-                reduceMotion: reduceMotion
-            )
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-
-            Rectangle()
-                .fill(structuralDivider)
-                .frame(height: 1)
-                .padding(.horizontal, 14)
-
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(primaryText)
-                        .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(secondaryText)
-                        .font(.custom("ZTTalk-Medium", size: 12, relativeTo: .caption))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text("\(Int(jamBPM)) BPM")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(structuralCardFill)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(structuralCardStroke, lineWidth: 1)
-        }
-    }
-
-    private var structuralCardFill: Color {
-        colorScheme == .dark ? Color.secondary.opacity(0.06) : Color.black.opacity(0.05)
-    }
-
-    private var structuralCardStroke: Color {
-        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.10)
-    }
-
-    private var structuralDivider: Color {
-        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.07)
     }
 }
 
