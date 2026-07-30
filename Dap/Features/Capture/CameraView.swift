@@ -489,7 +489,7 @@ private enum CameraState {
     }
 }
 
-private final class CameraController: NSObject, @unchecked Sendable {
+final class CameraController: NSObject, @unchecked Sendable {
     let session = AVCaptureSession()
 
     private static let colorSamplesPerAxis = 12
@@ -858,7 +858,7 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 }
 
-private struct CameraLavaLampView: View {
+struct CameraLavaLampView: View {
     let palette: ColorPalette
     let reduceMotion: Bool
 
@@ -895,7 +895,7 @@ private struct CameraLavaLampView: View {
     }
 }
 
-private struct CameraPreviewView: UIViewRepresentable {
+struct CameraPreviewView: UIViewRepresentable {
     let controller: CameraController
 
     func makeUIView(context: Context) -> PreviewView {
@@ -909,7 +909,7 @@ private struct CameraPreviewView: UIViewRepresentable {
     }
 }
 
-private final class PreviewView: UIView {
+final class PreviewView: UIView {
     override class var layerClass: AnyClass {
         AVCaptureVideoPreviewLayer.self
     }
@@ -938,7 +938,7 @@ private enum CameraError: LocalizedError {
     }
 }
 
-private extension Color {
+extension Color {
     static let cameraChrome = Color.black
 
     init(rgbColor: RGBColor) {

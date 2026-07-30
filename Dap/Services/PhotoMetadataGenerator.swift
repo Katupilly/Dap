@@ -74,29 +74,24 @@ enum PhotoMetadataGenerator {
 
     private static func classifyImage(imageData: Data) async -> [VisualLabel] {
         // Run entirely inside a detached task so Vision never touches MainActor.
-        await Task.detached(priority: .utility) {
+        await Task.detached(priority: .userInitiated) {
             guard let cgImage = makeCGImage(from: imageData) else { return [] }
 
-            return await withCheckedContinuation { continuation in
-                let request = VNClassifyImageRequest { request, _ in
-                    guard let observations = request.results as? [VNClassificationObservation] else {
-                        continuation.resume(returning: [])
-                        return
-                    }
-                    let labels: [VisualLabel] = observations
-                        .filter { $0.confidence >= 0.12 }           // discard very low confidence
-                        .sorted { $0.confidence > $1.confidence }   // highest first
-                        .prefix(5)                                   // at most five labels
-                        .map { VisualLabel(name: $0.identifier, confidence: $0.confidence) }
-                    continuation.resume(returning: labels)
+            let request = VNClassifyImageRequest()
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            do {
+                try handler.perform([request])
+                guard let observations = request.results else {
+                    return []
                 }
-
-                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                do {
-                    try handler.perform([request])
-                } catch {
-                    continuation.resume(returning: [])
-                }
+                return observations
+                    .filter { $0.confidence >= 0.12 }           // discard very low confidence
+                    .sorted { $0.confidence > $1.confidence }   // highest first
+                    .prefix(5)                                  // at most five labels
+                    .map { VisualLabel(name: $0.identifier, confidence: $0.confidence) }
+            } catch {
+                logger.error("Vision classification failed: \(error.localizedDescription, privacy: .public)")
+                return []
             }
         }.value
     }

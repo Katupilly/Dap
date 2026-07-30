@@ -162,7 +162,13 @@ final class PhotoLibraryViewModel {
     /// Processes imageData, saves the essential result, and starts background metadata refinement.
     @discardableResult
     func importPhotoData(_ imageData: Data) async throws -> Bool {
-        guard !isImporting else { return false }
+        try await importPhotoSoundData(imageData) != nil
+    }
+
+    /// Processes imageData and returns the saved Musical Photo when import succeeds.
+    @discardableResult
+    func importPhotoSoundData(_ imageData: Data) async throws -> PhotoSound? {
+        guard !isImporting else { return nil }
         isImporting = true
         defer { isImporting = false }
 
@@ -176,7 +182,7 @@ final class PhotoLibraryViewModel {
 
         // Kick off background metadata generation (non-throwing, non-blocking).
         scheduleMetadataRefinement(for: result.sound, imageData: imageData)
-        return true
+        return result.sound
     }
 
     // MARK: - Progressive metadata

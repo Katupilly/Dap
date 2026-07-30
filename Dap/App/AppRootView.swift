@@ -5,14 +5,24 @@ enum AppSection {
     case jam
 }
 
+private enum InitialRootState {
+    case loading
+    case onboarding
+    case mainApp
+}
+
 struct AppRootView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @State private var section: AppSection = .gallery
     @State private var isCapturePresented = false
     @State private var galleryPath: [UUID] = []
     @State private var library = PhotoLibraryViewModel()
     @State private var isJamSessionPresented = false
     @State private var createJamTrigger: UUID?
+    @State private var initialRootState: InitialRootState = .loading
+
+    // Development reset: set "hasCompletedOnboarding" to false in app defaults while debugging.
 
     private var isGalleryInspectorPresented: Bool {
         !galleryPath.isEmpty
@@ -28,6 +38,56 @@ struct AppRootView: View {
     }
 
     var body: some View {
+        Group {
+            switch initialRootState {
+            case .loading:
+                NeutralRootLoadingView()
+
+            case .onboarding:
+                OnboardingView(library: library) {
+                    hasCompletedOnboarding = true
+                    withAnimation(.easeOut(duration: 0.22)) {
+                        initialRootState = .mainApp
+                    }
+                }
+
+            case .mainApp:
+                appContent
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: initialRootState)
+        .safeAreaInset(edge: .top) {
+            if initialRootState == .mainApp && showsSectionSwitcher {
+                SectionSwitcher(selection: $section)
+                    .padding(.top, 8)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .fullScreenCover(isPresented: $isCapturePresented) {
+            CameraView(library: library)
+        }
+        .task {
+            await library.loadLibrary()
+            initialRootState = resolvedInitialRootState()
+            consumePendingActionIfNeeded()
+        }
+        .task {
+            consumePendingActionIfNeeded()
+        }
+        .task {
+            for await _ in NotificationCenter.default.notifications(named: UserDefaults.didChangeNotification) {
+                consumePendingActionIfNeeded()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            consumePendingActionIfNeeded()
+        }
+        .statusBarHidden(true)
+    }
+
+    private var appContent: some View {
         ZStack(alignment: .bottomLeading) {
             ZStack {
                 GalleryView(library: library, path: $galleryPath)
@@ -110,38 +170,12 @@ struct AppRootView: View {
                 .accessibilityLabel("Open camera")
             }
         }
-        .safeAreaInset(edge: .top) {
-            if showsSectionSwitcher {
-                SectionSwitcher(selection: $section)
-                    .padding(.top, 8)
-                    .padding(.bottom, 10)
-                    .frame(maxWidth: .infinity)
-            }
-        }
-        .fullScreenCover(isPresented: $isCapturePresented) {
-            CameraView(library: library)
-        }
-        .task {
-            await library.loadLibrary()
-        }
-        .task {
-            consumePendingActionIfNeeded()
-        }
-        .task {
-            for await _ in NotificationCenter.default.notifications(named: UserDefaults.didChangeNotification) {
-                consumePendingActionIfNeeded()
-            }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            consumePendingActionIfNeeded()
-        }
-        .statusBarHidden(true)
     }
 
     @MainActor
     private func consumePendingActionIfNeeded() {
-        guard scenePhase == .active,
+        guard initialRootState == .mainApp,
+              scenePhase == .active,
               let request = DapPendingActionStore.consume() else {
             return
         }
@@ -157,6 +191,34 @@ struct AppRootView: View {
             section = .jam
             createJamTrigger = request.id
         }
+    }
+
+    @MainActor
+    private func resolvedInitialRootState() -> InitialRootState {
+        if hasCompletedOnboarding {
+            return .mainApp
+        }
+
+        if library.items.isEmpty {
+            return .onboarding
+        }
+
+        hasCompletedOnboarding = true
+        return .mainApp
+    }
+}
+
+private struct NeutralRootLoadingView: View {
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
+
+            Text("Dap")
+                .font(.custom("ZTTalk-Bold", size: 28, relativeTo: .title))
+                .foregroundStyle(.primary)
+        }
+        .accessibilityLabel("Dap")
     }
 }
 

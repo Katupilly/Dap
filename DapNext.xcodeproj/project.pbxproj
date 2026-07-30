@@ -12,23 +12,6 @@
 		AA000001000000000000003A /* GalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003B /* GalleryView.swift */; };
 		AA000001000000000000003C /* PhotoInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003D /* PhotoInspectorView.swift */; };
 		AA000001000000000000004A /* JamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004B /* JamView.swift */; };
-		AA0000010000000000000220 /* JamSequencerSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000221 /* JamSequencerSection.swift */; };
-		AA0000010000000000000222 /* JamDockBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000223 /* JamDockBar.swift */; };
-		AA0000010000000000000224 /* JamControlPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000225 /* JamControlPanels.swift */; };
-		AA0000010000000000000226 /* JamPhotoSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000227 /* JamPhotoSection.swift */; };
-		AA0000010000000000000228 /* JamPanelBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000229 /* JamPanelBackdrop.swift */; };
-		AA0000010000000000000230 /* JamStoryExportSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000231 /* JamStoryExportSnapshot.swift */; };
-		AA0000010000000000000232 /* JamStoryExportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000233 /* JamStoryExportView.swift */; };
-		AA0000010000000000000234 /* JamStoryRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000235 /* JamStoryRenderer.swift */; };
-		AA0000010000000000000236 /* InstagramStoryExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000237 /* InstagramStoryExporter.swift */; };
-		AA0000010000000000000238 /* JamStoryExportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000239 /* JamStoryExportSheet.swift */; };
-		AA000001000000000000023B /* JamStoryVideoTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000023C /* JamStoryVideoTemplate.swift */; };
-		AA000001000000000000023D /* JamStoryAudioRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000023E /* JamStoryAudioRenderer.swift */; };
-		AA000001000000000000023F /* JamStoryVideoComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000240 /* JamStoryVideoComposer.swift */; };
-		AA0000010000000000000241 /* JamStoryVideoRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000242 /* JamStoryVideoRenderer.swift */; };
-		AA0000010000000000000243 /* JamStoryExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000244 /* JamStoryExportCoordinator.swift */; };
-		AA0000010000000000000245 /* StoryShareComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000246 /* StoryShareComponents.swift */; };
-		AA0000010000000000000247 /* PhotoStoryExportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000248 /* PhotoStoryExportSheet.swift */; };
 		AA000001000000000000004C /* JamArrangementBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004D /* JamArrangementBuilder.swift */; };
 		AA000001000000000000005C /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000005D /* CameraView.swift */; };
 		AA000001000000000000006A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000006B /* Assets.xcassets */; };
@@ -62,6 +45,24 @@
 		AA0000010000000000000218 /* TakePhotoIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000219 /* TakePhotoIntent.swift */; };
 		AA000001000000000000021A /* CreateJamIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000021B /* CreateJamIntent.swift */; };
 		AA000001000000000000021C /* DapAppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000021D /* DapAppShortcuts.swift */; };
+		AA0000010000000000000220 /* JamSequencerSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000221 /* JamSequencerSection.swift */; };
+		AA0000010000000000000222 /* JamDockBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000223 /* JamDockBar.swift */; };
+		AA0000010000000000000224 /* JamControlPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000225 /* JamControlPanels.swift */; };
+		AA0000010000000000000226 /* JamPhotoSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000227 /* JamPhotoSection.swift */; };
+		AA0000010000000000000228 /* JamPanelBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000229 /* JamPanelBackdrop.swift */; };
+		AA0000010000000000000230 /* JamStoryExportSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000231 /* JamStoryExportSnapshot.swift */; };
+		AA0000010000000000000232 /* JamStoryExportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000233 /* JamStoryExportView.swift */; };
+		AA0000010000000000000234 /* JamStoryRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000235 /* JamStoryRenderer.swift */; };
+		AA0000010000000000000236 /* InstagramStoryExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000237 /* InstagramStoryExporter.swift */; };
+		AA0000010000000000000238 /* JamStoryExportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000239 /* JamStoryExportSheet.swift */; };
+		AA000001000000000000023B /* JamStoryVideoTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000023C /* JamStoryVideoTemplate.swift */; };
+		AA000001000000000000023D /* JamStoryAudioRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000023E /* JamStoryAudioRenderer.swift */; };
+		AA000001000000000000023F /* JamStoryVideoComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000240 /* JamStoryVideoComposer.swift */; };
+		AA0000010000000000000241 /* JamStoryVideoRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000242 /* JamStoryVideoRenderer.swift */; };
+		AA0000010000000000000243 /* JamStoryExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000244 /* JamStoryExportCoordinator.swift */; };
+		AA0000010000000000000245 /* StoryShareComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000246 /* StoryShareComponents.swift */; };
+		AA0000010000000000000247 /* PhotoStoryExportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000248 /* PhotoStoryExportSheet.swift */; };
+		AA0000010000000000000249 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000024A /* OnboardingView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -70,23 +71,6 @@
 		AA000001000000000000003B /* GalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryView.swift; sourceTree = "<group>"; };
 		AA000001000000000000003D /* PhotoInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoInspectorView.swift; sourceTree = "<group>"; };
 		AA000001000000000000004B /* JamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamView.swift; sourceTree = "<group>"; };
-		AA0000010000000000000221 /* JamSequencerSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamSequencerSection.swift; sourceTree = "<group>"; };
-		AA0000010000000000000223 /* JamDockBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamDockBar.swift; sourceTree = "<group>"; };
-		AA0000010000000000000225 /* JamControlPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamControlPanels.swift; sourceTree = "<group>"; };
-		AA0000010000000000000227 /* JamPhotoSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPhotoSection.swift; sourceTree = "<group>"; };
-		AA0000010000000000000229 /* JamPanelBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPanelBackdrop.swift; sourceTree = "<group>"; };
-		AA0000010000000000000231 /* JamStoryExportSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportSnapshot.swift; sourceTree = "<group>"; };
-		AA0000010000000000000233 /* JamStoryExportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportView.swift; sourceTree = "<group>"; };
-		AA0000010000000000000235 /* JamStoryRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryRenderer.swift; sourceTree = "<group>"; };
-		AA0000010000000000000237 /* InstagramStoryExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstagramStoryExporter.swift; sourceTree = "<group>"; };
-		AA0000010000000000000239 /* JamStoryExportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportSheet.swift; sourceTree = "<group>"; };
-		AA000001000000000000023C /* JamStoryVideoTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryVideoTemplate.swift; sourceTree = "<group>"; };
-		AA000001000000000000023E /* JamStoryAudioRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryAudioRenderer.swift; sourceTree = "<group>"; };
-		AA0000010000000000000240 /* JamStoryVideoComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryVideoComposer.swift; sourceTree = "<group>"; };
-		AA0000010000000000000242 /* JamStoryVideoRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryVideoRenderer.swift; sourceTree = "<group>"; };
-		AA0000010000000000000244 /* JamStoryExportCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportCoordinator.swift; sourceTree = "<group>"; };
-		AA0000010000000000000246 /* StoryShareComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryShareComponents.swift; sourceTree = "<group>"; };
-		AA0000010000000000000248 /* PhotoStoryExportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoStoryExportSheet.swift; sourceTree = "<group>"; };
 		AA000001000000000000004D /* JamArrangementBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamArrangementBuilder.swift; sourceTree = "<group>"; };
 		AA000001000000000000005D /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		AA000001000000000000006B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -122,6 +106,24 @@
 		AA0000010000000000000219 /* TakePhotoIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TakePhotoIntent.swift; sourceTree = "<group>"; };
 		AA000001000000000000021B /* CreateJamIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateJamIntent.swift; sourceTree = "<group>"; };
 		AA000001000000000000021D /* DapAppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DapAppShortcuts.swift; sourceTree = "<group>"; };
+		AA0000010000000000000221 /* JamSequencerSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamSequencerSection.swift; sourceTree = "<group>"; };
+		AA0000010000000000000223 /* JamDockBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamDockBar.swift; sourceTree = "<group>"; };
+		AA0000010000000000000225 /* JamControlPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamControlPanels.swift; sourceTree = "<group>"; };
+		AA0000010000000000000227 /* JamPhotoSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPhotoSection.swift; sourceTree = "<group>"; };
+		AA0000010000000000000229 /* JamPanelBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamPanelBackdrop.swift; sourceTree = "<group>"; };
+		AA0000010000000000000231 /* JamStoryExportSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportSnapshot.swift; sourceTree = "<group>"; };
+		AA0000010000000000000233 /* JamStoryExportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportView.swift; sourceTree = "<group>"; };
+		AA0000010000000000000235 /* JamStoryRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryRenderer.swift; sourceTree = "<group>"; };
+		AA0000010000000000000237 /* InstagramStoryExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstagramStoryExporter.swift; sourceTree = "<group>"; };
+		AA0000010000000000000239 /* JamStoryExportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportSheet.swift; sourceTree = "<group>"; };
+		AA000001000000000000023C /* JamStoryVideoTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryVideoTemplate.swift; sourceTree = "<group>"; };
+		AA000001000000000000023E /* JamStoryAudioRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryAudioRenderer.swift; sourceTree = "<group>"; };
+		AA0000010000000000000240 /* JamStoryVideoComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryVideoComposer.swift; sourceTree = "<group>"; };
+		AA0000010000000000000242 /* JamStoryVideoRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryVideoRenderer.swift; sourceTree = "<group>"; };
+		AA0000010000000000000244 /* JamStoryExportCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JamStoryExportCoordinator.swift; sourceTree = "<group>"; };
+		AA0000010000000000000246 /* StoryShareComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryShareComponents.swift; sourceTree = "<group>"; };
+		AA0000010000000000000248 /* PhotoStoryExportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoStoryExportSheet.swift; sourceTree = "<group>"; };
+		AA000001000000000000024A /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -179,23 +181,13 @@
 			path = App;
 			sourceTree = "<group>";
 		};
-		AA000001000000000000021E /* AppIntents */ = {
-			isa = PBXGroup;
-			children = (
-				AA0000010000000000000217 /* DapPendingAction.swift */,
-				AA0000010000000000000219 /* TakePhotoIntent.swift */,
-				AA000001000000000000021B /* CreateJamIntent.swift */,
-				AA000001000000000000021D /* DapAppShortcuts.swift */,
-			);
-			path = AppIntents;
-			sourceTree = "<group>";
-		};
 		AA0000010000000000000093 /* Features */ = {
 			isa = PBXGroup;
 			children = (
 				AA0000010000000000000094 /* Gallery */,
 				AA0000010000000000000095 /* Jam */,
 				AA0000010000000000000096 /* Capture */,
+				AA000001000000000000024B /* Onboarding */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -237,24 +229,6 @@
 			path = Jam;
 			sourceTree = "<group>";
 		};
-		AA000001000000000000023A /* Export */ = {
-			isa = PBXGroup;
-			children = (
-				AA0000010000000000000231 /* JamStoryExportSnapshot.swift */,
-				AA0000010000000000000233 /* JamStoryExportView.swift */,
-				AA0000010000000000000235 /* JamStoryRenderer.swift */,
-				AA0000010000000000000237 /* InstagramStoryExporter.swift */,
-				AA0000010000000000000239 /* JamStoryExportSheet.swift */,
-				AA0000010000000000000244 /* JamStoryExportCoordinator.swift */,
-				AA0000010000000000000246 /* StoryShareComponents.swift */,
-				AA000001000000000000023C /* JamStoryVideoTemplate.swift */,
-				AA000001000000000000023E /* JamStoryAudioRenderer.swift */,
-				AA0000010000000000000240 /* JamStoryVideoComposer.swift */,
-				AA0000010000000000000242 /* JamStoryVideoRenderer.swift */,
-			);
-			path = Export;
-			sourceTree = "<group>";
-		};
 		AA0000010000000000000096 /* Capture */ = {
 			isa = PBXGroup;
 			children = (
@@ -280,6 +254,43 @@
 				AA000001000000000000018B /* Drums */,
 			);
 			path = Audio;
+			sourceTree = "<group>";
+		};
+		AA000001000000000000021E /* AppIntents */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000010000000000000217 /* DapPendingAction.swift */,
+				AA0000010000000000000219 /* TakePhotoIntent.swift */,
+				AA000001000000000000021B /* CreateJamIntent.swift */,
+				AA000001000000000000021D /* DapAppShortcuts.swift */,
+			);
+			path = AppIntents;
+			sourceTree = "<group>";
+		};
+		AA000001000000000000023A /* Export */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000010000000000000231 /* JamStoryExportSnapshot.swift */,
+				AA0000010000000000000233 /* JamStoryExportView.swift */,
+				AA0000010000000000000235 /* JamStoryRenderer.swift */,
+				AA0000010000000000000237 /* InstagramStoryExporter.swift */,
+				AA0000010000000000000239 /* JamStoryExportSheet.swift */,
+				AA0000010000000000000244 /* JamStoryExportCoordinator.swift */,
+				AA0000010000000000000246 /* StoryShareComponents.swift */,
+				AA000001000000000000023C /* JamStoryVideoTemplate.swift */,
+				AA000001000000000000023E /* JamStoryAudioRenderer.swift */,
+				AA0000010000000000000240 /* JamStoryVideoComposer.swift */,
+				AA0000010000000000000242 /* JamStoryVideoRenderer.swift */,
+			);
+			path = Export;
+			sourceTree = "<group>";
+		};
+		AA000001000000000000024B /* Onboarding */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001000000000000024A /* OnboardingView.swift */,
+			);
+			path = Onboarding;
 			sourceTree = "<group>";
 		};
 		AA000001000000000000097 /* Models */ = {
@@ -421,6 +432,7 @@
 				AA0000010000000000000220 /* JamSequencerSection.swift in Sources */,
 				AA0000010000000000000214 /* JamCoverRenderer.swift in Sources */,
 				AA000001000000000000005C /* CameraView.swift in Sources */,
+				AA0000010000000000000249 /* OnboardingView.swift in Sources */,
 				AA0000010000000000000190 /* DapLavaLamp.metal in Sources */,
 				AA000001000000000000010A /* PhotoSound.swift in Sources */,
 				AA000001000000000000011A /* PhotoMusicPipeline.swift in Sources */,
@@ -585,7 +597,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.pedrolima.DapNext;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
@@ -619,7 +631,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.pedrolima.DapNext;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
