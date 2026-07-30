@@ -78,14 +78,7 @@ struct JamPhotoSelectorSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .sensoryFeedback(.selection, trigger: pendingSelectionIDs)
             .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button("Use") {
-                        let stableSelection = pendingSelectionIDs.sorted { $0.uuidString < $1.uuidString }
-                        onConfirmSelection(stableSelection)
-                        isPresented = false
-                    }
-                    .disabled(pendingSelectionIDs.isEmpty)
-
+                ToolbarItem(placement: .topBarLeading) {
                     Button {
                         isPresented = false
                     } label: {
@@ -94,6 +87,19 @@ struct JamPhotoSelectorSheet: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Close")
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        let stableSelection = pendingSelectionIDs.sorted { $0.uuidString < $1.uuidString }
+                        onConfirmSelection(stableSelection)
+                        isPresented = false
+                    } label: {
+                        Image(systemName: "checkmark")
+                            .frame(width: 44, height: 44)
+                    }
+                    .disabled(pendingSelectionIDs.isEmpty)
+                    .accessibilityLabel("Use selected photos")
                 }
             }
         }

@@ -99,22 +99,19 @@ private struct JamStoryExportHeader: View {
     let onConfirm: () -> Void
 
     var body: some View {
-        HStack {
+        ZStack {
+            Text(title)
+                .font(.custom("ZTTalk-Bold", size: 18, relativeTo: .headline))
+                .lineLimit(1)
+
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(StoryHeaderGlassButtonStyle())
+            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel("Close")
-
-            Spacer(minLength: 0)
-
-            Text(title)
-                .font(.custom("ZTTalk-Bold", size: 18, relativeTo: .headline))
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
 
             if showsConfirmButton {
                 Button(action: onConfirm) {
@@ -123,12 +120,14 @@ private struct JamStoryExportHeader: View {
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(StoryHeaderGlassButtonStyle())
+                .frame(maxWidth: .infinity, alignment: .trailing)
                 .disabled(!confirmEnabled)
                 .accessibilityLabel("Start export")
                 .accessibilityHint("Creates the selected story export.")
             } else {
                 Color.clear
                     .frame(width: 44, height: 44)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                     .accessibilityHidden(true)
             }
         }
