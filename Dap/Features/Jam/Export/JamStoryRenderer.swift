@@ -27,8 +27,17 @@ struct JamStoryRenderer {
         guard let coverImage = UIImage(data: coverData, scale: 1) else {
             throw JamStoryRenderError.jamCoverRenderFailed
         }
+        let photoImagesByID = Dictionary(
+            uniqueKeysWithValues: snapshot.photos.compactMap { photo in
+                photo.imageData.flatMap { UIImage(data: $0, scale: 1) }.map { (photo.id, $0) }
+            }
+        )
 
-        let content = JamStoryExportView(snapshot: snapshot, coverImage: coverImage)
+        let content = JamStoryExportView(
+            snapshot: snapshot,
+            coverImage: coverImage,
+            photoImagesByID: photoImagesByID
+        )
             .frame(width: Self.outputPixelSize.width, height: Self.outputPixelSize.height)
             .environment(\.colorScheme, .dark)
             .environment(\.displayScale, 1)

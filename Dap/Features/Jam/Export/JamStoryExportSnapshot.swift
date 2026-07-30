@@ -1,13 +1,23 @@
 import Foundation
-import UIKit
 
-struct JamStoryExportSnapshot {
-    struct Photo: Identifiable {
+enum JamStoryExportFormat: String, CaseIterable, Identifiable {
+    case image
+    case video
+
+    var id: Self { self }
+
+    var displayName: String {
+        rawValue.capitalized
+    }
+}
+
+struct JamStoryExportSnapshot: Sendable {
+    struct Photo: Identifiable, Sendable {
         let id: UUID
         let role: JamRole?
         let title: String
         let noteLabel: String
-        let image: UIImage?
+        let imageData: Data?
         let accentColor: RGBColor
     }
 
@@ -19,6 +29,8 @@ struct JamStoryExportSnapshot {
     let region: JamRegion
     let drumKit: MusicDrumKit
     let bpm: Int
+    let arrangement: JamArrangement
+    let effectSettings: JamEffectSettings
 }
 
 extension JamStoryExportSnapshot {

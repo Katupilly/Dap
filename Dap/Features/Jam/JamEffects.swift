@@ -4,7 +4,7 @@ import Foundation
 ///
 /// All three effects start disabled. When disabled, the corresponding
 /// DSP stage is bypassed (Reverb/Delay wetDryMix = 0, LFO gain stage = 1).
-struct JamEffectSettings: Equatable {
+struct JamEffectSettings: Equatable, Sendable {
     var reverbEnabled: Bool
     var reverbMix: Float
 

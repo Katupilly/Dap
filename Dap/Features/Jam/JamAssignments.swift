@@ -1,6 +1,6 @@
 import Foundation
 
-enum JamRole: String, Equatable, CaseIterable {
+enum JamRole: String, Equatable, CaseIterable, Sendable {
     case bass
     case harmony
     case melody

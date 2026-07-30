@@ -2107,7 +2107,7 @@ struct JamArrangementBuilder {
     }
 }
 
-struct JamArrangement {
+struct JamArrangement: Sendable {
     let sequence: MusicSequence
     let activeStepsBySoundID: [UUID: Set<Int>]
     let percussion: MusicPercussionPattern

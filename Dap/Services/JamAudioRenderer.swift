@@ -1,6 +1,6 @@
 import Foundation
 
-struct RenderedJamAudio {
+struct RenderedJamAudio: Sendable {
     var left: [Float]
     var right: [Float]
 }

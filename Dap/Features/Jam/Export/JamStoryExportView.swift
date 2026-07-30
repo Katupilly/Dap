@@ -4,6 +4,7 @@ import UIKit
 struct JamStoryExportView: View {
     let snapshot: JamStoryExportSnapshot
     let coverImage: UIImage
+    let photoImagesByID: [UUID: UIImage]
 
     private let safeTop: CGFloat = 180
     private let safeBottom: CGFloat = 190
@@ -100,7 +101,10 @@ struct JamStoryExportView: View {
     private var photoTiles: some View {
         HStack(spacing: 18) {
             ForEach(snapshot.photos) { photo in
-                JamStoryPhotoTile(photo: photo)
+                JamStoryPhotoTile(
+                    photo: photo,
+                    image: photoImagesByID[photo.id]
+                )
             }
         }
         .frame(maxWidth: .infinity)
@@ -198,13 +202,14 @@ struct JamStoryExportView: View {
 
 private struct JamStoryPhotoTile: View {
     let photo: JamStoryExportSnapshot.Photo
+    let image: UIImage?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack {
                 fallbackFill
 
-                if let image = photo.image {
+                if let image {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()

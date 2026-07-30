@@ -4,6 +4,7 @@ enum InstagramStoryExportError: Error, Equatable, LocalizedError {
     case instagramNotInstalled
     case invalidURL
     case pngEncodingFailed
+    case videoReadFailed
     case renderFailed
     case openFailed
 
@@ -15,6 +16,8 @@ enum InstagramStoryExportError: Error, Equatable, LocalizedError {
             "Could not create the Instagram Stories link."
         case .pngEncodingFailed:
             "Could not prepare the Jam image for Instagram."
+        case .videoReadFailed:
+            "Could not prepare the Jam video for Instagram."
         case .renderFailed:
             "Could not render the Jam story image."
         case .openFailed:
@@ -34,18 +37,38 @@ struct InstagramStoryExporter {
 
     @MainActor
     func export(backgroundImage image: UIImage) async throws {
+        guard let pngData = image.pngData() else {
+            throw InstagramStoryExportError.pngEncodingFailed
+        }
+        try await export(
+            pasteboardItem: ["com.instagram.sharedSticker.backgroundImage": pngData]
+        )
+    }
+
+    @MainActor
+    func export(backgroundVideoAt fileURL: URL) async throws {
+        let readTask = Task.detached(priority: .userInitiated) {
+            try Data(contentsOf: fileURL, options: .mappedIfSafe)
+        }
+        guard let videoData = try? await readTask.value else {
+            throw InstagramStoryExportError.videoReadFailed
+        }
+        try await export(
+            pasteboardItem: ["com.instagram.sharedSticker.backgroundVideo": videoData]
+        )
+    }
+
+    @MainActor
+    private func export(pasteboardItem: [String: Any]) async throws {
         guard let url = storiesShareURL else {
             throw InstagramStoryExportError.invalidURL
         }
         guard UIApplication.shared.canOpenURL(url) else {
             throw InstagramStoryExportError.instagramNotInstalled
         }
-        guard let pngData = image.pngData() else {
-            throw InstagramStoryExportError.pngEncodingFailed
-        }
 
         UIPasteboard.general.setItems(
-            [["com.instagram.sharedSticker.backgroundImage": pngData]],
+            [pasteboardItem],
             options: [
                 .expirationDate: Date().addingTimeInterval(5 * 60)
             ]

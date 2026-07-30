@@ -355,11 +355,13 @@ struct JamView: View {
     }
 
     private func makeStoryExportSnapshot() -> JamStoryExportSnapshot? {
-        guard let coverDescriptor = sessionHeaderCoverDescriptor else { return nil }
+        guard let coverDescriptor = sessionHeaderCoverDescriptor,
+              let arrangement = session.activeArrangement ?? buildArrangement() else {
+            return nil
+        }
 
         let assignments = session.slotAssignments
         let roleColors = storyRoleColors(for: assignments)
-        let arrangement = session.activeArrangement ?? buildArrangement()
         let region = JamGrooveLibrary.region(for: session.vibePosition)
         let drumKit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
 
@@ -371,7 +373,9 @@ struct JamView: View {
             roleColors: roleColors,
             region: region,
             drumKit: drumKit,
-            bpm: Int(jamBPM)
+            bpm: arrangement.sequence.harmony.bpm,
+            arrangement: arrangement,
+            effectSettings: session.effectSettings
         )
     }
 
@@ -385,7 +389,7 @@ struct JamView: View {
                 role: role,
                 title: sound.displayTitle,
                 noteLabel: sound.sequence.harmony.rootName,
-                image: selectedPhotoImagesByID[id],
+                imageData: library.coverDataByID[id],
                 accentColor: RetroCoverRenderer.tonalPalette(for: pitch).base
             )
         }

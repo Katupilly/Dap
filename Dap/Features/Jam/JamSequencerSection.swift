@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct JamSequencerSnapshot: Equatable {
+struct JamSequencerSnapshot: Equatable, Sendable {
     let bassSteps: Set<Int>
     let harmonySteps: Set<Int>
     let melodySteps: Set<Int>
