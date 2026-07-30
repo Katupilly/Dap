@@ -50,19 +50,39 @@ enum JamStoryVideoExportError: Error, LocalizedError {
 struct JamStoryVideoRenderer {
     static let outputPixelSize = CGSize(width: 1080, height: 1920)
     static let framesPerSecond = 30
-    static let loopCount = 4
+    static let defaultLoopCount = 4
 
     private let imageRenderer = JamStoryRenderer()
     private let audioRenderer = JamStoryAudioRenderer()
     private let composer = JamStoryVideoComposer()
 
     @MainActor
-    func render(snapshot: JamStoryExportSnapshot) async throws -> JamStoryVideoRenderResult {
+    func render(
+        snapshot: JamStoryExportSnapshot,
+        configuration: JamStoryExportConfiguration = JamStoryExportConfiguration(),
+        progressHandler: (@MainActor @Sendable (JamStoryExportProgress) -> Void)? = nil
+    ) async throws -> JamStoryVideoRenderResult {
         guard snapshot.bpm > 0,
               snapshot.arrangement.sequence.harmony.bpm == snapshot.bpm,
-              !snapshot.arrangement.sequence.notes.isEmpty else {
+              !snapshot.arrangement.sequence.notes.isEmpty,
+              configuration.videoLoopCount > 0 else {
             throw JamStoryVideoExportError.invalidSnapshot
         }
+
+        let startedAt = Date()
+        let estimatedFrames = Self.estimatedFrameCount(
+            bpm: snapshot.bpm,
+            loopCount: configuration.videoLoopCount
+        )
+        progressHandler?(
+            Self.progress(
+                stage: .preparing,
+                completedFrames: 0,
+                totalFrames: estimatedFrames,
+                fractionCompleted: 0.02,
+                startedAt: startedAt
+            )
+        )
 
         let baseImageResult = try await imageRenderer.render(snapshot: snapshot)
         guard let baseImage = baseImageResult.image.cgImage else {
@@ -91,18 +111,38 @@ struct JamStoryVideoRenderer {
 
             let audioDuration = try await audioRenderer.render(
                 snapshot: snapshot,
-                loopCount: Self.loopCount,
+                loopCount: configuration.videoLoopCount,
                 to: audioURL
             )
             try Task.checkCancellation()
+            progressHandler?(
+                Self.progress(
+                    stage: .preparing,
+                    completedFrames: 0,
+                    totalFrames: estimatedFrames,
+                    fractionCompleted: 0.08,
+                    startedAt: startedAt
+                )
+            )
 
             let videoDuration = try await renderSilentVideo(
                 snapshot: snapshot,
                 baseImage: baseImage,
                 duration: audioDuration,
-                to: silentVideoURL
+                to: silentVideoURL,
+                startedAt: startedAt,
+                progressHandler: progressHandler
             )
             try Task.checkCancellation()
+            progressHandler?(
+                Self.progress(
+                    stage: .composing,
+                    completedFrames: estimatedFrames,
+                    totalFrames: estimatedFrames,
+                    fractionCompleted: 0.90,
+                    startedAt: startedAt
+                )
+            )
 
             try await composer.compose(
                 videoURL: silentVideoURL,
@@ -111,12 +151,30 @@ struct JamStoryVideoRenderer {
                 destinationURL: finalURL
             )
             try Task.checkCancellation()
+            progressHandler?(
+                Self.progress(
+                    stage: .validating,
+                    completedFrames: estimatedFrames,
+                    totalFrames: estimatedFrames,
+                    fractionCompleted: 0.97,
+                    startedAt: startedAt
+                )
+            )
             try await validateOutput(at: finalURL, expectedDuration: min(audioDuration, videoDuration))
 
             guard FileManager.default.fileExists(atPath: finalURL.path) else {
                 throw JamStoryVideoExportError.finalFileMissing
             }
 
+            progressHandler?(
+                Self.progress(
+                    stage: .complete,
+                    completedFrames: estimatedFrames,
+                    totalFrames: estimatedFrames,
+                    fractionCompleted: 1,
+                    startedAt: startedAt
+                )
+            )
             shouldKeepFinal = true
             return JamStoryVideoRenderResult(
                 fileURL: finalURL,
@@ -141,14 +199,18 @@ struct JamStoryVideoRenderer {
         snapshot: JamStoryExportSnapshot,
         baseImage: CGImage,
         duration: CMTime,
-        to destinationURL: URL
+        to destinationURL: URL,
+        startedAt: Date,
+        progressHandler: (@MainActor @Sendable (JamStoryExportProgress) -> Void)?
     ) async throws -> CMTime {
         let renderTask = Task.detached(priority: .userInitiated) {
             try await Self.writeSilentVideo(
                 snapshot: snapshot,
                 baseImage: baseImage,
                 duration: duration,
-                destinationURL: destinationURL
+                destinationURL: destinationURL,
+                startedAt: startedAt,
+                progressHandler: progressHandler
             )
         }
 
@@ -163,7 +225,9 @@ struct JamStoryVideoRenderer {
         snapshot: JamStoryExportSnapshot,
         baseImage: CGImage,
         duration: CMTime,
-        destinationURL: URL
+        destinationURL: URL,
+        startedAt: Date,
+        progressHandler: (@MainActor @Sendable (JamStoryExportProgress) -> Void)?
     ) async throws -> CMTime {
         try Task.checkCancellation()
         try? FileManager.default.removeItem(at: destinationURL)
@@ -224,7 +288,7 @@ struct JamStoryVideoRenderer {
             throw JamStoryVideoExportError.pixelBufferCreationFailed
         }
         do {
-            try JamStoryVideoTemplate.validatePixelBufferOrientation(diagnosticBuffer)
+            try JamStoryVideoTemplate.validateDiagnosticFrameCopy(into: diagnosticBuffer)
         } catch {
             writer.cancelWriting()
             throw error
@@ -240,6 +304,7 @@ struct JamStoryVideoRenderer {
         let frameCount = Int((durationSeconds * Double(framesPerSecond)).rounded())
         let stepDuration = 60 / Double(snapshot.bpm) / 4
         let template = JamStoryVideoTemplate(snapshot: snapshot, baseImage: baseImage)
+        let progressStride = max(1, framesPerSecond / 10)
 
         do {
             for frameIndex in 0..<frameCount {
@@ -286,6 +351,18 @@ struct JamStoryVideoRenderer {
 
                 if let frameError {
                     throw frameError
+                }
+
+                if frameIndex % progressStride == 0 || frameIndex == frameCount - 1 {
+                    await progressHandler?(
+                        progress(
+                            stage: .renderingFrames,
+                            completedFrames: frameIndex + 1,
+                            totalFrames: frameCount,
+                            fractionCompleted: 0.08 + 0.82 * (Double(frameIndex + 1) / Double(frameCount)),
+                            startedAt: startedAt
+                        )
+                    )
                 }
             }
         } catch {
@@ -336,5 +413,41 @@ struct JamStoryVideoRenderer {
               audioDurationDelta < 0.05 else {
             throw JamStoryVideoExportError.invalidOutput
         }
+    }
+
+    private static func estimatedFrameCount(bpm: Int, loopCount: Int) -> Int {
+        guard bpm > 0, loopCount > 0 else { return 1 }
+        let stepDuration = 60 / Double(bpm) / 4
+        let duration = stepDuration * Double(MusicSequence.steps * loopCount)
+        return max(1, Int((duration * Double(framesPerSecond)).rounded()))
+    }
+
+    private static func progress(
+        stage: JamStoryExportProgress.Stage,
+        completedFrames: Int,
+        totalFrames: Int,
+        fractionCompleted: Double,
+        startedAt: Date
+    ) -> JamStoryExportProgress {
+        let elapsedSeconds = max(0, Date().timeIntervalSince(startedAt))
+        let elapsedMilliseconds = Int64((elapsedSeconds * 1000).rounded())
+        let clampedFraction = min(max(fractionCompleted, 0), 1)
+        let remainingMilliseconds: Int64?
+
+        if clampedFraction > 0.05 && clampedFraction < 1 {
+            let totalMilliseconds = elapsedSeconds / clampedFraction * 1000
+            remainingMilliseconds = max(0, Int64((totalMilliseconds - Double(elapsedMilliseconds)).rounded()))
+        } else {
+            remainingMilliseconds = nil
+        }
+
+        return JamStoryExportProgress(
+            stage: stage,
+            completedFrames: completedFrames,
+            totalFrames: totalFrames,
+            fractionCompleted: clampedFraction,
+            elapsed: .milliseconds(elapsedMilliseconds),
+            estimatedRemaining: remainingMilliseconds.map { .milliseconds($0) }
+        )
     }
 }

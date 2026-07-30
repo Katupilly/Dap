@@ -1,97 +1,290 @@
-import AVFoundation
 import AVKit
-import CoreTransferable
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 struct JamStoryExportSheet: View {
     let snapshot: JamStoryExportSnapshot
     @Binding var isPresented: Bool
 
-    @State private var selectedFormat = JamStoryExportFormat.image
-    @State private var renderState = RenderState.idle
-    @State private var renderTask: Task<Void, Never>?
-    @State private var player: AVPlayer?
-    @State private var instagramError: InstagramStoryExportError?
+    @State private var coordinator: JamStoryExportCoordinator
 
-    private let imageRenderer = JamStoryRenderer()
-    private let videoRenderer = JamStoryVideoRenderer()
-    private let instagramExporter = InstagramStoryExporter()
+    init(snapshot: JamStoryExportSnapshot, isPresented: Binding<Bool>) {
+        self.snapshot = snapshot
+        self._isPresented = isPresented
+        _coordinator = State(initialValue: JamStoryExportCoordinator(snapshot: snapshot))
+    }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 22) {
-                    Picker("Format", selection: $selectedFormat) {
-                        ForEach(JamStoryExportFormat.allCases) { format in
-                            Text(format.displayName).tag(format)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .disabled(renderState.isPreparing)
+            VStack(spacing: 0) {
+                JamStoryExportHeader(
+                    title: title,
+                    showsConfirmButton: coordinator.phase == .customize,
+                    confirmEnabled: coordinator.canStartExport,
+                    onClose: handleClose,
+                    onConfirm: coordinator.startExport
+                )
 
-                    preview
-                    actions
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 22)
-                .padding(.bottom, 32)
-            }
-            .scrollIndicators(.hidden)
-            .navigationTitle("Export Story")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: close) {
-                        Image(systemName: "xmark")
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Close")
-                }
+                content
             }
         }
-        .task {
-            prepareSelectedFormat()
-        }
-        .onChange(of: selectedFormat) {
-            resetAndPrepareSelectedFormat()
-        }
+        .interactiveDismissDisabled(coordinator.isExporting)
         .onDisappear {
-            cancelAndCleanup()
-        }
-        .alert("Instagram Stories", isPresented: instagramErrorPresented) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(instagramError?.localizedDescription ?? "Could not share to Instagram Stories.")
+            coordinator.cleanupForDismissal()
         }
     }
 
     @ViewBuilder
-    private var preview: some View {
-        switch renderState {
-        case .idle:
-            statusPreview(
-                symbol: selectedFormat == .image ? "photo" : "video",
-                message: "Ready to prepare \(selectedFormat.displayName.lowercased())."
+    private var content: some View {
+        switch coordinator.phase {
+        case .customize:
+            JamStoryExportCustomizeView(
+                snapshot: snapshot,
+                coordinator: coordinator
             )
-        case .preparing:
-            previewFrame {
-                VStack(spacing: 14) {
-                    ProgressView()
-                        .tint(.white)
-                    Text(
-                        selectedFormat == .image
-                            ? "Preparing story image…"
-                            : "Rendering video and Jam audio…"
-                    )
-                    .font(.custom("ZTTalk-Bold", size: 16, relativeTo: .subheadline))
-                    .foregroundStyle(.white.opacity(0.74))
+        case .exporting:
+            JamStoryExportProgressView(
+                snapshot: snapshot,
+                configuration: coordinator.configuration,
+                progress: coordinator.progress
+            )
+        case .ready:
+            if let result = coordinator.result {
+                JamStoryExportReadyView(
+                    snapshot: snapshot,
+                    result: result,
+                    coordinator: coordinator
+                )
+            }
+        case .failed:
+            JamStoryExportFailedView(
+                message: coordinator.errorMessage ?? "Could not prepare this story export.",
+                onTryAgain: coordinator.startExport,
+                onCustomize: coordinator.returnToCustomize
+            )
+        }
+    }
+
+    private var title: String {
+        switch coordinator.phase {
+        case .customize: "Create Story"
+        case .exporting: "Exporting"
+        case .ready: "Ready"
+        case .failed: "Couldn't Export"
+        }
+    }
+
+    private func handleClose() {
+        if coordinator.isExporting {
+            coordinator.cancelExport()
+        } else {
+            coordinator.cleanupForDismissal()
+            isPresented = false
+        }
+    }
+}
+
+private struct JamStoryExportHeader: View {
+    let title: String
+    let showsConfirmButton: Bool
+    let confirmEnabled: Bool
+    let onClose: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+        HStack {
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close")
+
+            Spacer(minLength: 0)
+
+            Text(title)
+                .font(.custom("ZTTalk-Bold", size: 18, relativeTo: .headline))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            if showsConfirmButton {
+                Button(action: onConfirm) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .disabled(!confirmEnabled)
+                .accessibilityLabel("Start export")
+                .accessibilityHint("Creates the selected story export.")
+            } else {
+                Color.clear
+                    .frame(width: 44, height: 44)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+    }
+}
+
+private struct JamStoryExportCustomizeView: View {
+    let snapshot: JamStoryExportSnapshot
+    @Bindable var coordinator: JamStoryExportCoordinator
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                JamStoryExportLightPreview(
+                    snapshot: snapshot,
+                    configuration: coordinator.configuration
+                )
+
+                templateCarousel
+
+                Picker("Format", selection: $coordinator.configuration.format) {
+                    ForEach(JamStoryExportFormat.allCases) { format in
+                        Text(format.displayName).tag(format)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Export format")
+
+                if coordinator.configuration.format == .video {
+                    Picker("Duration", selection: $coordinator.configuration.videoLoopCount) {
+                        ForEach(JamStoryExportConfiguration.videoLoopOptions, id: \.self) { loopCount in
+                            Text("\(loopCount) loops").tag(loopCount)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Video duration")
                 }
             }
-        case .ready(.image(let result)):
-            Image(uiImage: result.image)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 28)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private var templateCarousel: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 12) {
+                ForEach(JamStoryTemplate.allCases) { template in
+                    Button {
+                        coordinator.configuration.template = template
+                    } label: {
+                        JamStoryTemplateThumbnail(
+                            title: template.displayName,
+                            isSelected: coordinator.configuration.template == template
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(template.displayName)
+                    .accessibilityAddTraits(
+                        coordinator.configuration.template == template ? .isSelected : []
+                    )
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .scrollIndicators(.hidden)
+        .padding(.horizontal, -20)
+    }
+}
+
+private struct JamStoryExportProgressView: View {
+    let snapshot: JamStoryExportSnapshot
+    let configuration: JamStoryExportConfiguration
+    let progress: JamStoryExportProgress?
+
+    var body: some View {
+        VStack(spacing: 20) {
+            JamStoryExportLightPreview(
+                snapshot: snapshot,
+                configuration: configuration
+            )
+            .frame(maxHeight: 330)
+
+            VStack(spacing: 6) {
+                Text("\(percentComplete)%")
+                    .font(.custom("ZTTalk-Bold", size: 34, relativeTo: .largeTitle))
+                    .monospacedDigit()
+
+                Text(remainingText)
+                    .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            Text("Do not close or leave the app")
+                .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
+                .foregroundStyle(.secondary)
+
+            ProgressView(value: progress?.fractionCompleted ?? 0)
+                .progressViewStyle(.linear)
+                .tint(.primary)
+                .accessibilityLabel(progress?.stage.displayName ?? "Preparing")
+                .accessibilityValue("\(percentComplete)%")
+        }
+        .padding(.horizontal, 26)
+        .padding(.bottom, 28)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var percentComplete: Int {
+        Int(((progress?.fractionCompleted ?? 0) * 100).rounded())
+    }
+
+    private var remainingText: String {
+        guard let remaining = progress?.estimatedRemaining else {
+            return "Estimating remaining"
+        }
+        return "\(format(duration: remaining)) remaining"
+    }
+
+    private func format(duration: Duration) -> String {
+        let components = duration.components
+        let seconds = max(
+            0,
+            Int(ceil(
+                Double(components.seconds)
+                    + Double(components.attoseconds) / 1_000_000_000_000_000_000
+            ))
+        )
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+private struct JamStoryExportReadyView: View {
+    let snapshot: JamStoryExportSnapshot
+    let result: JamStoryExportResult
+    let coordinator: JamStoryExportCoordinator
+
+    var body: some View {
+        VStack(spacing: 18) {
+            preview
+
+            StoryShareActions(
+                isInstagramAvailable: coordinator.isInstagramStoriesAvailable,
+                onInstagram: {
+                    Task { await coordinator.shareReadyResultToInstagram() }
+                }
+            ) {
+                shareLink
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 28)
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        switch result {
+        case .image(let imageResult):
+            Image(uiImage: imageResult.image)
                 .resizable()
                 .scaledToFit()
                 .aspectRatio(9.0 / 16.0, contentMode: .fit)
@@ -101,303 +294,251 @@ struct JamStoryExportSheet: View {
                         .stroke(.white.opacity(0.16), lineWidth: 1)
                 }
                 .shadow(color: .black.opacity(0.18), radius: 22, y: 12)
-        case .ready(.video):
-            previewFrame {
-                if let player {
-                    VideoPlayer(player: player)
-                } else {
-                    ProgressView()
-                        .tint(.white)
+        case .video:
+            ZStack(alignment: .bottom) {
+                JamStoryVideoPreview(player: coordinator.player)
+
+                Button(action: coordinator.toggleVideoPlayback) {
+                    Image(systemName: coordinator.isVideoPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(.black.opacity(0.58), in: Circle())
                 }
+                .buttonStyle(.plain)
+                .padding(.bottom, 16)
+                .accessibilityLabel(coordinator.isVideoPlaying ? "Pause preview" : "Play preview")
             }
-        case .failed(let message):
-            statusPreview(
-                symbol: "exclamationmark.triangle",
-                message: message
-            )
-        case .cancelled:
-            statusPreview(
-                symbol: "xmark.circle",
-                message: "Video export was cancelled."
-            )
         }
     }
 
     @ViewBuilder
-    private var actions: some View {
-        switch renderState {
-        case .ready(.image(let result)):
-            sharingActions(
-                instagramAction: {
-                    Task { await shareImageToInstagram(result.image) }
-                },
-                shareLink: {
-                    ShareLink(
-                        item: JamStoryImageExport(data: result.pngData),
-                        preview: SharePreview(
-                            snapshot.jamName,
-                            image: Image(uiImage: result.image)
-                        )
-                    ) {
-                        shareLabel
-                    }
-                }
-            )
-        case .ready(.video(let result)):
-            sharingActions(
-                instagramAction: {
-                    Task { await shareVideoToInstagram(result.fileURL) }
-                },
-                shareLink: {
-                    ShareLink(
-                        item: JamStoryVideoExport(fileURL: result.fileURL),
-                        preview: SharePreview(snapshot.jamName)
-                    ) {
-                        shareLabel
-                    }
-                }
-            )
-        case .preparing:
-            Button(action: cancelExport) {
-                Label("Cancel", systemImage: "xmark")
-                    .frame(maxWidth: .infinity, minHeight: 52)
-            }
-            .buttonStyle(JamStorySecondaryButtonStyle())
-        case .idle, .failed, .cancelled:
-            Button(action: prepareSelectedFormat) {
-                Text("Try Again")
-                    .frame(maxWidth: .infinity, minHeight: 52)
-            }
-            .buttonStyle(JamStorySecondaryButtonStyle())
-        }
-    }
-
-    private func sharingActions<ShareContent: View>(
-        instagramAction: @escaping () -> Void,
-        @ViewBuilder shareLink: () -> ShareContent
-    ) -> some View {
-        let instagramAvailable = instagramExporter.isInstagramStoriesAvailable
-
-        return VStack(spacing: 10) {
-            Button(action: instagramAction) {
-                Label(
-                    instagramAvailable ? "Share to Instagram" : "Instagram Not Installed",
-                    systemImage: "camera"
+    private var shareLink: some View {
+        switch result {
+        case .image(let imageResult):
+            ShareLink(
+                item: StoryImageExport(data: imageResult.pngData),
+                preview: SharePreview(
+                    snapshot.jamName,
+                    image: Image(uiImage: imageResult.image)
                 )
-                .frame(maxWidth: .infinity, minHeight: 52)
+            ) {
+                shareLabel
             }
-            .buttonStyle(JamStoryPrimaryButtonStyle())
-            .opacity(instagramAvailable ? 1 : 0.58)
-            .accessibilityHint(
-                instagramAvailable
-                    ? "Opens Instagram Stories."
-                    : "Shows an Instagram availability message."
-            )
-
-            shareLink()
-                .buttonStyle(JamStorySecondaryButtonStyle())
+        case .video(let videoResult):
+            ShareLink(
+                item: StoryVideoExport(fileURL: videoResult.fileURL),
+                preview: SharePreview(snapshot.jamName)
+            ) {
+                shareLabel
+            }
         }
     }
 
     private var shareLabel: some View {
-        Label("Share…", systemImage: "square.and.arrow.up")
+        Label("Share...", systemImage: "square.and.arrow.up")
             .frame(maxWidth: .infinity, minHeight: 52)
     }
+}
 
-    private func statusPreview(symbol: String, message: String) -> some View {
-        previewFrame {
-            VStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.system(size: 34, weight: .semibold))
-                Text(message)
-                    .font(.custom("ZTTalk-Bold", size: 16, relativeTo: .subheadline))
-                    .multilineTextAlignment(.center)
-            }
-            .foregroundStyle(.white.opacity(0.78))
-            .padding(24)
-        }
-    }
+private struct JamStoryVideoPreview: View {
+    let player: AVPlayer?
 
-    private func previewFrame<Content: View>(
-        @ViewBuilder content: () -> Content
-    ) -> some View {
+    var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [.black.opacity(0.88), .black.opacity(0.68)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            content()
+            if let player {
+                VideoPlayer(player: player)
+            } else {
+                Color.black
+                ProgressView()
+                    .tint(.white)
+            }
         }
         .aspectRatio(9.0 / 16.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(.white.opacity(0.16), lineWidth: 1)
+        }
     }
+}
 
-    @MainActor
-    private func prepareSelectedFormat() {
-        guard renderTask == nil else { return }
-        releasePlayer()
-        cleanupReadyVideo()
-        renderState = .preparing
-        let format = selectedFormat
+private struct JamStoryExportFailedView: View {
+    let message: String
+    let onTryAgain: () -> Void
+    let onCustomize: () -> Void
 
-        renderTask = Task {
-            do {
-                switch format {
-                case .image:
-                    let result = try await imageRenderer.render(snapshot: snapshot)
-                    try Task.checkCancellation()
-                    renderState = .ready(.image(result))
-                case .video:
-                    let result = try await videoRenderer.render(snapshot: snapshot)
-                    try Task.checkCancellation()
-                    player = AVPlayer(url: result.fileURL)
-                    renderState = .ready(.video(result))
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer(minLength: 0)
+
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 42, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            Text(message)
+                .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .headline))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.primary)
+
+            VStack(spacing: 10) {
+                Button(action: onTryAgain) {
+                    Text("Try Again")
+                        .frame(maxWidth: .infinity, minHeight: 52)
                 }
-            } catch is CancellationError {
-                renderState = .cancelled
-            } catch JamStoryVideoExportError.cancelled {
-                renderState = .cancelled
-            } catch {
-                renderState = .failed(
-                    (error as? LocalizedError)?.errorDescription
-                        ?? "Could not prepare this story export."
-                )
+                .buttonStyle(StoryPrimaryButtonStyle())
+
+                Button(action: onCustomize) {
+                    Text("Back to Customize")
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                }
+                .buttonStyle(StorySecondaryButtonStyle())
             }
-            renderTask = nil
+
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 28)
     }
+}
 
-    @MainActor
-    private func resetAndPrepareSelectedFormat() {
-        guard !renderState.isPreparing else { return }
-        releasePlayer()
-        cleanupReadyVideo()
-        renderState = .idle
-        prepareSelectedFormat()
-    }
+private struct JamStoryExportLightPreview: View {
+    let snapshot: JamStoryExportSnapshot
+    let configuration: JamStoryExportConfiguration
 
-    @MainActor
-    private func cancelExport() {
-        renderTask?.cancel()
-    }
+    var body: some View {
+        ZStack {
+            previewBackground
 
-    @MainActor
-    private func close() {
-        cancelAndCleanup()
-        isPresented = false
-    }
+            VStack(alignment: .leading, spacing: 16) {
+                Text("DAP JAM")
+                    .font(.custom("ZTTalk-Bold", size: 10, relativeTo: .caption))
+                    .tracking(1.4)
+                    .foregroundStyle(.white.opacity(0.58))
 
-    @MainActor
-    private func cancelAndCleanup() {
-        renderTask?.cancel()
-        renderTask = nil
-        releasePlayer()
-        cleanupReadyVideo()
-    }
+                Text(snapshot.jamName)
+                    .font(.custom("ZTTalk-Bold", size: 28, relativeTo: .title))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.72)
 
-    @MainActor
-    private func releasePlayer() {
-        player?.pause()
-        player?.replaceCurrentItem(with: nil)
-        player = nil
-    }
+                JamCoverArtwork(
+                    descriptor: snapshot.coverDescriptor,
+                    targetSize: CGSize(width: 420, height: 420),
+                    cornerRadius: 14
+                )
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(.white.opacity(0.16), lineWidth: 1)
+                }
 
-    @MainActor
-    private func cleanupReadyVideo() {
-        guard case .ready(.video(let result)) = renderState else { return }
-        JamStoryVideoRenderer.removeExport(at: result.fileURL)
-    }
+                roleStrip
 
-    @MainActor
-    private func shareImageToInstagram(_ image: UIImage) async {
-        do {
-            try await instagramExporter.export(backgroundImage: image)
-        } catch let error as InstagramStoryExportError {
-            instagramError = error
-        } catch {
-            instagramError = .openFailed
+                sequencerPreview
+
+                Spacer(minLength: 0)
+
+                HStack {
+                    Text(configuration.format.displayName.uppercased())
+                    Spacer(minLength: 0)
+                    Text("Made with Dap")
+                }
+                .font(.custom("ZTTalk-Bold", size: 10, relativeTo: .caption))
+                .foregroundStyle(.white.opacity(0.56))
+            }
+            .padding(24)
         }
-    }
-
-    @MainActor
-    private func shareVideoToInstagram(_ fileURL: URL) async {
-        do {
-            try await instagramExporter.export(backgroundVideoAt: fileURL)
-        } catch let error as InstagramStoryExportError {
-            instagramError = error
-        } catch {
-            instagramError = .openFailed
+        .aspectRatio(9.0 / 16.0, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(.white.opacity(0.14), lineWidth: 1)
         }
+        .shadow(color: .black.opacity(0.14), radius: 18, y: 10)
     }
 
-    private var instagramErrorPresented: Binding<Bool> {
-        Binding(
-            get: { instagramError != nil },
-            set: { if !$0 { instagramError = nil } }
+    private var previewBackground: some View {
+        let color = snapshot.roleColors.values.first ?? JamStoryExportSnapshot.fallbackAccent
+        return LinearGradient(
+            colors: [
+                Color(jamRGB: color).opacity(0.88),
+                .black.opacity(0.92)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
         )
     }
 
-    private enum RenderState {
-        case idle
-        case preparing
-        case ready(ExportResult)
-        case failed(String)
-        case cancelled
+    private var roleStrip: some View {
+        HStack(spacing: 8) {
+            ForEach(snapshot.photos) { photo in
+                VStack(alignment: .leading, spacing: 4) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(jamRGB: photo.accentColor).opacity(0.54))
+                        .aspectRatio(5.0 / 6.0, contentMode: .fit)
 
-        var isPreparing: Bool {
-            if case .preparing = self { true } else { false }
+                    Text(photo.role?.displayName.uppercased() ?? "PHOTO")
+                        .font(.custom("ZTTalk-Bold", size: 8, relativeTo: .caption2))
+                        .foregroundStyle(.white.opacity(0.68))
+                        .lineLimit(1)
+                }
+            }
         }
     }
 
-    private enum ExportResult {
-        case image(JamStoryRenderResult)
-        case video(JamStoryVideoRenderResult)
-    }
-}
+    private var sequencerPreview: some View {
+        VStack(spacing: 5) {
+            ForEach(JamRole.allCases, id: \.self) { role in
+                let activeSteps = snapshot.sequencerSnapshot.steps(for: role)
+                let color = Color(jamRGB: snapshot.roleColors[role] ?? JamStoryExportSnapshot.fallbackAccent)
 
-private struct JamStoryImageExport: Transferable {
-    let data: Data
-
-    static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(exportedContentType: .png) { export in
-            export.data
+                HStack(spacing: 3) {
+                    ForEach(0..<MusicSequence.steps, id: \.self) { step in
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(activeSteps.contains(step) ? color.opacity(0.9) : .white.opacity(0.14))
+                            .frame(height: 7)
+                    }
+                }
+            }
         }
+        .padding(12)
+        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
-private struct JamStoryVideoExport: Transferable {
-    let fileURL: URL
+private struct JamStoryTemplateThumbnail: View {
+    let title: String
+    let isSelected: Bool
 
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(exportedContentType: .mpeg4Movie) { export in
-            SentTransferredFile(export.fileURL)
+    var body: some View {
+        VStack(spacing: 7) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.secondary.opacity(0.16))
+                .frame(width: 62, height: 94)
+                .overlay {
+                    VStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(.primary.opacity(0.38))
+                            .frame(width: 34, height: 34)
+                        HStack(spacing: 2) {
+                            ForEach(0..<5, id: \.self) { _ in
+                                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                                    .fill(.primary.opacity(0.28))
+                                    .frame(width: 5, height: 18)
+                            }
+                        }
+                    }
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isSelected ? Color.primary : Color.clear, lineWidth: 2)
+                }
+
+            Text(title)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
         }
-    }
-}
-
-private struct JamStoryPrimaryButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .headline))
-            .foregroundStyle(.white)
-            .background(
-                Color.black.opacity(isEnabled ? (configuration.isPressed ? 0.78 : 0.92) : 0.34),
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-            )
-    }
-}
-
-private struct JamStorySecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .headline))
-            .foregroundStyle(.primary)
-            .background(
-                Color.secondary.opacity(configuration.isPressed ? 0.18 : 0.12),
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-            )
+        .frame(width: 82)
     }
 }

@@ -216,7 +216,7 @@ struct JamView: View {
                 onConfirmSelection: confirmPhotoSelection
             )
         }
-        .sheet(isPresented: storyExportPresented) {
+        .fullScreenCover(isPresented: storyExportPresented) {
             if let storyExportSnapshot {
                 JamStoryExportSheet(
                     snapshot: storyExportSnapshot,

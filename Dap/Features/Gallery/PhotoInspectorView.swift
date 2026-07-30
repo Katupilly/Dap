@@ -1,7 +1,5 @@
 import SwiftUI
-import CoreTransferable
 import UIKit
-import UniformTypeIdentifiers
 
 struct PhotoInspectorView: View {
     private static let coverFrameSize = CGSize(
@@ -21,6 +19,7 @@ struct PhotoInspectorView: View {
     @State private var isShowingDeleteConfirmation = false
     @State private var isShowingDeleteError = false
     @State private var isShowingJamPicker = false
+    @State private var photoStoryExportSnapshot: PhotoStoryExportSnapshot?
     @State private var isDeleting = false
     @State private var didAddToJam = false
 
@@ -55,11 +54,6 @@ struct PhotoInspectorView: View {
     private var coverUIImage: UIImage? {
         guard let coverData else { return nil }
         return UIImage(data: coverData)
-    }
-
-    private var sharePreview: SharePreview<Data, Never>? {
-        guard let coverData else { return nil }
-        return SharePreview(sound.displayTitle, image: coverData)
     }
 
     private var titleText: String {
@@ -103,20 +97,12 @@ struct PhotoInspectorView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    if let coverData, let sharePreview {
-                        ShareLink(
-                            item: CoverImageExport(data: coverData),
-                            preview: sharePreview
-                        ) {
-                            Label("Share", systemImage: "square.and.arrow.up")
-                        }
-                    } else {
-                        Button {
-                        } label: {
-                            Label("Share", systemImage: "square.and.arrow.up")
-                        }
-                        .disabled(true)
+                    Button {
+                        photoStoryExportSnapshot = makePhotoStoryExportSnapshot()
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
                     }
+                    .disabled(coverData == nil)
 
                     Button(role: .destructive) {
                         DispatchQueue.main.async {
@@ -152,6 +138,9 @@ struct PhotoInspectorView: View {
             ) {
                 handleJamAdded()
             }
+        }
+        .sheet(item: $photoStoryExportSnapshot) { snapshot in
+            PhotoStoryExportSheet(snapshot: snapshot)
         }
     }
 
@@ -299,6 +288,23 @@ struct PhotoInspectorView: View {
                 isShowingDeleteError = true
             }
         }
+    }
+
+    private func makePhotoStoryExportSnapshot() -> PhotoStoryExportSnapshot? {
+        guard let coverData else { return nil }
+        let pitch = rootPitch
+        return PhotoStoryExportSnapshot(
+            id: sound.id,
+            imageData: coverData,
+            title: sound.displayTitle,
+            root: pitch.symbol,
+            scale: sound.sequence.harmony.scale.displayName,
+            bpm: sound.sequence.harmony.bpm,
+            notes: sound.sequence.notes.map {
+                PhotoStoryExportSnapshot.Note(step: $0.step, row: $0.row)
+            },
+            palette: RetroCoverRenderer.tonalPalette(for: pitch)
+        )
     }
 
     private func handleJamAdded() {
@@ -563,16 +569,6 @@ private struct JamAvailability {
     let isSelectable: Bool
     let status: JamCard.Status?
     let accessibilityHint: String
-}
-
-private struct CoverImageExport: Transferable {
-    let data: Data
-
-    static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(exportedContentType: .png) { export in
-            export.data
-        }
-    }
 }
 
 private struct InspectorButtonStyle: ButtonStyle {
