@@ -37,6 +37,7 @@ struct PhotoStoryExportSheet: View {
 
                 content
             }
+            .background(StoryExportChromeBackground())
         }
         .task {
             await prepare()
@@ -52,7 +53,7 @@ struct PhotoStoryExportSheet: View {
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 44, height: 44)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(StoryHeaderGlassButtonStyle())
             .accessibilityLabel("Close")
 
             Spacer(minLength: 0)

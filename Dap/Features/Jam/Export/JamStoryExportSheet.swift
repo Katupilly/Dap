@@ -2,6 +2,8 @@ import AVKit
 import SwiftUI
 import UIKit
 
+private let jamStoryExportHeaderHeight: CGFloat = 62
+
 struct JamStoryExportSheet: View {
     let snapshot: JamStoryExportSnapshot
     @Binding var isPresented: Bool
@@ -16,7 +18,14 @@ struct JamStoryExportSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            ZStack(alignment: .top) {
+                StoryExportChromeBackground()
+
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                StoryExportTopBlurFade(height: 112)
+
                 JamStoryExportHeader(
                     title: title,
                     showsConfirmButton: coordinator.phase == .customize,
@@ -24,8 +33,6 @@ struct JamStoryExportSheet: View {
                     onClose: handleClose,
                     onConfirm: coordinator.startExport
                 )
-
-                content
             }
         }
         .interactiveDismissDisabled(coordinator.isExporting)
@@ -98,7 +105,7 @@ private struct JamStoryExportHeader: View {
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 44, height: 44)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(StoryHeaderGlassButtonStyle())
             .accessibilityLabel("Close")
 
             Spacer(minLength: 0)
@@ -115,7 +122,7 @@ private struct JamStoryExportHeader: View {
                         .font(.system(size: 17, weight: .semibold))
                         .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(StoryHeaderGlassButtonStyle())
                 .disabled(!confirmEnabled)
                 .accessibilityLabel("Start export")
                 .accessibilityHint("Creates the selected story export.")
@@ -128,6 +135,7 @@ private struct JamStoryExportHeader: View {
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 10)
+        .frame(height: jamStoryExportHeaderHeight, alignment: .top)
     }
 }
 
@@ -164,6 +172,7 @@ private struct JamStoryExportCustomizeView: View {
                 }
             }
             .padding(.horizontal, 20)
+            .padding(.top, jamStoryExportHeaderHeight)
             .padding(.bottom, 28)
         }
         .scrollIndicators(.hidden)
@@ -230,6 +239,7 @@ private struct JamStoryExportProgressView: View {
                 .accessibilityValue("\(percentComplete)%")
         }
         .padding(.horizontal, 26)
+        .padding(.top, jamStoryExportHeaderHeight)
         .padding(.bottom, 28)
         .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -277,6 +287,7 @@ private struct JamStoryExportReadyView: View {
             }
         }
         .padding(.horizontal, 20)
+        .padding(.top, jamStoryExportHeaderHeight)
         .padding(.bottom, 28)
     }
 
@@ -398,6 +409,7 @@ private struct JamStoryExportFailedView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 28)
+        .padding(.top, jamStoryExportHeaderHeight)
         .padding(.bottom, 28)
     }
 }

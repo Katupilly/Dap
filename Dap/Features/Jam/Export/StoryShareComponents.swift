@@ -60,28 +60,132 @@ struct StoryVideoExport: Transferable {
     }
 }
 
+struct StoryExportChromeBackground: View {
+    var body: some View {
+        Color(uiColor: .systemBackground)
+            .ignoresSafeArea()
+    }
+}
+
+struct StoryExportTopBlurFade: View {
+    let height: CGFloat
+
+    init(height: CGFloat = 160) {
+        self.height = height
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.regularMaterial)
+
+            Color.black.opacity(0.16)
+        }
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black.opacity(0.82), location: 0.38),
+                    .init(color: .black.opacity(0.28), location: 0.76),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .frame(height: height)
+        .ignoresSafeArea(edges: .top)
+        .allowsHitTesting(false)
+    }
+}
+
+struct StoryHeaderGlassButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.primary.opacity(isEnabled ? 1 : 0.36))
+            .frame(width: 44, height: 44)
+            .opacity(isEnabled ? 1 : 0.62)
+            .glassEffect(
+                .regular
+                    .tint(.primary.opacity(isEnabled ? (configuration.isPressed ? 0.10 : 0.06) : 0.03))
+                    .interactive(isEnabled),
+                in: Circle()
+            )
+            .contentShape(.interaction, Circle())
+    }
+}
+
 struct StoryPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .headline))
-            .foregroundStyle(.white)
-            .background(
-                Color.black.opacity(isEnabled ? (configuration.isPressed ? 0.78 : 0.92) : 0.34),
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-            )
+            .foregroundStyle(.primary)
+            .background {
+                StoryShareButtonContainer(
+                    prominence: .primary,
+                    isPressed: configuration.isPressed,
+                    isEnabled: isEnabled
+                )
+            }
     }
 }
 
 struct StorySecondaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .headline))
             .foregroundStyle(.primary)
-            .background(
-                Color.secondary.opacity(configuration.isPressed ? 0.18 : 0.12),
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-            )
+            .background {
+                StoryShareButtonContainer(
+                    prominence: .secondary,
+                    isPressed: configuration.isPressed,
+                    isEnabled: isEnabled
+                )
+            }
+    }
+}
+
+private struct StoryShareButtonContainer: View {
+    let prominence: Prominence
+    let isPressed: Bool
+    let isEnabled: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(.regularMaterial)
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.primary.opacity(fillOpacity))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(.primary.opacity(strokeOpacity), lineWidth: 1)
+            }
+    }
+
+    private var fillOpacity: Double {
+        guard isEnabled else { return prominence == .primary ? 0.08 : 0.04 }
+        switch prominence {
+        case .primary:
+            return isPressed ? 0.18 : 0.12
+        case .secondary:
+            return isPressed ? 0.10 : 0.05
+        }
+    }
+
+    private var strokeOpacity: Double {
+        guard isEnabled else { return 0.10 }
+        return prominence == .primary ? 0.22 : 0.14
+    }
+
+    enum Prominence {
+        case primary
+        case secondary
     }
 }
