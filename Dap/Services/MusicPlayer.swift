@@ -1,5 +1,13 @@
 import AVFoundation
 import Foundation
+import OSLog
+
+#if DEBUG
+private let musicPerformanceLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Dap",
+    category: "Performance"
+)
+#endif
 
 // MARK: - MusicPlayer
 
@@ -168,12 +176,13 @@ final class MusicPlayer {
             }
 
             if loops {
-                self.playerNode.scheduleBuffer(
+                await self.playerNode.scheduleBuffer(
                     buffer,
                     at: nil,
-                    options: .loops,
-                    completionHandler: nil
+                    options: .loops
                 )
+                guard !Task.isCancelled,
+                      self.playbackGeneration == generation else { return }
                 self.playerNode.play()
                 self.isLooping = true
             } else {
@@ -242,12 +251,13 @@ final class MusicPlayer {
 
             guard let buffer = self.makeBuffer(samples: samples) else { return }
 
-            self.jamPlayerNode.scheduleBuffer(
+            await self.jamPlayerNode.scheduleBuffer(
                 buffer,
                 at: nil,
-                options: .loops,
-                completionHandler: nil
+                options: .loops
             )
+            guard !Task.isCancelled,
+                  self.playbackGeneration == generation else { return }
             self.jamPlayerNode.play()
             self.isLooping = true
             self.jamIsTransportReady = self.jamPlayerNode.isPlaying
@@ -467,6 +477,15 @@ final class MusicPlayer {
         sampleRate: Int,
         loops: Bool
     ) async throws -> RenderedJamAudio {
+        #if DEBUG
+        let clock = ContinuousClock()
+        let renderStart = clock.now
+        defer {
+            musicPerformanceLogger.debug(
+                "audio render: \(String(describing: renderStart.duration(to: clock.now)), privacy: .public)"
+            )
+        }
+        #endif
         try Task.checkCancellation()
         return try JamAudioRenderer.render(
             sequence,

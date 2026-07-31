@@ -18,6 +18,7 @@ struct CameraView: View {
     @State private var isFlashOn = false
     @State private var isFlashAvailable = false
     @State private var isZoomed = false
+    @State private var isSwitchingCamera = false
     @State private var previewPitchClass: PitchClass = .c
     @State private var importCompletion: ImportCompletion?
 
@@ -140,16 +141,9 @@ struct CameraView: View {
 
                     Spacer()
 
-                    Button {
+                    CaptureFlipCameraButton(isEnabled: state == .ready && !isSwitchingCamera) {
                         Task { await switchCamera() }
-                    } label: {
-                        Image(systemName: "arrow.trianglehead.2.clockwise")
-                            .font(.system(size: 28, weight: .semibold))
-                            .frame(width: 57, height: 57)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .allowsHitTesting(state == .ready)
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 26)
@@ -224,15 +218,9 @@ struct CameraView: View {
                 Circle()
                     .stroke(.white, lineWidth: 4)
                     .frame(width: 97, height: 97)
-                if state == .capturing || isShutterProcessing {
-                    ProgressView()
-                        .tint(.white)
-                        .frame(width: 82, height: 82)
-                } else {
-                    Circle()
-                        .fill(.white)
-                        .frame(width: 82, height: 82)
-                }
+                Circle()
+                    .fill(.white)
+                    .frame(width: 82, height: 82)
             }
         }
         .allowsHitTesting(state == .ready)
@@ -414,7 +402,9 @@ struct CameraView: View {
     }
 
     private func switchCamera() async {
-        guard state == .ready, let controller else { return }
+        guard state == .ready, let controller, !isSwitchingCamera else { return }
+        isSwitchingCamera = true
+        defer { isSwitchingCamera = false }
         do {
             try await controller.switchCamera()
             isZoomed = false
@@ -453,6 +443,24 @@ struct CameraView: View {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(.white.opacity(0.84))
         }
+    }
+}
+
+struct CaptureFlipCameraButton: View {
+    let isEnabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.trianglehead.2.clockwise")
+                .font(.system(size: 28, weight: .semibold))
+                .frame(width: 57, height: 57)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .allowsHitTesting(isEnabled)
+        .accessibilityLabel("Virar câmera")
+        .accessibilityHint("Alterna entre a câmera traseira e a frontal.")
     }
 }
 

@@ -1,4 +1,5 @@
 import CoreGraphics
+import OSLog
 import UIKit
 
 // MARK: - Pipeline errors
@@ -15,6 +16,22 @@ enum PhotoMusicPipelineError: Error, LocalizedError {
         case .encodeFailed: "Não foi possível codificar a capa."
         }
     }
+}
+
+struct PhotoMusicColorProfile: Sendable {
+    let hue: Double
+    let saturation: Double
+    let luminance: Double
+    let hueVarianceDegrees: Double
+    let edgeDensity: Double
+    let rootPitchClass: PitchClass
+}
+
+struct PreparedPhotoInput: Sendable {
+    let originalImageData: Data
+    let analysisInputData: Data
+    let processedPreviewData: Data
+    let colorProfile: PhotoMusicColorProfile
 }
 
 // MARK: - PhotoMusicPipeline
@@ -41,51 +58,115 @@ enum PhotoMusicPipeline {
     private static let weightedHueSofteningExponent  = 0.85
     private static let toneAnalysisMaximumDimension  = 256
 
-    // MARK: Color analysis result (local, not persisted)
+    #if DEBUG
+    private static let performanceLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Dap",
+        category: "PhotoPipeline"
+    )
 
-    private struct ColorProfile {
-        let hue:                Double
-        let saturation:         Double
-        let luminance:          Double
-        let hueVarianceDegrees: Double
-        let edgeDensity:        Double
-        let rootPitchClass:     PitchClass
+    private static func logDuration(
+        _ label: String,
+        startedAt: ContinuousClock.Instant,
+        clock: ContinuousClock
+    ) {
+        performanceLogger.debug(
+            "\(label, privacy: .public): \(String(describing: startedAt.duration(to: clock.now)), privacy: .public)"
+        )
     }
+    #endif
 
     // MARK: Public entry point
 
     static func process(imageData: Data) async throws -> ProcessedPhotoSound {
-        try await Task.detached(priority: .userInitiated) {
-            // 1. Decode + normalize orientation via UIImage draw (thread-safe per UIKit docs).
+        let prepared = try await prepare(imageData: imageData)
+        return try await process(prepared: prepared)
+    }
+
+    static func prepare(imageData: Data) async throws -> PreparedPhotoInput {
+        let worker = Task.detached(priority: .userInitiated) {
+            let clock = ContinuousClock()
+            let totalStart = clock.now
+            let normalizationStart = clock.now
+
+            // Decode + normalize orientation via UIImage draw (thread-safe per UIKit docs).
             guard let uiImage = UIImage(data: imageData) else {
                 throw PhotoMusicPipelineError.decodeFailed
             }
-            let normalized = try normalizedCGImage(from: uiImage)
-
-            // 2. Analyze color on a 64×64 scaled version of the shared CGImage.
-            let colorProfile = try analyzeColor(cgImage: normalized)
-
-            // 3. Tone analysis stays on direct source luminance so cover tuning does not change music.
-            let (gridLevels, significantToneCount) = try analyzeTones(cgImage: normalized)
-
-            // 4. Build musical sequence from color profile + tone grid.
-            let sequence = buildSequence(
-                colorProfile: colorProfile,
-                gridLevels: gridLevels,
-                significantToneCount: significantToneCount
+            let normalized = try normalizedCGImage(
+                from: uiImage,
+                maximumDimension: RetroCoverRenderer.coverMaximumDimension
             )
+            guard let analysisInputData = UIImage(cgImage: normalized).pngData() else {
+                throw PhotoMusicPipelineError.encodeFailed
+            }
+            try Task.checkCancellation()
+            #if DEBUG
+            logDuration("normalization + analysis input", startedAt: normalizationStart, clock: clock)
+            #endif
 
-            // 5. Resolve the persisted cover palette from the selected root pitch.
-            let rootPitchClass = colorProfile.rootPitchClass
-            let palette = RetroCoverRenderer.tonalPalette(for: rootPitchClass)
+            // The root pitch is needed to select the canonical Cover palette.
+            let colorAnalysisStart = clock.now
+            let colorProfile = try analyzeColor(cgImage: normalized)
+            try Task.checkCancellation()
+            #if DEBUG
+            logDuration("downsample + color analysis", startedAt: colorAnalysisStart, clock: clock)
+            #endif
 
-            // 6. Render the new pattern halftone cover from the prepared original image.
+            let visualStart = clock.now
+            let palette = RetroCoverRenderer.tonalPalette(for: colorProfile.rootPitchClass)
             let coverCG = try RetroCoverRenderer.patternHalftone(cgImage: normalized, palette: palette)
             guard let pngData = UIImage(cgImage: coverCG).pngData() else {
                 throw PhotoMusicPipelineError.encodeFailed
             }
+            try Task.checkCancellation()
+            #if DEBUG
+            logDuration("Dap visual preview", startedAt: visualStart, clock: clock)
+            logDuration("visual preparation total", startedAt: totalStart, clock: clock)
+            #endif
 
-            // 7. Assemble result — only Sendable values cross out of this task.
+            return PreparedPhotoInput(
+                originalImageData: imageData,
+                analysisInputData: analysisInputData,
+                processedPreviewData: pngData,
+                colorProfile: colorProfile
+            )
+        }
+        return try await withTaskCancellationHandler(operation: {
+            try await worker.value
+        }, onCancel: {
+            worker.cancel()
+        })
+    }
+
+    static func process(prepared: PreparedPhotoInput) async throws -> ProcessedPhotoSound {
+        let worker = Task.detached(priority: .userInitiated) {
+            let clock = ContinuousClock()
+            let musicalStart = clock.now
+
+            guard let normalized = UIImage(data: prepared.analysisInputData)?.cgImage else {
+                throw PhotoMusicPipelineError.decodeFailed
+            }
+            try Task.checkCancellation()
+
+            // Tone analysis stays on direct source luminance so Cover tuning does not change music.
+            let toneAnalysisStart = clock.now
+            let (gridLevels, significantToneCount) = try analyzeTones(cgImage: normalized)
+            #if DEBUG
+            logDuration("musical downsample + tone analysis", startedAt: toneAnalysisStart, clock: clock)
+            #endif
+
+            let sequenceStart = clock.now
+            let sequence = buildSequence(
+                colorProfile: prepared.colorProfile,
+                gridLevels: gridLevels,
+                significantToneCount: significantToneCount
+            )
+            try Task.checkCancellation()
+            #if DEBUG
+            logDuration("sequence", startedAt: sequenceStart, clock: clock)
+            logDuration("musical analysis total", startedAt: musicalStart, clock: clock)
+            #endif
+
             let id    = UUID()
             let sound = PhotoSound(
                 id: id,
@@ -96,19 +177,33 @@ enum PhotoMusicPipeline {
                 coverFilename: "\(id.uuidString).png",
                 sequence: sequence
             )
-            return ProcessedPhotoSound(sound: sound, coverData: pngData)
-        }.value
+            return ProcessedPhotoSound(sound: sound, coverData: prepared.processedPreviewData)
+        }
+        return try await withTaskCancellationHandler(operation: {
+            try await worker.value
+        }, onCancel: {
+            worker.cancel()
+        })
     }
 
     // MARK: - Image normalization
 
     /// Draws the UIImage into a fresh CGContext so EXIF orientation is applied.
     /// UIGraphicsPushContext and UIImage.draw are thread-safe per UIKit documentation.
-    private static func normalizedCGImage(from image: UIImage) throws -> CGImage {
+    private static func normalizedCGImage(
+        from image: UIImage,
+        maximumDimension: Int
+    ) throws -> CGImage {
         let size   = image.size
         let scale  = image.scale
-        let width  = max(1, Int(size.width  * scale))
-        let height = max(1, Int(size.height * scale))
+        let sourceWidth = max(1, Int(size.width * scale))
+        let sourceHeight = max(1, Int(size.height * scale))
+        let sourceMaximum = max(sourceWidth, sourceHeight)
+        let dimensionScale = sourceMaximum > maximumDimension
+            ? Double(maximumDimension) / Double(sourceMaximum)
+            : 1
+        let width = max(1, Int((Double(sourceWidth) * dimensionScale).rounded()))
+        let height = max(1, Int((Double(sourceHeight) * dimensionScale).rounded()))
 
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         guard let ctx = CGContext(
@@ -132,7 +227,7 @@ enum PhotoMusicPipeline {
 
     // MARK: - Color analysis (adapted from PhotoColorAnalyzer)
 
-    private static func analyzeColor(cgImage source: CGImage) throws -> ColorProfile {
+    private static func analyzeColor(cgImage source: CGImage) throws -> PhotoMusicColorProfile {
         let side = analysisSide
         var pixels = [UInt8](repeating: 0, count: side * side * 4)
         guard let ctx = CGContext(
@@ -175,14 +270,14 @@ enum PhotoMusicPipeline {
         }
 
         guard weight > 0 else {
-            return ColorProfile(hue: 0, saturation: 0, luminance: 0,
-                                hueVarianceDegrees: 0, edgeDensity: 0,
-                                rootPitchClass: .c)
+            return PhotoMusicColorProfile(hue: 0, saturation: 0, luminance: 0,
+                                          hueVarianceDegrees: 0, edgeDensity: 0,
+                                          rootPitchClass: .c)
         }
         r /= weight; g /= weight; b /= weight
         let (meanHue, meanSat) = hsb(r: r, g: g, b: b)
         let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        return ColorProfile(
+        return PhotoMusicColorProfile(
             hue: meanHue, saturation: meanSat, luminance: lum,
             hueVarianceDegrees: circularVarianceDegrees(hues),
             edgeDensity: sobelEdgeDensity(gray, side: side),
@@ -253,7 +348,7 @@ enum PhotoMusicPipeline {
 
     // MARK: - Sequence builder (adapted from ImageSequenceGenerator)
 
-    private static func buildSequence(colorProfile p: ColorProfile,
+    private static func buildSequence(colorProfile p: PhotoMusicColorProfile,
                                       gridLevels: [Int],
                                       significantToneCount: Int) -> MusicSequence {
         let root     = p.rootPitchClass.rawValue
@@ -311,7 +406,7 @@ enum PhotoMusicPipeline {
 
     // MARK: - Musical heuristics
 
-    private static func musicScale(for p: ColorProfile) -> MusicScale {
+    private static func musicScale(for p: PhotoMusicColorProfile) -> MusicScale {
         if p.hueVarianceDegrees > highHueVarianceDegrees  { return .wholeTone }
         if p.hueVarianceDegrees >= lowHueVarianceDegrees  { return .dorian }
         return p.saturation >= 0.45 ? .majorPentatonic : .minorPentatonic

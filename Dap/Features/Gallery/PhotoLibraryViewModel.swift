@@ -63,6 +63,12 @@ final class PhotoLibraryViewModel {
         subsystem: Bundle.main.bundleIdentifier ?? "Dap",
         category: "PhotoMetadata"
     )
+    #if DEBUG
+    private let performanceLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Dap",
+        category: "Performance"
+    )
+    #endif
 
     // MARK: Init
 
@@ -119,7 +125,7 @@ final class PhotoLibraryViewModel {
 
         var workingItems = items
         var workingCoverData = coverDataByID
-        var successfulImports: [(soundID: UUID, pickerItem: PhotosPickerItem)] = []
+        var successfulImports: [(soundID: UUID, imageData: Data)] = []
         var importedCount = 0
         var failedCount = 0
 
@@ -133,10 +139,20 @@ final class PhotoLibraryViewModel {
                     continue
                 }
 
-                let result = try await PhotoMusicPipeline.process(imageData: imageData)
+                let prepared = try await PhotoMusicPipeline.prepare(imageData: imageData)
+                let result = try await PhotoMusicPipeline.process(prepared: prepared)
+                #if DEBUG
+                let persistenceClock = ContinuousClock()
+                let persistenceStart = persistenceClock.now
+                #endif
                 workingItems = try await PhotoStore.shared.save(result, existing: workingItems)
+                #if DEBUG
+                performanceLogger.debug(
+                    "batch photo persistence: \(String(describing: persistenceStart.duration(to: persistenceClock.now)), privacy: .public)"
+                )
+                #endif
                 workingCoverData[result.sound.id] = result.coverData
-                successfulImports.append((result.sound.id, pickerItem))
+                successfulImports.append((result.sound.id, imageData))
                 importedCount += 1
                 batchCompletedCount += 1
             } catch is CancellationError {
@@ -172,8 +188,44 @@ final class PhotoLibraryViewModel {
         isImporting = true
         defer { isImporting = false }
 
-        let result  = try await PhotoMusicPipeline.process(imageData: imageData)
+        let prepared = try await PhotoMusicPipeline.prepare(imageData: imageData)
+        return try await persistPreparedPhoto(prepared)
+    }
+
+    /// Persists a photo after its visual preparation has already completed.
+    @discardableResult
+    func importPreparedPhoto(
+        _ prepared: PreparedPhotoInput
+    ) async throws -> PhotoSound? {
+        guard !isImporting else { return nil }
+        isImporting = true
+        defer { isImporting = false }
+
+        return try await persistPreparedPhoto(prepared)
+    }
+
+    private func persistPreparedPhoto(_ prepared: PreparedPhotoInput) async throws -> PhotoSound {
+        let result = try await PhotoMusicPipeline.process(prepared: prepared)
+        return try await persistProcessedPhotoSound(
+            result,
+            originalImageData: prepared.originalImageData
+        )
+    }
+
+    private func persistProcessedPhotoSound(
+        _ result: ProcessedPhotoSound,
+        originalImageData: Data
+    ) async throws -> PhotoSound {
+        #if DEBUG
+        let clock = ContinuousClock()
+        let persistenceStart = clock.now
+        #endif
         let updated = try await PhotoStore.shared.save(result, existing: items)
+        #if DEBUG
+        performanceLogger.debug(
+            "photo persistence: \(String(describing: persistenceStart.duration(to: clock.now)), privacy: .public)"
+        )
+        #endif
 
         // Update memory only after full disk success.
         coverDataByID[result.sound.id] = result.coverData
@@ -181,7 +233,7 @@ final class PhotoLibraryViewModel {
         metadataStateByID[result.sound.id] = .idle
 
         // Kick off background metadata generation (non-throwing, non-blocking).
-        scheduleMetadataRefinement(for: result.sound, imageData: imageData)
+        scheduleMetadataRefinement(for: result.sound, imageData: originalImageData)
         return result.sound
     }
 
@@ -202,19 +254,17 @@ final class PhotoLibraryViewModel {
     }
 
     private func scheduleBatchMetadataRefinement(
-        for successfulImports: [(soundID: UUID, pickerItem: PhotosPickerItem)]
+        for successfulImports: [(soundID: UUID, imageData: Data)]
     ) {
         Task { [weak self] in
             guard let self else { return }
 
             for successfulImport in successfulImports {
                 guard !Task.isCancelled else { break }
-
-                guard let imageData = try? await successfulImport.pickerItem.loadTransferable(type: Data.self) else {
-                    continue
-                }
-
-                await self.refineMetadata(for: successfulImport.soundID, imageData: imageData)
+                await self.refineMetadata(
+                    for: successfulImport.soundID,
+                    imageData: successfulImport.imageData
+                )
             }
         }
     }

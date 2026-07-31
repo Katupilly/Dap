@@ -1,5 +1,8 @@
 import AVFoundation
+import CoreHaptics
 import ImageIO
+import OSLog
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -14,12 +17,21 @@ struct OnboardingView: View {
     @State private var controller: CameraController?
     @State private var input: OnboardingInput?
     @State private var centralDisplayImage: UIImage?
+    @State private var capturedPreviewImage: UIImage?
+    @State private var preparationReveal = false
     @State private var assemblyTask: Task<Void, Never>?
     @State private var assemblyToken = UUID()
     @State private var captureToken = UUID()
+    @State private var captureTask: Task<Void, Never>?
+    @State private var preparationTask: Task<Void, Never>?
+    @State private var preparationToken = UUID()
+    @State private var preparedPhoto: PreparedPhotoInput?
+    @State private var selectedPhoto: PhotosPickerItem?
     @State private var isCapturing = false
+    @State private var isPreparingPhoto = false
     @State private var isSwitchingCamera = false
     @State private var isRequestingPermission = false
+    @State private var isPushingIntro = false
     @State private var hasAnimatedCluster = false
     @State private var clusterAssembled = false
     @State private var assemblyMessage = "Lendo as cores da sua foto…"
@@ -27,10 +39,19 @@ struct OnboardingView: View {
     @State private var completionFeedback = 0
     @State private var splashRiseFeedback = 0
     @State private var splashRotationFeedback = 0
+    @State private var splashExitFeedback = 0
+    @State private var splashHapticPlayer = SplashHapticPlayer()
     @State private var primaryActionFeedback = 0
     @State private var secondaryActionFeedback = 0
     @State private var permissionIssue: OnboardingPermissionIssue = .denied
     @State private var failure: OnboardingFailure?
+
+    #if DEBUG
+    private static let performanceLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Dap",
+        category: "Performance"
+    )
+    #endif
 
     var body: some View {
         ZStack {
@@ -49,6 +70,9 @@ struct OnboardingView: View {
             if newPhase != .capture {
                 stopCamera()
             }
+            if newPhase != .splash {
+                splashHapticPlayer.stop()
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -66,20 +90,29 @@ struct OnboardingView: View {
             }
         }
         .onDisappear {
+            captureTask?.cancel()
+            captureTask = nil
+            preparationTask?.cancel()
+            preparationTask = nil
             assemblyTask?.cancel()
             assemblyTask = nil
             library.stopTransientPlayback()
             stopCamera()
+            splashHapticPlayer.stop()
         }
         .sensoryFeedback(.selection, trigger: captureFeedback)
         .sensoryFeedback(.success, trigger: completionFeedback)
         .sensoryFeedback(
-            .impact(weight: .heavy, intensity: 0.8),
+            .impact(weight: .heavy, intensity: 1.0),
             trigger: splashRiseFeedback
         )
         .sensoryFeedback(
-            .impact(weight: .medium, intensity: 0.55),
+            .impact(flexibility: .rigid, intensity: 1.0),
             trigger: splashRotationFeedback
+        )
+        .sensoryFeedback(
+            .impact(weight: .medium, intensity: 0.8),
+            trigger: splashExitFeedback
         )
         .sensoryFeedback(
             .impact(weight: .medium, intensity: 0.8),
@@ -90,6 +123,11 @@ struct OnboardingView: View {
             trigger: secondaryActionFeedback
         )
         .statusBarHidden(!phase.usesLightLayout)
+        .onChange(of: selectedPhoto) { _, item in
+            guard let item else { return }
+            captureTask?.cancel()
+            captureTask = Task { await importPhoto(item) }
+        }
         .task(id: phase) {
             await advanceSplashIfNeeded()
         }
@@ -97,7 +135,12 @@ struct OnboardingView: View {
 
     private var darkContent: some View {
         ZStack {
-            OnboardingBackground(reduceMotion: reduceMotion)
+            if phase == .capture || phase == .preparingReview {
+                Color.onboardingInkwell
+                    .ignoresSafeArea()
+            } else {
+                OnboardingBackground(reduceMotion: reduceMotion)
+            }
 
             VStack(spacing: 0) {
                 header
@@ -122,15 +165,29 @@ struct OnboardingView: View {
         switch phase {
         case .splash:
             OnboardingSplashMotionView(reduceMotion: reduceMotion)
-        case .photoIntoMusic:
-            OnboardingPhotoIntoMusicView(reduceMotion: reduceMotion) {
-                primaryActionFeedback += 1
-                setPhaseWithoutAnimation(.permissionPrimer)
-            }
-        case .permissionPrimer:
-            OnboardingPermissionPrimerView(
+                .onAppear {
+                    if !reduceMotion {
+                        _ = splashHapticPlayer.prepare()
+                    }
+                }
+        case .photoIntoMusic, .permissionPrimer:
+            OnboardingIntroFlowView(
+                phase: phase,
                 reduceMotion: reduceMotion,
+                isCreateDisabled: isPushingIntro,
                 isAllowDisabled: isRequestingPermission,
+                onCreate: {
+                    guard phase == .photoIntoMusic, !isPushingIntro else { return }
+                    isPushingIntro = true
+                    primaryActionFeedback += 1
+                    withAnimation(
+                        reduceMotion
+                            ? .easeOut(duration: 0.16)
+                            : .snappy(duration: 0.42, extraBounce: 0)
+                    ) {
+                        phase = .permissionPrimer
+                    }
+                },
                 onAllow: {
                     guard !isRequestingPermission else { return }
                     isRequestingPermission = true
@@ -140,10 +197,12 @@ struct OnboardingView: View {
                 onDemo: {
                     guard !isRequestingPermission else { return }
                     secondaryActionFeedback += 1
-                    beginAssembly(.demo)
+                    startPhotoPreparation(
+                        source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
+                    )
                 }
             )
-        case .capture, .review, .assembling, .ready, .permissionDenied, .technicalError:
+        case .capture, .preparingReview, .review, .assembling, .ready, .permissionDenied, .technicalError:
             EmptyView()
         }
     }
@@ -164,6 +223,8 @@ struct OnboardingView: View {
             return
         }
 
+        let usesCoreHaptics = splashHapticPlayer.startPattern()
+
         do {
             try await Task.sleep(nanoseconds: OnboardingSplashTiming.riseStartNanoseconds)
         } catch {
@@ -171,7 +232,9 @@ struct OnboardingView: View {
         }
 
         guard isCurrentSplashTask() else { return }
-        splashRiseFeedback += 1
+        if !usesCoreHaptics {
+            splashRiseFeedback += 1
+        }
 
         do {
             try await Task.sleep(
@@ -183,12 +246,28 @@ struct OnboardingView: View {
         }
 
         guard isCurrentSplashTask() else { return }
-        splashRotationFeedback += 1
+        if !usesCoreHaptics {
+            splashRotationFeedback += 1
+        }
+
+        do {
+            try await Task.sleep(
+                nanoseconds: OnboardingSplashTiming.exitStartNanoseconds
+                    - OnboardingSplashTiming.rotationStartNanoseconds
+            )
+        } catch {
+            return
+        }
+
+        guard isCurrentSplashTask() else { return }
+        if !usesCoreHaptics {
+            splashExitFeedback += 1
+        }
 
         do {
             try await Task.sleep(
                 nanoseconds: OnboardingSplashTiming.durationNanoseconds
-                    - OnboardingSplashTiming.rotationStartNanoseconds
+                    - OnboardingSplashTiming.exitStartNanoseconds
             )
         } catch {
             return
@@ -210,6 +289,11 @@ struct OnboardingView: View {
     @MainActor
     private func isCurrentSplashTask() -> Bool {
         !Task.isCancelled && phase == .splash
+    }
+
+    @MainActor
+    private func isCurrentCapture(_ token: UUID) -> Bool {
+        !Task.isCancelled && phase == .capture && captureToken == token
     }
 
     private var header: some View {
@@ -239,6 +323,9 @@ struct OnboardingView: View {
 
         case .capture:
             captureContent
+
+        case .preparingReview:
+            photoPreparationContent
 
         case .review:
             reviewContent
@@ -281,27 +368,33 @@ struct OnboardingView: View {
                         .scaleEffect(1.25)
                 }
 
-                if controller != nil {
-                    Button {
-                        Task { await switchCamera() }
-                    } label: {
-                        Image(systemName: "arrow.trianglehead.2.clockwise")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .background(.black.opacity(0.38), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isCapturing || isSwitchingCamera)
-                    .accessibilityLabel("Virar câmera")
-                    .accessibilityHint("Alterna entre a câmera traseira e a frontal.")
-                    .padding(12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                }
             }
             .frame(maxWidth: 340)
         }
         .accessibilityLabel("Pré-visualização da câmera")
+    }
+
+    private var photoPreparationContent: some View {
+        VStack(spacing: 12) {
+            if let capturedPreviewImage {
+                Image(uiImage: capturedPreviewImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: 340)
+                    .aspectRatio(4.0 / 5.0, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .saturation(preparationReveal ? 1 : 0.86)
+                    .brightness(preparationReveal ? 0.02 : -0.02)
+                    .contrast(preparationReveal ? 1.02 : 0.98)
+                    .animation(.easeInOut(duration: 0.5), value: preparationReveal)
+                    .transition(.opacity)
+                    .accessibilityLabel("Foto selecionada")
+            }
+
+            Text("Revelando sua foto…")
+                .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
+                .foregroundStyle(.white.opacity(0.76))
+        }
     }
 
     private var reviewContent: some View {
@@ -317,6 +410,7 @@ struct OnboardingView: View {
                     .frame(maxWidth: 340)
                     .aspectRatio(4.0 / 5.0, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .transition(.opacity)
                     .accessibilityLabel("Foto capturada")
             }
         }
@@ -370,34 +464,64 @@ struct OnboardingView: View {
 
         case .capture:
             VStack(spacing: 16) {
-                Button {
-                    Task { await capturePhoto() }
-                } label: {
-                    ZStack {
-                        Circle()
-                            .stroke(.white, lineWidth: 4)
-                            .frame(width: 88, height: 88)
+                HStack {
+                    Color.clear
+                        .frame(width: 57, height: 57)
 
-                        if isCapturing {
-                            ProgressView()
-                                .tint(.white)
-                        } else {
+                    Spacer()
+
+                    Button {
+                        captureTask = Task { await capturePhoto() }
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .stroke(.white, lineWidth: 4)
+                                .frame(width: 88, height: 88)
+
                             Circle()
                                 .fill(.white)
                                 .frame(width: 74, height: 74)
                         }
                     }
+                    .buttonStyle(.plain)
+                    .disabled(controller == nil || isCapturing || isPreparingPhoto)
+                    .accessibilityLabel("Tirar foto")
+                    .accessibilityHint("Captura a foto que será transformada em música.")
+
+                    Spacer()
+
+                    CaptureFlipCameraButton(
+                        isEnabled: controller != nil
+                            && !isCapturing
+                            && !isPreparingPhoto
+                            && !isSwitchingCamera
+                    ) {
+                        captureTask = Task { await switchCamera() }
+                    }
                 }
+                .padding(.horizontal, 16)
+
+                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                    Text("Escolher da biblioteca")
+                }
+                .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
+                .foregroundStyle(.white.opacity(0.82))
+                .frame(height: 38)
                 .buttonStyle(.plain)
-                .disabled(controller == nil || isCapturing)
-                .accessibilityLabel("Tirar foto")
-                .accessibilityHint("Captura a foto que será transformada em música.")
+                .disabled(isCapturing || isPreparingPhoto || isSwitchingCamera)
 
                 secondaryButton("Usar uma imagem de demonstração") {
-                    beginAssembly(.demo)
+                    startPhotoPreparation(
+                        source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
+                    )
                 }
-                .disabled(isCapturing)
+                .disabled(isCapturing || isPreparingPhoto || isSwitchingCamera)
             }
+
+        case .preparingReview:
+            Text("Revelando sua foto…")
+                .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
+                .foregroundStyle(.white.opacity(0.76))
 
         case .review:
             VStack(spacing: 12) {
@@ -443,13 +567,17 @@ struct OnboardingView: View {
                     }
                 } else {
                     primaryButton("Continuar com demonstração", systemImage: "play.fill") {
-                        beginAssembly(.demo)
+                        startPhotoPreparation(
+                            source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
+                        )
                     }
                 }
 
                 secondaryButton(permissionIssue == .denied ? "Continuar com demonstração" : "Verificar novamente") {
                     if permissionIssue == .denied {
-                        beginAssembly(.demo)
+                        startPhotoPreparation(
+                            source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
+                        )
                     } else {
                         recheckCameraPermission()
                     }
@@ -463,7 +591,9 @@ struct OnboardingView: View {
                 }
 
                 secondaryButton("Continuar com demonstração") {
-                    beginAssembly(.demo)
+                    startPhotoPreparation(
+                        source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
+                    )
                 }
             }
         }
@@ -560,9 +690,9 @@ struct OnboardingView: View {
     }
 
     @MainActor
-    private func capturePhoto() async {
+    private func importPhoto(_ item: PhotosPickerItem) async {
+        selectedPhoto = nil
         guard phase == .capture,
-              let controller,
               !isCapturing,
               !isSwitchingCamera else {
             return
@@ -570,20 +700,19 @@ struct OnboardingView: View {
 
         let token = UUID()
         captureToken = token
-        isCapturing = true
-        captureFeedback += 1
-        defer { isCapturing = false }
+        isPreparingPhoto = true
+        defer { isPreparingPhoto = false }
+        let flowClock = ContinuousClock()
+        let flowStart = flowClock.now
 
         do {
-            let data = try await controller.capturePhoto(flashMode: .off)
-            guard phase == .capture, captureToken == token else { return }
-
-            stopCamera(invalidateCapture: false)
-            input = .captured(data)
-            setPreview(data)
-            withAnimation(.easeOut(duration: 0.18)) {
-                phase = .review
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                throw PhotoMusicPipelineError.decodeFailed
             }
+            guard !Task.isCancelled, phase == .capture, captureToken == token else { return }
+            startPhotoPreparation(source: .library(data), startedAt: flowStart)
+        } catch is CancellationError {
+            return
         } catch {
             guard captureToken == token else { return }
             failure = .captureFailed
@@ -594,10 +723,104 @@ struct OnboardingView: View {
     }
 
     @MainActor
+    private func capturePhoto() async {
+        guard phase == .capture,
+              let controller,
+              !isCapturing,
+              !isPreparingPhoto,
+              !isSwitchingCamera else {
+            return
+        }
+
+        let token = UUID()
+        captureToken = token
+        isPreparingPhoto = true
+        defer { isPreparingPhoto = false }
+        let flowClock = ContinuousClock()
+        let flowStart = flowClock.now
+        isCapturing = true
+        captureFeedback += 1
+        defer { isCapturing = false }
+
+        do {
+            let data = try await controller.capturePhoto(flashMode: .off)
+            guard isCurrentCapture(token) else { return }
+
+            stopCamera(invalidateCapture: false)
+            startPhotoPreparation(source: .camera(data), startedAt: flowStart)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard captureToken == token else { return }
+            failure = .captureFailed
+            withAnimation(.easeOut(duration: 0.16)) {
+                phase = .technicalError
+            }
+        }
+    }
+
+    @MainActor
+    private func startPhotoPreparation(
+        source: OnboardingPhotoSource,
+        startedAt: ContinuousClock.Instant? = nil
+    ) {
+        preparationTask?.cancel()
+        let token = UUID()
+        preparationToken = token
+        preparedPhoto = nil
+        input = source.input
+        centralDisplayImage = nil
+        capturedPreviewImage = UIImage(data: source.data)
+        preparationReveal = false
+        stopCamera()
+
+        withAnimation(.easeOut(duration: 0.16)) {
+            phase = .preparingReview
+        }
+        preparationReveal = true
+
+        let clock = ContinuousClock()
+        let preparationStart = startedAt ?? clock.now
+        preparationTask = Task { @MainActor [source, token] in
+            do {
+                let prepared = try await PhotoMusicPipeline.prepare(imageData: source.data)
+                guard isCurrentPreparation(token) else { return }
+
+                preparedPhoto = prepared
+                centralDisplayImage = OnboardingTemporaryArtwork.displayImage(
+                    from: prepared.processedPreviewData
+                )
+                #if DEBUG
+                Self.performanceLogger.debug(
+                    "onboarding photo to review: \(String(describing: preparationStart.duration(to: clock.now)), privacy: .public)"
+                )
+                #endif
+
+                if source.isDemo {
+                    beginAssembly(source.input, preparedPhoto: prepared)
+                } else {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        phase = .review
+                    }
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard isCurrentPreparation(token) else { return }
+                failure = source.isDemo ? .generationFailed : .captureFailed
+                withAnimation(.easeOut(duration: 0.16)) {
+                    phase = .technicalError
+                }
+            }
+        }
+    }
+
+    @MainActor
     private func switchCamera() async {
         guard phase == .capture,
               let controller,
               !isCapturing,
+              !isPreparingPhoto,
               !isSwitchingCamera else {
             return
         }
@@ -618,7 +841,7 @@ struct OnboardingView: View {
     @MainActor
     private func confirmPhoto() {
         guard phase == .review, case .captured = input, let input else { return }
-        beginAssembly(input)
+        beginAssembly(input, preparedPhoto: preparedPhoto)
     }
 
     @MainActor
@@ -626,8 +849,15 @@ struct OnboardingView: View {
         guard phase == .review else { return }
 
         assemblyTask?.cancel()
+        captureTask?.cancel()
+        preparationTask?.cancel()
+        preparationToken = UUID()
         input = nil
         centralDisplayImage = nil
+        capturedPreviewImage = nil
+        preparationReveal = false
+        preparedPhoto = nil
+        selectedPhoto = nil
         clusterAssembled = false
         hasAnimatedCluster = false
         withAnimation(.easeOut(duration: 0.18)) {
@@ -637,20 +867,26 @@ struct OnboardingView: View {
     }
 
     @MainActor
-    private func beginAssembly(_ input: OnboardingInput) {
+    private func beginAssembly(
+        _ input: OnboardingInput,
+        preparedPhoto: PreparedPhotoInput? = nil
+    ) {
         guard phase != .assembling, phase != .ready else { return }
 
         assemblyTask?.cancel()
         let token = UUID()
         assemblyToken = token
+        let resolvedPreparedPhoto = preparedPhoto ?? self.preparedPhoto
         self.input = input
         failure = nil
         clusterAssembled = false
         hasAnimatedCluster = false
+        self.preparedPhoto = resolvedPreparedPhoto
+        capturedPreviewImage = nil
         assemblyMessage = "Lendo as cores da sua foto…"
 
-        if case .demo = input {
-            setPreview(OnboardingTemporaryArtwork.fallbackImageData())
+        if case .demo = input, resolvedPreparedPhoto == nil {
+            centralDisplayImage = nil
         }
         stopCamera()
 
@@ -658,7 +894,7 @@ struct OnboardingView: View {
             phase = .assembling
         }
 
-        assemblyTask = Task { @MainActor [input, token] in
+        assemblyTask = Task { @MainActor [input, token, resolvedPreparedPhoto] in
             do {
                 try await Task.sleep(nanoseconds: 350_000_000)
                 guard isCurrentAssembly(token) else { return }
@@ -667,14 +903,27 @@ struct OnboardingView: View {
                 let sound: PhotoSound
                 switch input {
                 case .captured(let data):
-                    guard let imported = try await library.importPhotoSoundData(data) else {
+                    let imported: PhotoSound?
+                    if let resolvedPreparedPhoto {
+                        imported = try await library.importPreparedPhoto(resolvedPreparedPhoto)
+                    } else {
+                        imported = try await library.importPhotoSoundData(data)
+                    }
+                    guard let imported else {
                         throw OnboardingImportError.alreadyImporting
                     }
                     sound = imported
                 case .demo:
-                    let processed = try await PhotoMusicPipeline.process(
-                        imageData: OnboardingTemporaryArtwork.fallbackImageData()
-                    )
+                    let processed: ProcessedPhotoSound
+                    if let resolvedPreparedPhoto {
+                        processed = try await PhotoMusicPipeline.process(prepared: resolvedPreparedPhoto)
+                    } else {
+                        processed = try await PhotoMusicPipeline.process(
+                            imageData: OnboardingTemporaryArtwork.fallbackImageData()
+                        )
+                    }
+                    guard isCurrentAssembly(token) else { return }
+                    centralDisplayImage = OnboardingTemporaryArtwork.displayImage(from: processed.coverData)
                     sound = processed.sound
                 }
 
@@ -684,6 +933,7 @@ struct OnboardingView: View {
                     hasAnimatedCluster = true
                     clusterAssembled = true
                 }
+                self.preparedPhoto = nil
                 try await Task.sleep(nanoseconds: reduceMotion ? 180_000_000 : 920_000_000)
                 guard isCurrentAssembly(token) else { return }
 
@@ -709,11 +959,6 @@ struct OnboardingView: View {
         reduceMotion
             ? .easeOut(duration: 0.18)
             : .spring(response: 0.72, dampingFraction: 0.78)
-    }
-
-    @MainActor
-    private func setPreview(_ data: Data) {
-        centralDisplayImage = OnboardingTemporaryArtwork.displayImage(from: data)
     }
 
     @MainActor
@@ -758,12 +1003,18 @@ struct OnboardingView: View {
             Task { await enterCapturePhase() }
         case .importFailed:
             if let input {
-                beginAssembly(input)
+                beginAssembly(input, preparedPhoto: preparedPhoto)
             } else {
                 phase = .permissionPrimer
             }
         case .generationFailed:
-            beginAssembly(.demo)
+            if let preparedPhoto {
+                beginAssembly(.demo, preparedPhoto: preparedPhoto)
+            } else {
+                startPhotoPreparation(
+                    source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
+                )
+            }
         case .permissionCheckFailed, nil:
             phase = .permissionPrimer
         }
@@ -772,6 +1023,11 @@ struct OnboardingView: View {
     @MainActor
     private func isCurrentAssembly(_ token: UUID) -> Bool {
         !Task.isCancelled && phase == .assembling && assemblyToken == token
+    }
+
+    @MainActor
+    private func isCurrentPreparation(_ token: UUID) -> Bool {
+        !Task.isCancelled && phase == .preparingReview && preparationToken == token
     }
 
     @MainActor
@@ -784,11 +1040,90 @@ struct OnboardingView: View {
     }
 }
 
+@MainActor
+private final class SplashHapticPlayer {
+    private var engine: CHHapticEngine?
+    private var player: CHHapticPatternPlayer?
+
+    func startPattern() -> Bool {
+        try? player?.stop(atTime: CHHapticTimeImmediate)
+        player = nil
+        guard prepare() else { return false }
+
+        let events = [
+            transient(intensity: 0.48, sharpness: 0.38, at: 0.404),
+            transient(intensity: 0.58, sharpness: 0.44, at: 0.800),
+            transient(intensity: 0.68, sharpness: 0.50, at: 1.200),
+            transient(intensity: 0.78, sharpness: 0.58, at: 1.600),
+            transient(intensity: 0.88, sharpness: 0.68, at: 1.960),
+            transient(intensity: 1.00, sharpness: 1.00, at: 2.22724),
+            transient(intensity: 0.72, sharpness: 0.90, at: 2.300),
+            transient(intensity: 0.65, sharpness: 0.48, at: 3.004)
+        ]
+
+        do {
+            let pattern = try CHHapticPattern(events: events, parameters: [])
+            let player = try engine?.makePlayer(with: pattern)
+            guard let player else { return false }
+            try player.start(atTime: CHHapticTimeImmediate)
+            self.player = player
+            return true
+        } catch {
+            stop()
+            return false
+        }
+    }
+
+    func prepare() -> Bool {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return false }
+        guard engine == nil else { return true }
+
+        do {
+            let engine = try CHHapticEngine()
+            engine.resetHandler = { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.handleEngineReset()
+                }
+            }
+            try engine.start()
+            self.engine = engine
+            return true
+        } catch {
+            self.engine = nil
+            return false
+        }
+    }
+
+    func stop() {
+        try? player?.stop(atTime: CHHapticTimeImmediate)
+        player = nil
+        engine?.stop(completionHandler: nil)
+        engine = nil
+    }
+
+    private func transient(intensity: Float, sharpness: Float, at time: TimeInterval) -> CHHapticEvent {
+        CHHapticEvent(
+            eventType: .hapticTransient,
+            parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness)
+            ],
+            relativeTime: time
+        )
+    }
+
+    private func handleEngineReset() {
+        player = nil
+        engine = nil
+    }
+}
+
 private enum OnboardingSplashTiming {
     static let duration: TimeInterval = 4
     static let durationNanoseconds: UInt64 = 4_000_000_000
     static let riseStartNanoseconds: UInt64 = 404_000_000
     static let rotationStartNanoseconds: UInt64 = 2_227_240_000
+    static let exitStartNanoseconds: UInt64 = 3_004_000_000
     static let reduceMotionAdvanceNanoseconds: UInt64 = 180_000_000
 }
 
@@ -797,6 +1132,7 @@ private enum OnboardingPhase: Equatable {
     case photoIntoMusic
     case permissionPrimer
     case capture
+    case preparingReview
     case review
     case assembling
     case ready
@@ -807,9 +1143,35 @@ private enum OnboardingPhase: Equatable {
         switch self {
         case .splash, .photoIntoMusic, .permissionPrimer:
             true
-        case .capture, .review, .assembling, .ready, .permissionDenied, .technicalError:
+        case .capture, .preparingReview, .review, .assembling, .ready, .permissionDenied, .technicalError:
             false
         }
+    }
+}
+
+private enum OnboardingPhotoSource: Sendable {
+    case camera(Data)
+    case library(Data)
+    case demo(Data)
+
+    var data: Data {
+        switch self {
+        case .camera(let data), .library(let data), .demo(let data):
+            data
+        }
+    }
+
+    var input: OnboardingInput {
+        switch self {
+        case .demo:
+            .demo
+        case .camera(let data), .library(let data):
+            .captured(data)
+        }
+    }
+
+    var isDemo: Bool {
+        if case .demo = self { true } else { false }
     }
 }
 
@@ -872,6 +1234,7 @@ private extension Color {
 private struct OnboardingCanvasMetrics {
     let scale: CGFloat
     let origin: CGPoint
+    let safeAreaTop: CGFloat
 
     func point(x: CGFloat, y: CGFloat) -> CGPoint {
         CGPoint(x: origin.x + x * scale, y: origin.y + y * scale)
@@ -897,7 +1260,13 @@ private struct OnboardingReferenceCanvas<Content: View>: View {
                 y: (proxy.size.height - 852 * scale) / 2
             )
 
-            content(OnboardingCanvasMetrics(scale: scale, origin: origin))
+            content(
+                OnboardingCanvasMetrics(
+                    scale: scale,
+                    origin: origin,
+                    safeAreaTop: proxy.safeAreaInsets.top
+                )
+            )
         }
         .ignoresSafeArea()
     }
@@ -1158,14 +1527,96 @@ private struct OnboardingSplashMotionView: View {
 
                 Color.onboardingInkwell
                     .opacity(flashOpacity)
-                    .ignoresSafeArea()
+                    .mask {
+                        Rectangle()
+                            .padding(.top, metrics.safeAreaTop)
+                    }
+                    .ignoresSafeArea(edges: [.horizontal, .bottom])
             }
         }
     }
 }
 
+private struct OnboardingIntroFlowView: View {
+    let phase: OnboardingPhase
+    let reduceMotion: Bool
+    let isCreateDisabled: Bool
+    let isAllowDisabled: Bool
+    let onCreate: () -> Void
+    let onAllow: () -> Void
+    let onDemo: () -> Void
+
+    var body: some View {
+        ZStack {
+            OnboardingReferenceCanvas { metrics in
+                ZStack {
+                    OnboardingLightLogo(scale: metrics.scale * CGFloat(onboardingHeaderLogoScale))
+                        .position(metrics.point(x: 196.5, y: 81.8))
+
+                    OnboardingStepIndicator(
+                        firstColor: phase == .photoIntoMusic
+                            ? .onboardingInkwell
+                            : .onboardingInactive,
+                        secondColor: phase == .photoIntoMusic
+                            ? .onboardingInactive
+                            : .onboardingInkwell,
+                        scale: metrics.scale
+                    )
+                    .animation(
+                        reduceMotion
+                            ? .easeOut(duration: 0.16)
+                            : .snappy(duration: 0.42, extraBounce: 0),
+                        value: phase
+                    )
+                    .position(metrics.point(x: 196.5, y: 109.54))
+                }
+            }
+            .zIndex(1)
+
+            Group {
+                if phase == .photoIntoMusic {
+                    OnboardingPhotoIntoMusicView(
+                        reduceMotion: reduceMotion,
+                        includesHeader: false,
+                        isCreateDisabled: isCreateDisabled,
+                        onCreate: onCreate
+                    )
+                    .id("photo-into-music")
+                    .transition(introTransition)
+                } else {
+                    OnboardingPermissionPrimerView(
+                        reduceMotion: reduceMotion,
+                        includesHeader: false,
+                        isAllowDisabled: isAllowDisabled,
+                        onAllow: onAllow,
+                        onDemo: onDemo
+                    )
+                    .id("permission-primer")
+                    .transition(introTransition)
+                }
+            }
+            .animation(
+                reduceMotion
+                    ? .easeOut(duration: 0.16)
+                    : .snappy(duration: 0.42, extraBounce: 0),
+                value: phase
+            )
+        }
+    }
+
+    private var introTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .move(edge: .trailing),
+            removal: .move(edge: .leading)
+        )
+    }
+}
+
 private struct OnboardingPhotoIntoMusicView: View {
     let reduceMotion: Bool
+    let includesHeader: Bool
+    let isCreateDisabled: Bool
     let onCreate: () -> Void
 
     @State private var startDate = Date()
@@ -1249,16 +1700,18 @@ private struct OnboardingPhotoIntoMusicView: View {
 
         return OnboardingReferenceCanvas { metrics in
             ZStack {
-                OnboardingLightLogo(scale: metrics.scale * CGFloat(onboardingHeaderLogoScale))
-                    .position(metrics.point(x: 196.5, y: 81.8))
+                if includesHeader {
+                    OnboardingLightLogo(scale: metrics.scale * CGFloat(onboardingHeaderLogoScale))
+                        .position(metrics.point(x: 196.5, y: 81.8))
 
-                OnboardingStepIndicator(
-                    firstColor: .onboardingInkwell,
-                    secondColor: .onboardingInactive,
-                    scale: metrics.scale
-                )
-                .opacity(indicatorOpacity)
-                .position(metrics.point(x: 196.5, y: 109.54))
+                    OnboardingStepIndicator(
+                        firstColor: .onboardingInkwell,
+                        secondColor: .onboardingInactive,
+                        scale: metrics.scale
+                    )
+                    .opacity(indicatorOpacity)
+                    .position(metrics.point(x: 196.5, y: 109.54))
+                }
 
                 Text("Your photos already\nhave a soundtrack")
                     .font(.custom("ZTTalk-Bold", size: metrics.length(22), relativeTo: .title2))
@@ -1293,8 +1746,9 @@ private struct OnboardingPhotoIntoMusicView: View {
                     tracking: -0.43,
                     action: onCreate
                 )
+                .disabled(isCreateDisabled)
                 .opacity(ctaOpacity)
-                .allowsHitTesting(ctaVisible)
+                .allowsHitTesting(ctaVisible && !isCreateDisabled)
                 .accessibilityHidden(!ctaVisible)
                 .position(metrics.point(x: 196.5, y: 744.24))
             }
@@ -1304,6 +1758,7 @@ private struct OnboardingPhotoIntoMusicView: View {
 
 private struct OnboardingPermissionPrimerView: View {
     let reduceMotion: Bool
+    let includesHeader: Bool
     let isAllowDisabled: Bool
     let onAllow: () -> Void
     let onDemo: () -> Void
@@ -1387,15 +1842,17 @@ private struct OnboardingPermissionPrimerView: View {
 
         return OnboardingReferenceCanvas { metrics in
             ZStack {
-                OnboardingLightLogo(scale: metrics.scale * CGFloat(onboardingHeaderLogoScale))
-                    .position(metrics.point(x: 197.3, y: 81.8))
+                if includesHeader {
+                    OnboardingLightLogo(scale: metrics.scale * CGFloat(onboardingHeaderLogoScale))
+                        .position(metrics.point(x: 197.3, y: 81.8))
 
-                OnboardingStepIndicator(
-                    firstColor: firstBar,
-                    secondColor: secondBar,
-                    scale: metrics.scale
-                )
-                .position(metrics.point(x: 197.68, y: 109.54))
+                    OnboardingStepIndicator(
+                        firstColor: firstBar,
+                        secondColor: secondBar,
+                        scale: metrics.scale
+                    )
+                    .position(metrics.point(x: 197.68, y: 109.54))
+                }
 
                 Image(systemName: "camera.fill")
                     .font(.system(size: metrics.length(72), weight: .regular))
@@ -1521,8 +1978,7 @@ private struct OnboardingPhotoClusterView: View {
 
                 OnboardingClusterCard(
                     color: OnboardingTemporaryArtwork.centerFallbackColor,
-                    image: centerImage.map { Image(uiImage: $0) }
-                        ?? Image(OnboardingTemporaryArtwork.demoAssetName),
+                    image: centerImage.map { Image(uiImage: $0) },
                     label: "Sua criação musical"
                 )
                 .frame(width: cardWidth * 1.1, height: cardHeight * 1.1)
@@ -1541,16 +1997,18 @@ private struct OnboardingPhotoClusterView: View {
 
 private struct OnboardingClusterCard: View {
     let color: Color
-    let image: Image
+    let image: Image?
     let label: String
 
     var body: some View {
         RoundedRectangle(cornerRadius: 7, style: .continuous)
             .fill(color)
             .overlay {
-                image
-                    .resizable()
-                    .scaledToFill()
+                if let image {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay {

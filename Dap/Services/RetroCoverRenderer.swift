@@ -57,7 +57,7 @@ enum RetroCoverRenderer {
     ]
 
     static let targetWidth = 160
-    private static let coverMaximumDimension = 1024
+    static let coverMaximumDimension = 1024
     private static let clusteredDotThresholds: [UInt8] = [
         12, 5, 6, 13,
         4, 0, 1, 7,
@@ -112,6 +112,7 @@ enum RetroCoverRenderer {
         let colors = [palette.shadow, palette.dark, palette.base, palette.highlight]
 
         for y in 0..<height {
+            try Task.checkCancellation()
             for x in 0..<width {
                 let pixelIndex = (y * width + x) * 4
                 let alpha = src[pixelIndex + 3]
