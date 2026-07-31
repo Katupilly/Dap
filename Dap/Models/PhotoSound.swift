@@ -207,6 +207,47 @@ struct MusicSequence: Codable, Sendable, Equatable {
     var displayLabel: String {
         "\(harmony.rootName) · \(harmony.scale.displayName)"
     }
+
+    var stepDuration: TimeInterval {
+        guard harmony.bpm > 0 else { return 0 }
+        return 60.0 / Double(harmony.bpm) / 4.0
+    }
+
+    var nominalDuration: TimeInterval {
+        stepDuration * Double(Self.steps)
+    }
+
+    /// Resolves to the final note when it is already a stable tonal anchor;
+    /// otherwise returns a root-centered note for the completion accent.
+    var completionAccentMIDINote: Int {
+        let root = PitchClass(normalizing: harmony.rootPitchClass).rawValue
+        let fifth = PitchClass(normalizing: root + 7).rawValue
+        let resolutionPitchClasses = Set(
+            [root] + (harmony.scale.degrees.contains(7) ? [fifth] : [])
+        )
+        let candidates = (64...79).filter { midiNote in
+            let degree = (PitchClass(normalizing: midiNote).rawValue - root + 12) % 12
+            return harmony.scale.degrees.contains(degree)
+                && resolutionPitchClasses.contains(PitchClass(normalizing: midiNote).rawValue)
+        }
+
+        let finalNote = notes.max {
+            $0.step != $1.step
+                ? $0.step < $1.step
+                : $0.row < $1.row
+        }
+        if let finalNote,
+           resolutionPitchClasses.contains(PitchClass(normalizing: finalNote.midiNote).rawValue),
+           let resolvedFinal = candidates.min(by: {
+               abs($0 - finalNote.midiNote) < abs($1 - finalNote.midiNote)
+           }) {
+            return resolvedFinal
+        }
+
+        return candidates.first(where: {
+            PitchClass(normalizing: $0).rawValue == root
+        }) ?? 72
+    }
 }
 
 // MARK: - PhotoSound

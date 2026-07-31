@@ -1,4 +1,5 @@
 import AVFoundation
+import Darwin
 import Foundation
 import OSLog
 
@@ -8,6 +9,11 @@ private let musicPerformanceLogger = Logger(
     category: "Performance"
 )
 #endif
+
+private let musicPlaybackLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Dap",
+    category: "MusicPlayback"
+)
 
 // MARK: - MusicPlayer
 
@@ -40,6 +46,7 @@ final class MusicPlayer {
 
     private let engine     = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
+    private let completionAccentNode = AVAudioPlayerNode()
     private let format     = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
 
     // MARK: Jam effect chain (dedicated to transient Jam playback)
@@ -64,6 +71,7 @@ final class MusicPlayer {
     private var loopRequestGeneration = 0
     private var playbackGeneration = 0
     private var isLooping = false
+    private var completionAccentScheduledGeneration: Int?
 
     // MARK: Jam transport introspection
     //
@@ -100,6 +108,8 @@ final class MusicPlayer {
     init() {
         engine.attach(playerNode)
         engine.connect(playerNode, to: engine.mainMixerNode, format: format)
+        engine.attach(completionAccentNode)
+        engine.connect(completionAccentNode, to: engine.mainMixerNode, format: format)
 
         // Jam effect chain: player -> LFO mixer -> delay -> reverb -> main mixer
         engine.attach(jamPlayerNode)
@@ -136,13 +146,19 @@ final class MusicPlayer {
     // MARK: Public API
 
     /// Stops current playback (if any) and starts a new render+play cycle.
-    func play(sequence: MusicSequence, percussion: MusicPercussionPattern? = nil, loops: Bool = false) {
+    func play(
+        sequence: MusicSequence,
+        percussion: MusicPercussionPattern? = nil,
+        loops: Bool = false,
+        completionAccent: Bool = false,
+        onFinished: (@MainActor @Sendable () -> Void)? = nil
+    ) {
         if loops, isLooping, playerNode.isPlaying {
             scheduleLoopUpdate(sequence: sequence, percussion: percussion)
             return
         }
 
-        stop()
+        stop(origin: "MusicPlayer.play")
 
         // Activate audio session and start engine if needed.
         guard startEngineIfNeeded() else {
@@ -153,6 +169,7 @@ final class MusicPlayer {
 
         renderTask = Task { [weak self] in
             let samples: RenderedJamAudio
+            let accentSamples: RenderedJamAudio?
             do {
                 samples = try await Self.renderAudio(
                     sequence,
@@ -160,6 +177,25 @@ final class MusicPlayer {
                     sampleRate: 44_100,
                     loops: loops
                 )
+                if completionAccent && !loops {
+                    do {
+                        accentSamples = try JamAudioRenderer.renderCompletionAccent(
+                            for: sequence,
+                            sampleRate: 44_100
+                        )
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        accentSamples = nil
+                        #if DEBUG
+                        musicPerformanceLogger.debug(
+                            "completion accent render failed; preserving main sequence, error=\(String(describing: error), privacy: .public)"
+                        )
+                        #endif
+                    }
+                } else {
+                    accentSamples = nil
+                }
             } catch is CancellationError {
                 return
             } catch {
@@ -176,28 +212,78 @@ final class MusicPlayer {
             }
 
             if loops {
-                await self.playerNode.scheduleBuffer(
+                self.playerNode.scheduleBuffer(
                     buffer,
                     at: nil,
-                    options: .loops
+                    options: .loops,
+                    completionHandler: nil
                 )
                 guard !Task.isCancelled,
-                      self.playbackGeneration == generation else { return }
+                      self.playbackGeneration == generation else {
+                    self.playerNode.stop()
+                    return
+                }
                 self.playerNode.play()
                 self.isLooping = true
             } else {
+                let accentBuffer = accentSamples.flatMap { self.makeBuffer(samples: $0) }
+                let startHostTime: UInt64?
+                if accentBuffer != nil {
+                    startHostTime = mach_absolute_time()
+                        &+ AVAudioTime.hostTime(forSeconds: 0.05)
+                } else {
+                    startHostTime = nil
+                }
+
+                let scheduleTime = startHostTime.map { AVAudioTime(hostTime: $0) }
+                let accentScheduleTime: AVAudioTime?
+                if let startHostTime, let accentBuffer {
+                    let sequenceDuration = Double(buffer.frameLength) / self.format.sampleRate
+                    let accentHostTime = startHostTime
+                        &+ AVAudioTime.hostTime(forSeconds: sequenceDuration)
+                    accentScheduleTime = AVAudioTime(hostTime: accentHostTime)
+                    self.completionAccentScheduledGeneration = generation
+                    self.completionAccentNode.scheduleBuffer(
+                        accentBuffer,
+                        at: accentScheduleTime,
+                        options: [],
+                        completionCallbackType: .dataPlayedBack
+                    ) { [weak self] _ in
+                        Task { @MainActor [weak self] in
+                            guard let self,
+                                  self.playbackGeneration == generation else { return }
+                            self.completionAccentScheduledGeneration = nil
+                        }
+                    }
+                } else {
+                    accentScheduleTime = nil
+                }
+
                 // Schedule with .dataPlayedBack so the callback fires after the audio is heard.
                 self.playerNode.scheduleBuffer(
                     buffer,
+                    at: scheduleTime,
+                    options: [],
                     completionCallbackType: .dataPlayedBack
                 ) { [weak self] _ in
                     Task { @MainActor [weak self] in
-                        guard let self, self.playbackGeneration == generation else { return }
+                        guard let self,
+                              self.playbackGeneration == generation else { return }
                         self.onPlaybackFinished?()
+                        onFinished?()
                     }
                 }
                 self.playerNode.play()
+                if accentScheduleTime != nil {
+                    self.completionAccentNode.play()
+                }
                 self.isLooping = false
+
+                #if DEBUG
+                musicPerformanceLogger.debug(
+                    "sequence scheduled: bpm=\(sequence.harmony.bpm, privacy: .public), steps=\(MusicSequence.steps, privacy: .public), nominalDuration=\(sequence.nominalDuration, privacy: .public), renderedDuration=\(Double(buffer.frameLength) / self.format.sampleRate, privacy: .public), completionAccent=\(accentBuffer != nil, privacy: .public)"
+                )
+                #endif
             }
 
             self.renderTask = nil
@@ -213,10 +299,18 @@ final class MusicPlayer {
     /// Starts a new Jam playback on the dedicated Jam player + effect chain.
     /// Loop updates are scheduled at the next loop boundary using the same
     /// generation token strategy as the regular play path.
-    func playJam(sequence: MusicSequence, percussion: MusicPercussionPattern? = nil) {
-        stopJam()
+    func playJam(
+        sequence: MusicSequence,
+        percussion: MusicPercussionPattern? = nil,
+        onStarted: (@MainActor @Sendable () -> Void)? = nil,
+        onFailed: (@MainActor @Sendable () -> Void)? = nil
+    ) {
+        stop(origin: "MusicPlayer.playJam")
 
-        guard startEngineIfNeeded() else { return }
+        guard startEngineIfNeeded() else {
+            onFailed?()
+            return
+        }
 
         let generation = playbackGeneration
         let settings = currentJamSettings
@@ -231,8 +325,20 @@ final class MusicPlayer {
         self.jamFramesPerStep = framesPerStep
         self.jamLoopFrameCount = loopFrameCount
 
+        let percussionEventCount = (percussion?.kickHits.count ?? 0)
+            + (percussion?.snareHits.count ?? 0)
+            + (percussion?.openHatHits.count ?? 0)
+            + (percussion?.closedHatHits.count ?? 0)
+            + (percussion?.rimHits.count ?? 0)
+        musicPlaybackLogger.notice(
+            "jam requested: notes=\(sequence.notes.count, privacy: .public), percussionEvents=\(percussionEventCount, privacy: .public), bpm=\(sequence.harmony.bpm, privacy: .public), generation=\(generation, privacy: .public)"
+        )
+
         renderTask = Task { [weak self] in
             let samples: RenderedJamAudio
+            musicPlaybackLogger.debug(
+                "jam render started: generation=\(generation, privacy: .public)"
+            )
             do {
                 samples = try await Self.renderAudio(
                     sequence,
@@ -241,37 +347,110 @@ final class MusicPlayer {
                     loops: true
                 )
             } catch is CancellationError {
+                musicPlaybackLogger.notice(
+                    "jam render cancelled: generation=\(generation, privacy: .public), taskCancelled=\(Task.isCancelled, privacy: .public)"
+                )
                 return
             } catch {
+                guard let self else { return }
+                guard self.playbackGeneration == generation else {
+                    musicPlaybackLogger.notice(
+                        "jam render abandoned: generation mismatch expected=\(generation, privacy: .public), actual=\(self.playbackGeneration, privacy: .public)"
+                    )
+                    return
+                }
+                musicPlaybackLogger.error(
+                    "jam render failed: generation=\(generation, privacy: .public), error=\(String(describing: error), privacy: .public)"
+                )
+                onFailed?()
                 return
             }
 
-            guard let self, !Task.isCancelled,
-                  self.playbackGeneration == generation else { return }
+            guard let self else { return }
+            guard !Task.isCancelled else {
+                musicPlaybackLogger.notice(
+                    "jam render abandoned: task cancelled after render, generation=\(generation, privacy: .public)"
+                )
+                return
+            }
+            guard self.playbackGeneration == generation else {
+                musicPlaybackLogger.notice(
+                    "jam render abandoned: generation mismatch expected=\(generation, privacy: .public), actual=\(self.playbackGeneration, privacy: .public)"
+                )
+                return
+            }
 
-            guard let buffer = self.makeBuffer(samples: samples) else { return }
+            guard let buffer = self.makeBuffer(samples: samples) else {
+                musicPlaybackLogger.error(
+                    "jam buffer creation failed: generation=\(generation, privacy: .public), renderedFrames=\(samples.left.count, privacy: .public)"
+                )
+                onFailed?()
+                return
+            }
 
-            await self.jamPlayerNode.scheduleBuffer(
+            let peak = samples.left.reduce(0.0) { max($0, abs(Double($1))) }
+            musicPlaybackLogger.debug(
+                "jam render finished: generation=\(generation, privacy: .public), frames=\(buffer.frameLength, privacy: .public), peak=\(peak, privacy: .public)"
+            )
+
+            musicPlaybackLogger.debug(
+                "jam buffer will schedule: generation=\(generation, privacy: .public)"
+            )
+            self.jamPlayerNode.scheduleBuffer(
                 buffer,
                 at: nil,
-                options: .loops
+                options: .loops,
+                completionHandler: nil
+            )
+            musicPlaybackLogger.debug(
+                "jam buffer scheduled synchronously: generation=\(generation, privacy: .public)"
             )
             guard !Task.isCancelled,
-                  self.playbackGeneration == generation else { return }
+                  self.playbackGeneration == generation else {
+                self.jamPlayerNode.stop()
+                musicPlaybackLogger.notice(
+                    "jam start abandoned after schedule: generation=\(generation, privacy: .public), taskCancelled=\(Task.isCancelled, privacy: .public), currentGeneration=\(self.playbackGeneration, privacy: .public)"
+                )
+                return
+            }
+            musicPlaybackLogger.debug(
+                "jam player play called: generation=\(generation, privacy: .public)"
+            )
             self.jamPlayerNode.play()
             self.isLooping = true
             self.jamIsTransportReady = self.jamPlayerNode.isPlaying
             self.renderTask = nil
+            musicPlaybackLogger.debug(
+                "jam player started: generation=\(generation, privacy: .public), nodePlaying=\(self.jamPlayerNode.isPlaying, privacy: .public), engineRunning=\(self.engine.isRunning, privacy: .public)"
+            )
+            if self.jamIsTransportReady {
+                musicPlaybackLogger.debug(
+                    "jam onStarted callback: generation=\(generation, privacy: .public)"
+                )
+                onStarted?()
+            } else {
+                musicPlaybackLogger.error(
+                    "jam failed after play: generation=\(generation, privacy: .public), nodePlaying=false"
+                )
+                onFailed?()
+            }
             self.processPendingLoopRequestIfNeeded()
         }
     }
 
     /// Stops Jam playback, cancels the LFO task, and restores the LFO gain to 1.
-    func stopJam() {
+    func stopJam(origin: String = "MusicPlayer.stopJam") {
+        let previousGeneration = playbackGeneration
+        musicPlaybackLogger.notice(
+            "stopJam origin=\(origin, privacy: .public), generation=\(previousGeneration, privacy: .public)"
+        )
         jamLFOTask?.cancel()
         jamLFOTask = nil
-        cancelAllRenderWork()
+        cancelAllRenderWork(origin: origin)
         playbackGeneration &+= 1
+        musicPlaybackLogger.notice(
+            "stopJam generation advanced: generation=\(self.playbackGeneration, privacy: .public)"
+        )
         isLooping = false
         if jamPlayerNode.isPlaying { jamPlayerNode.stop() }
         jamLFOMixer.outputVolume = 1.0
@@ -360,11 +539,20 @@ final class MusicPlayer {
     }
 
     /// Cancels the render task, invalidates the generation token, and stops the player node.
-    func stop() {
-        cancelAllRenderWork()
+    func stop(origin: String = "MusicPlayer.stop") {
+        let previousGeneration = playbackGeneration
+        musicPlaybackLogger.notice(
+            "stop origin=\(origin, privacy: .public), generation=\(previousGeneration, privacy: .public)"
+        )
+        cancelAllRenderWork(origin: origin)
         playbackGeneration &+= 1
+        musicPlaybackLogger.notice(
+            "stop generation advanced: generation=\(self.playbackGeneration, privacy: .public)"
+        )
         isLooping = false
         if playerNode.isPlaying { playerNode.stop() }
+        completionAccentNode.stop()
+        completionAccentScheduledGeneration = nil
         // Also stop the Jam path and its LFO so a generic stop() clears both.
         jamLFOTask?.cancel()
         jamLFOTask = nil
@@ -431,6 +619,11 @@ final class MusicPlayer {
             if !engine.isRunning { try engine.start() }
             return true
         } catch {
+            #if DEBUG
+            musicPerformanceLogger.error(
+                "audio engine start failed: error=\(String(describing: error), privacy: .public)"
+            )
+            #endif
             return false
         }
     }
@@ -464,7 +657,7 @@ final class MusicPlayer {
               AVAudioSession.InterruptionType(rawValue: typeValue) == .began else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.stop()
+            self.stop(origin: "MusicPlayer.handleAudioInterruption")
             self.onPlaybackFinished?()  // Treat interruption as natural end.
         }
     }
@@ -669,7 +862,15 @@ final class MusicPlayer {
         return .invalid
     }
 
-    private func cancelAllRenderWork() {
+    private func cancelAllRenderWork(origin: String) {
+        let hadRenderWork = pendingLoopTask != nil
+            || replacementRenderTask != nil
+            || renderTask != nil
+        if hadRenderWork {
+            musicPlaybackLogger.notice(
+                "cancelAllRenderWork origin=\(origin, privacy: .public), generation=\(self.playbackGeneration, privacy: .public)"
+            )
+        }
         pendingLoopTask?.cancel()
         pendingLoopTask = nil
         pendingLoopRequest = nil

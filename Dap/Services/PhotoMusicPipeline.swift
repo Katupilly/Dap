@@ -25,6 +25,8 @@ struct PhotoMusicColorProfile: Sendable {
     let hueVarianceDegrees: Double
     let edgeDensity: Double
     let rootPitchClass: PitchClass
+    let selectorSeed: UInt64?
+    let hasReliableRoot: Bool
 }
 
 struct PreparedPhotoInput: Sendable {
@@ -64,6 +66,19 @@ enum PhotoMusicPipeline {
         category: "PhotoPipeline"
     )
 
+    private static func logFallback(
+        _ mode: SequenceFallback,
+        rootSource: String,
+        root: Int,
+        scale: MusicScale,
+        variation: Int,
+        sequence: MusicSequence
+    ) {
+        performanceLogger.debug(
+            "sequence fallback: stage=\(mode.rawValue, privacy: .public), preserved=color-profile,bpm,seed, rootSource=\(rootSource, privacy: .public), root=\(root, privacy: .public), scale=\(scale.rawValue, privacy: .public), variation=\(variation, privacy: .public), bpm=\(sequence.harmony.bpm, privacy: .public), steps=\(MusicSequence.steps, privacy: .public), duration=\(sequence.nominalDuration, privacy: .public)"
+        )
+    }
+
     private static func logDuration(
         _ label: String,
         startedAt: ContinuousClock.Instant,
@@ -74,6 +89,20 @@ enum PhotoMusicPipeline {
         )
     }
     #endif
+
+    private enum SequenceFallback: String {
+        case none
+        case emptyToneGrid
+        case toneAnalysisFailed
+        case invalidProfile
+    }
+
+    private static let fallbackSteps = [0, 3, 6, 10, 14]
+    private static let fallbackMotifs = [
+        [0, 1, 2, 1, 0],
+        [0, 1, 3, 2, 0],
+        [0, 2, 1, 2, 0]
+    ]
 
     // MARK: Public entry point
 
@@ -143,23 +172,53 @@ enum PhotoMusicPipeline {
             let clock = ContinuousClock()
             let musicalStart = clock.now
 
-            guard let normalized = UIImage(data: prepared.analysisInputData)?.cgImage else {
-                throw PhotoMusicPipelineError.decodeFailed
-            }
             try Task.checkCancellation()
 
-            // Tone analysis stays on direct source luminance so Cover tuning does not change music.
-            let toneAnalysisStart = clock.now
-            let (gridLevels, significantToneCount) = try analyzeTones(cgImage: normalized)
-            #if DEBUG
-            logDuration("musical downsample + tone analysis", startedAt: toneAnalysisStart, clock: clock)
-            #endif
+            let normalized = UIImage(data: prepared.analysisInputData)?.cgImage
+            let gridLevels: [Int]
+            let significantToneCount: Int
+            let fallback: SequenceFallback
+
+            if let normalized {
+                // Tone analysis stays on direct source luminance so Cover tuning does not change music.
+                let toneAnalysisStart = clock.now
+                do {
+                    let analyzed = try analyzeTones(cgImage: normalized)
+                    gridLevels = analyzed.0
+                    significantToneCount = analyzed.1
+                    fallback = gridLevels.contains(where: { $0 > 0 }) ? .none : .emptyToneGrid
+                    #if DEBUG
+                    logDuration("musical downsample + tone analysis", startedAt: toneAnalysisStart, clock: clock)
+                    #endif
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    gridLevels = []
+                    significantToneCount = 0
+                    fallback = .toneAnalysisFailed
+                    #if DEBUG
+                    performanceLogger.debug(
+                        "sequence fallback: stage=tone-analysis-error, error=\(String(describing: error), privacy: .public)"
+                    )
+                    #endif
+                }
+            } else {
+                gridLevels = []
+                significantToneCount = 0
+                fallback = .toneAnalysisFailed
+                #if DEBUG
+                performanceLogger.debug(
+                    "sequence fallback: stage=analysis-input-decode, preserved=color-profile, privacy=public"
+                )
+                #endif
+            }
 
             let sequenceStart = clock.now
             let sequence = buildSequence(
                 colorProfile: prepared.colorProfile,
                 gridLevels: gridLevels,
-                significantToneCount: significantToneCount
+                significantToneCount: significantToneCount,
+                fallback: fallback
             )
             try Task.checkCancellation()
             #if DEBUG
@@ -272,7 +331,9 @@ enum PhotoMusicPipeline {
         guard weight > 0 else {
             return PhotoMusicColorProfile(hue: 0, saturation: 0, luminance: 0,
                                           hueVarianceDegrees: 0, edgeDensity: 0,
-                                          rootPitchClass: .c)
+                                          rootPitchClass: .c,
+                                          selectorSeed: selectorSeed,
+                                          hasReliableRoot: false)
         }
         r /= weight; g /= weight; b /= weight
         let (meanHue, meanSat) = hsb(r: r, g: g, b: b)
@@ -283,7 +344,9 @@ enum PhotoMusicPipeline {
             edgeDensity: sobelEdgeDensity(gray, side: side),
             rootPitchClass: selectRootPitchClass(hueBins: hueBins,
                                                  totalChromaticWeight: totalChromaticWeight,
-                                                 seed: selectorSeed)
+                                                 seed: selectorSeed),
+            selectorSeed: selectorSeed,
+            hasReliableRoot: totalChromaticWeight > 0.0001
         )
     }
 
@@ -350,59 +413,142 @@ enum PhotoMusicPipeline {
 
     private static func buildSequence(colorProfile p: PhotoMusicColorProfile,
                                       gridLevels: [Int],
-                                      significantToneCount: Int) -> MusicSequence {
-        let root     = p.rootPitchClass.rawValue
-        let scale    = musicScale(for: p)
-        let bpm      = min(140, max(70, Int((70 + p.luminance * 70).rounded())))
+                                      significantToneCount: Int,
+                                      fallback: SequenceFallback) -> MusicSequence {
+        let mode = fallback == .none && !p.isFinite ? .invalidProfile : fallback
+        let isFallback = mode != .none
+        let rootContext: (root: Int, source: String)
+        if isFallback {
+            rootContext = fallbackRoot(for: p)
+        } else {
+            rootContext = (
+                root: p.rootPitchClass.rawValue,
+                source: p.hasReliableRoot ? "partial-color" : "seed"
+            )
+        }
+        let root     = rootContext.root
+        let scale    = isFallback ? fallbackScale(for: p) : musicScale(for: p)
+        let bpm      = safeBPM(for: p.luminance)
         let harmony  = MusicHarmony(rootPitchClass: root, scale: scale, bpm: bpm)
-        let octRange = octaveRange(for: significantToneCount)
-        let gate     = computeGate(edgeDensity: p.edgeDensity)
-        let waveform: MusicWaveform = (p.hue >= 90 && p.hue < 300) ? .square : .triangle
+        let octRange = isFallback ? 1 : octaveRange(for: significantToneCount)
+        let gate     = isFallback
+            ? fallbackGate(for: p.edgeDensity)
+            : computeGate(edgeDensity: p.edgeDensity.isFinite ? p.edgeDensity : 0.12)
+        let waveform: MusicWaveform = isFallback
+            ? .triangle
+            : ((p.hue.isFinite && p.hue >= 90 && p.hue < 300) ? .square : .triangle)
         let profile  = SoundProfile(gate: gate, octaveRange: octRange, waveform: waveform)
 
-        var notes: [MusicNote] = []
-        for row in 0..<MusicSequence.rows {
-            for step in 0..<MusicSequence.steps {
-                let level = gridLevels[row * MusicSequence.steps + step]
-                guard level > 0 else { continue }
-                let offset = pitchOffset(row: row, scale: scale, octaveRange: octRange)
-                notes.append(MusicNote(
-                    step: step, row: row,
-                    midiNote: 60 + root + offset,
-                    velocity: Float(level) / 3
-                ))
+        let notes: [MusicNote]
+        if isFallback {
+            let seed = p.selectorSeed ?? 0
+            let variation = Int(seed % UInt64(fallbackMotifs.count))
+            notes = fallbackNotes(root: root, scale: scale, seed: seed, variation: variation)
+        } else {
+            var generated: [MusicNote] = []
+            for row in 0..<MusicSequence.rows {
+                for step in 0..<MusicSequence.steps {
+                    let level = gridLevels[row * MusicSequence.steps + step]
+                    guard level > 0 else { continue }
+                    let offset = pitchOffset(row: row, scale: scale, octaveRange: octRange)
+                    generated.append(MusicNote(
+                        step: step, row: row,
+                        midiNote: 60 + root + offset,
+                        velocity: Float(level) / 3
+                    ))
+                }
             }
+            notes = generated
         }
 
-        if notes.isEmpty {
-            let fallbackRow = MusicSequence.rows / 2
-            let fallbackOffset = pitchOffset(
-                row: fallbackRow,
+        let sequence = MusicSequence(harmony: harmony, notes: notes, soundProfile: profile)
+        if isFallback {
+            #if DEBUG
+            let seed = p.selectorSeed ?? 0
+            let variation = Int(seed % UInt64(fallbackMotifs.count))
+            logFallback(
+                mode,
+                rootSource: rootContext.source,
+                root: root,
                 scale: scale,
-                octaveRange: octRange
+                variation: variation,
+                sequence: sequence
             )
-            let fallbackMIDINote = 60 + root + fallbackOffset
-
-            let quarter = max(1, MusicSequence.steps / 4)
-            let fallbackSteps = [
-                0,
-                quarter,
-                quarter * 2,
-                quarter * 3,
-            ].filter { $0 < MusicSequence.steps }
-
-            notes = fallbackSteps.enumerated().map { index, step in
-                MusicNote(
-                    step: step,
-                    row: fallbackRow,
-                    midiNote: fallbackMIDINote,
-                    velocity: index.isMultiple(of: 2) ? 0.5 : 0.4
-                )
-            }
+            assertValidFallback(sequence)
+            #endif
         }
-
-        return MusicSequence(harmony: harmony, notes: notes, soundProfile: profile)
+        return sequence
     }
+
+    private static func fallbackRoot(for p: PhotoMusicColorProfile) -> (root: Int, source: String) {
+        if p.isFinite, p.hasReliableRoot {
+            return (p.rootPitchClass.rawValue, "partial-color")
+        }
+        if let seed = p.selectorSeed {
+            return (Int(seed % 12), "seed")
+        }
+        return (PitchClass.c.rawValue, "default")
+    }
+
+    private static func fallbackScale(for p: PhotoMusicColorProfile) -> MusicScale {
+        guard p.saturation.isFinite else { return .majorPentatonic }
+        return p.saturation >= 0.45 ? .majorPentatonic : .minorPentatonic
+    }
+
+    private static func safeBPM(for luminance: Double) -> Int {
+        guard luminance.isFinite else { return 96 }
+        let normalized = luminance.clamped(to: 0...1)
+        return min(140, max(70, Int((70 + normalized * 70).rounded())))
+    }
+
+    private static func fallbackGate(for edgeDensity: Double) -> Double {
+        guard edgeDensity.isFinite else { return 0.68 }
+        return computeGate(edgeDensity: edgeDensity).clamped(to: 0.45...0.82)
+    }
+
+    private static func fallbackNotes(
+        root: Int,
+        scale: MusicScale,
+        seed: UInt64,
+        variation: Int
+    ) -> [MusicNote] {
+        let motif = fallbackMotifs[variation]
+        let maximumDegree = scale.degrees.max() ?? 0
+        let registerTarget = 68 + Int((seed >> 8) % 9)
+        let rootMIDINote = (60...84)
+            .filter {
+                PitchClass(normalizing: $0).rawValue == root
+                    && $0 + maximumDegree <= 84
+            }
+            .min { abs($0 - registerTarget) < abs($1 - registerTarget) }
+            ?? 60 + root
+
+        return fallbackSteps.enumerated().map { index, step in
+            let degreeIndex = motif[index]
+            let midiNote = rootMIDINote + scale.degrees[degreeIndex]
+            return MusicNote(
+                step: step,
+                row: min(MusicSequence.rows - 1, max(0, MusicSequence.rows / 2 - degreeIndex)),
+                midiNote: midiNote,
+                velocity: [0.58, 0.66, 0.74, 0.62, 0.70][index]
+            )
+        }
+    }
+
+    #if DEBUG
+    private static func assertValidFallback(_ sequence: MusicSequence) {
+        let root = sequence.harmony.rootPitchClass
+        let validNotes = sequence.notes.allSatisfy { note in
+            let degree = (PitchClass(normalizing: note.midiNote).rawValue - root + 12) % 12
+            return (60...84).contains(note.midiNote)
+                && sequence.harmony.scale.degrees.contains(degree)
+        }
+        assert(sequence.notes.count == fallbackSteps.count)
+        assert(Set(sequence.notes.map(\.step)).count == fallbackSteps.count)
+        assert(validNotes)
+        assert(sequence.notes.last.map { PitchClass(normalizing: $0.midiNote).rawValue == root } == true)
+    }
+    #endif
 
     // MARK: - Musical heuristics
 
@@ -503,6 +649,18 @@ enum PhotoMusicPipeline {
 }
 
 // MARK: - Helpers
+
+private extension PhotoMusicColorProfile {
+    var isFinite: Bool {
+        hue.isFinite
+            && saturation.isFinite
+            && luminance.isFinite
+            && hueVarianceDegrees.isFinite
+            && edgeDensity.isFinite
+            && rootPitchClass.rawValue >= 0
+            && rootPitchClass.rawValue < 12
+    }
+}
 
 private extension Double {
     func clamped(to range: ClosedRange<Double>) -> Double {

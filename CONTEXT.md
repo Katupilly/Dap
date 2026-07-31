@@ -396,7 +396,7 @@ Current mappings:
   - remaining hues → triangle;
 - notes: nonzero levels from the 16×8 tone grid.
 
-If the tone grid produces no notes, the pipeline inserts four fallback notes at quarter-bar steps using the middle row.
+If the tone grid is empty or tonal analysis fails after color preparation, the pipeline preserves the available tonal profile and emits a deterministic five-note pentatonic motif at steps 0, 3, 6, 10, and 14. Motif degrees, register, and root fallback are derived from the stable image seed and remain inside the safe MIDI range.
 
 ### 5. Cover rendering
 
@@ -453,6 +453,7 @@ Unavailable models, classification failures, guardrail failures, and generation 
 - stereo 44,100 Hz output;
 - lazy audio-session activation and engine startup;
 - cancellable detached offline rendering delegated to `JamAudioRenderer`;
+- pre-rendered completion accents scheduled on the same engine timeline as the main sequence;
 - generation and request tokens that reject obsolete completions;
 - native Jam looping and debounced next-loop replacement;
 - live Jam transport introspection from `AVAudioPlayerNode` render time;
@@ -483,7 +484,7 @@ This path is intentionally preserved so Jam voice changes do not alter persisted
 - Harmony;
 - Melody and nil-role main output.
 
-Role-specific fallbacks remain inside their semantic stem so Bass and Harmony still receive pumping when a preferred renderer is unavailable. `MusicPlayer` owns only the engine graph, buffer scheduling, transport, and global effect units.
+Role-specific fallbacks remain inside their semantic stem so Bass and Harmony still receive pumping when a preferred renderer is unavailable. `MusicPlayer` also owns the short sequence-derived completion accent; onboarding observes only the main sequence's `.dataPlayedBack` completion.
 
 ### Future Bass
 
@@ -925,7 +926,7 @@ Owns Vision classification, Foundation Models prompting, guided output, sanitiza
 
 ### `MusicPlayer`
 
-Owns the single audio engine, player nodes, Jam effect chain, scheduling, replacement cancellation, transport introspection, audio-session lifecycle, and interruptions.
+Owns the single audio engine, player nodes, sequence-derived completion accent, Jam effect chain, scheduling, replacement cancellation, transport introspection, audio-session lifecycle, and interruptions.
 
 ### `JamAudioRenderer`
 

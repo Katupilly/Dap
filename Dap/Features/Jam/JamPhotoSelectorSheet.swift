@@ -83,7 +83,10 @@ struct JamPhotoSelectorSheet: View {
                         isPresented = false
                     } label: {
                         Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.primary)
                             .frame(width: 44, height: 44)
+                            .background(.secondary.opacity(0.12), in: Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Close")
@@ -96,8 +99,12 @@ struct JamPhotoSelectorSheet: View {
                         isPresented = false
                     } label: {
                         Image(systemName: "checkmark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.primary)
                             .frame(width: 44, height: 44)
+                            .background(.secondary.opacity(0.12), in: Circle())
                     }
+                    .buttonStyle(.plain)
                     .disabled(pendingSelectionIDs.isEmpty)
                     .accessibilityLabel("Use selected photos")
                 }

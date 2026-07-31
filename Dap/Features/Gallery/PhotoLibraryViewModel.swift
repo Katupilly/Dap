@@ -58,7 +58,12 @@ final class PhotoLibraryViewModel {
     // MARK: Private
 
     private let player = MusicPlayer()
+    private var activeTransientPlaybackToken: UUID?
     private var hasLoaded = false
+    private let playbackLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Dap",
+        category: "Playback"
+    )
     private let metadataLogger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "Dap",
         category: "PhotoMetadata"
@@ -405,50 +410,99 @@ final class PhotoLibraryViewModel {
     /// - Tapping a different sound → stop current, play new.
     func toggle(sound: PhotoSound) {
         if playingID == sound.id {
-            player.stop()
-            playingID = nil
-            isTransientPlaybackActive = false
+            stopPlayback(origin: "PhotoLibraryViewModel.toggle")
         } else {
-            player.stop()
-            isTransientPlaybackActive = false
+            stopPlayback(origin: "PhotoLibraryViewModel.toggle")
             player.play(sequence: sound.sequence)
             playingID = sound.id
         }
     }
 
     /// Stops any active playback.
-    func stopPlayback() {
-        player.stop()
+    func stopPlayback(origin: String = "PhotoLibraryViewModel.stopPlayback") {
+        activeTransientPlaybackToken = nil
+        player.stop(origin: origin)
         playingID = nil
         isTransientPlaybackActive = false
     }
 
+    @discardableResult
     func playTransientSequence(
         _ sequence: MusicSequence,
         percussion: MusicPercussionPattern? = nil,
-        loops: Bool = false
-    ) {
+        loops: Bool = false,
+        completionAccent: Bool = false,
+        onFinished: (@MainActor @Sendable () -> Void)? = nil,
+        onStarted: (@MainActor @Sendable () -> Void)? = nil,
+        onFailed: (@MainActor @Sendable () -> Void)? = nil
+    ) -> UUID {
+        let token = UUID()
         if loops {
             // Route through the dedicated Jam player + effect chain so the
             // global Effect Rack applies only to the Jam playback path.
             playingID = nil
+            activeTransientPlaybackToken = token
             isTransientPlaybackActive = true
-            player.playJam(sequence: sequence, percussion: percussion)
+            playbackLogger.notice(
+                "transient playback requested token=\(token.uuidString, privacy: .public), loops=\(loops, privacy: .public)"
+            )
+            player.playJam(
+                sequence: sequence,
+                percussion: percussion,
+                onStarted: { [weak self] in
+                    guard let self,
+                          self.activeTransientPlaybackToken == token else { return }
+                    onStarted?()
+                },
+                onFailed: { [weak self] in
+                    guard let self,
+                          self.activeTransientPlaybackToken == token else { return }
+                    self.activeTransientPlaybackToken = nil
+                    self.isTransientPlaybackActive = false
+                    onFailed?()
+                }
+            )
             // Re-apply the current Jam effect settings to the freshly-started
             // playback path (Delay time + LFO rate depend on the new BPM).
             let bpm = Double(sequence.harmony.bpm)
             player.setJamEffects(currentJamEffects, bpm: bpm)
+            return token
+        }
+
+        stopPlayback(origin: "PhotoLibraryViewModel.playTransientSequence")
+        activeTransientPlaybackToken = token
+        isTransientPlaybackActive = true
+        playbackLogger.notice(
+            "transient playback requested token=\(token.uuidString, privacy: .public), loops=\(loops, privacy: .public)"
+        )
+        player.play(
+            sequence: sequence,
+            percussion: percussion,
+            loops: loops,
+            completionAccent: completionAccent,
+            onFinished: { [weak self] in
+                guard let self,
+                      self.activeTransientPlaybackToken == token else { return }
+                self.activeTransientPlaybackToken = nil
+                self.isTransientPlaybackActive = false
+                onFinished?()
+            }
+        )
+        return token
+    }
+
+    func stopTransientPlayback(
+        ownedBy token: UUID,
+        origin: String
+    ) {
+        guard activeTransientPlaybackToken == token else {
+            playbackLogger.notice(
+                "transient stop ignored origin=\(origin, privacy: .public), token=\(token.uuidString, privacy: .public)"
+            )
             return
         }
 
-        stopPlayback()
-        isTransientPlaybackActive = true
-        player.play(sequence: sequence, percussion: percussion, loops: loops)
-    }
-
-    func stopTransientPlayback() {
-        stopPlayback()
-        player.stopJam()
+        stopPlayback(origin: origin)
     }
 
     /// Forwarding to the dedicated Jam effect chain. The Jam effect settings

@@ -21,6 +21,7 @@ struct OnboardingView: View {
     @State private var preparationReveal = false
     @State private var assemblyTask: Task<Void, Never>?
     @State private var assemblyToken = UUID()
+    @State private var transientPlaybackToken: UUID?
     @State private var captureToken = UUID()
     @State private var captureTask: Task<Void, Never>?
     @State private var preparationTask: Task<Void, Never>?
@@ -34,13 +35,14 @@ struct OnboardingView: View {
     @State private var isPushingIntro = false
     @State private var hasAnimatedCluster = false
     @State private var clusterAssembled = false
-    @State private var assemblyMessage = "Lendo as cores da sua foto…"
+    @State private var assemblyMessage = "Reading your photo's colors…"
     @State private var captureFeedback = 0
     @State private var completionFeedback = 0
+    @State private var completionHapticPlayed = false
     @State private var splashRiseFeedback = 0
     @State private var splashRotationFeedback = 0
     @State private var splashExitFeedback = 0
-    @State private var splashHapticPlayer = SplashHapticPlayer()
+    @State private var onboardingHapticPlayer = OnboardingHapticPlayer()
     @State private var primaryActionFeedback = 0
     @State private var secondaryActionFeedback = 0
     @State private var permissionIssue: OnboardingPermissionIssue = .denied
@@ -66,12 +68,12 @@ struct OnboardingView: View {
                 }
             }
         }
-        .onChange(of: phase) { _, newPhase in
+        .onChange(of: phase) { oldPhase, newPhase in
             if newPhase != .capture {
                 stopCamera()
             }
-            if newPhase != .splash {
-                splashHapticPlayer.stop()
+            if oldPhase == .splash, newPhase != .splash {
+                onboardingHapticPlayer.stop()
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -96,9 +98,9 @@ struct OnboardingView: View {
             preparationTask = nil
             assemblyTask?.cancel()
             assemblyTask = nil
-            library.stopTransientPlayback()
+            stopOnboardingPlayback(origin: "OnboardingView.onDisappear")
             stopCamera()
-            splashHapticPlayer.stop()
+            onboardingHapticPlayer.stop()
         }
         .sensoryFeedback(.selection, trigger: captureFeedback)
         .sensoryFeedback(.success, trigger: completionFeedback)
@@ -167,7 +169,7 @@ struct OnboardingView: View {
             OnboardingSplashMotionView(reduceMotion: reduceMotion)
                 .onAppear {
                     if !reduceMotion {
-                        _ = splashHapticPlayer.prepare()
+                        _ = onboardingHapticPlayer.prepare()
                     }
                 }
         case .photoIntoMusic, .permissionPrimer:
@@ -223,7 +225,7 @@ struct OnboardingView: View {
             return
         }
 
-        let usesCoreHaptics = splashHapticPlayer.startPattern()
+        let usesCoreHaptics = onboardingHapticPlayer.playSplash()
 
         do {
             try await Task.sleep(nanoseconds: OnboardingSplashTiming.riseStartNanoseconds)
@@ -340,7 +342,7 @@ struct OnboardingView: View {
 
     private var captureContent: some View {
         VStack(spacing: 10) {
-            Text("Enquadre algo com cor e contraste.")
+            Text("Frame something with color and contrast.")
                 .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
                 .foregroundStyle(.white.opacity(0.76))
 
@@ -371,7 +373,7 @@ struct OnboardingView: View {
             }
             .frame(maxWidth: 340)
         }
-        .accessibilityLabel("Pré-visualização da câmera")
+        .accessibilityLabel("Camera preview")
     }
 
     private var photoPreparationContent: some View {
@@ -388,10 +390,10 @@ struct OnboardingView: View {
                     .contrast(preparationReveal ? 1.02 : 0.98)
                     .animation(.easeInOut(duration: 0.5), value: preparationReveal)
                     .transition(.opacity)
-                    .accessibilityLabel("Foto selecionada")
+                    .accessibilityLabel("Selected photo")
             }
 
-            Text("Revelando sua foto…")
+            Text("Revealing your photo…")
                 .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
                 .foregroundStyle(.white.opacity(0.76))
         }
@@ -399,7 +401,7 @@ struct OnboardingView: View {
 
     private var reviewContent: some View {
         VStack(spacing: 14) {
-            Text("Veja sua foto")
+            Text("See your photo")
                 .font(.custom("ZTTalk-Bold", size: 25, relativeTo: .title2))
                 .foregroundStyle(.white)
 
@@ -411,7 +413,7 @@ struct OnboardingView: View {
                     .aspectRatio(4.0 / 5.0, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .transition(.opacity)
-                    .accessibilityLabel("Foto capturada")
+                    .accessibilityLabel("Captured photo")
             }
         }
     }
@@ -441,11 +443,11 @@ struct OnboardingView: View {
                 .font(.system(size: 34, weight: .medium))
                 .foregroundStyle(.white)
 
-            Text("Algo deu errado")
+            Text("Something went wrong")
                 .font(.custom("ZTTalk-Bold", size: 25, relativeTo: .title2))
                 .foregroundStyle(.white)
 
-            Text(failure?.message ?? "Não foi possível concluir sua criação.")
+            Text(failure?.message ?? "Could not finish creating your sound.")
                 .font(.custom("ZTTalk-Medium", size: 16, relativeTo: .body))
                 .foregroundStyle(.white.opacity(0.76))
                 .multilineTextAlignment(.center)
@@ -485,8 +487,8 @@ struct OnboardingView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(controller == nil || isCapturing || isPreparingPhoto)
-                    .accessibilityLabel("Tirar foto")
-                    .accessibilityHint("Captura a foto que será transformada em música.")
+                    .accessibilityLabel("Take photo")
+                    .accessibilityHint("Captures a photo to turn into music.")
 
                     Spacer()
 
@@ -502,7 +504,7 @@ struct OnboardingView: View {
                 .padding(.horizontal, 16)
 
                 PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                    Text("Escolher da biblioteca")
+                    Text("Choose from library")
                 }
                 .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
                 .foregroundStyle(.white.opacity(0.82))
@@ -510,7 +512,7 @@ struct OnboardingView: View {
                 .buttonStyle(.plain)
                 .disabled(isCapturing || isPreparingPhoto || isSwitchingCamera)
 
-                secondaryButton("Usar uma imagem de demonstração") {
+                secondaryButton("Use a demo image") {
                     startPhotoPreparation(
                         source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
                     )
@@ -519,17 +521,17 @@ struct OnboardingView: View {
             }
 
         case .preparingReview:
-            Text("Revelando sua foto…")
+            Text("Revealing your photo…")
                 .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
                 .foregroundStyle(.white.opacity(0.76))
 
         case .review:
             VStack(spacing: 12) {
-                primaryButton("Usar essa foto", systemImage: "checkmark") {
+                primaryButton("Use this photo", systemImage: "checkmark") {
                     confirmPhoto()
                 }
 
-                secondaryButton("Tirar outra") {
+                secondaryButton("Take another") {
                     Task { await retakePhoto() }
                 }
             }
@@ -546,15 +548,15 @@ struct OnboardingView: View {
         case .ready:
             VStack(spacing: 12) {
                 Text(input == .demo
-                     ? "Essa é uma música de demonstração criada pelo Dap."
-                     : "Essa é a música da sua foto. Cada nova imagem cria um som diferente.")
+                     ? "This is a demo song created by Dap."
+                     : "This is your photo's song. Each new image creates a different sound.")
                     .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
                     .foregroundStyle(.white.opacity(0.78))
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 320)
 
-                primaryButton("Explorar o Dap", systemImage: "arrow.right") {
-                    library.stopTransientPlayback()
+                primaryButton("Explore Dap", systemImage: "arrow.right") {
+                    stopOnboardingPlayback(origin: "OnboardingView.Explore Dap")
                     onCompleted()
                 }
             }
@@ -562,18 +564,18 @@ struct OnboardingView: View {
         case .permissionDenied:
             VStack(spacing: 12) {
                 if permissionIssue == .denied {
-                    primaryButton("Abrir Ajustes", systemImage: "gear") {
+                    primaryButton("Open Settings", systemImage: "gear") {
                         openSettings()
                     }
                 } else {
-                    primaryButton("Continuar com demonstração", systemImage: "play.fill") {
+                    primaryButton("Continue with demo", systemImage: "play.fill") {
                         startPhotoPreparation(
                             source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
                         )
                     }
                 }
 
-                secondaryButton(permissionIssue == .denied ? "Continuar com demonstração" : "Verificar novamente") {
+                secondaryButton(permissionIssue == .denied ? "Continue with demo" : "Check again") {
                     if permissionIssue == .denied {
                         startPhotoPreparation(
                             source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
@@ -586,11 +588,11 @@ struct OnboardingView: View {
 
         case .technicalError:
             VStack(spacing: 12) {
-                primaryButton("Tentar novamente", systemImage: "arrow.clockwise") {
+                primaryButton("Try again", systemImage: "arrow.clockwise") {
                     retryAfterFailure()
                 }
 
-                secondaryButton("Continuar com demonstração") {
+                secondaryButton("Continue with demo") {
                     startPhotoPreparation(
                         source: .demo(OnboardingTemporaryArtwork.fallbackImageData())
                     )
@@ -613,7 +615,7 @@ struct OnboardingView: View {
                 .background(.white, in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityHint(title == "Explorar o Dap" ? "Entra no Dap." : "Continua o onboarding.")
+        .accessibilityHint(title == "Explore Dap" ? "Opens Dap." : "Continues onboarding.")
     }
 
     private func secondaryButton(
@@ -874,8 +876,10 @@ struct OnboardingView: View {
         guard phase != .assembling, phase != .ready else { return }
 
         assemblyTask?.cancel()
+        stopOnboardingPlayback(origin: "OnboardingView.beginAssembly")
         let token = UUID()
         assemblyToken = token
+        completionHapticPlayed = false
         let resolvedPreparedPhoto = preparedPhoto ?? self.preparedPhoto
         self.input = input
         failure = nil
@@ -883,7 +887,7 @@ struct OnboardingView: View {
         hasAnimatedCluster = false
         self.preparedPhoto = resolvedPreparedPhoto
         capturedPreviewImage = nil
-        assemblyMessage = "Lendo as cores da sua foto…"
+                assemblyMessage = "Reading your photo's colors…"
 
         if case .demo = input, resolvedPreparedPhoto == nil {
             centralDisplayImage = nil
@@ -893,12 +897,13 @@ struct OnboardingView: View {
         withAnimation(.easeOut(duration: 0.18)) {
             phase = .assembling
         }
+        _ = onboardingHapticPlayer.prepare()
 
         assemblyTask = Task { @MainActor [input, token, resolvedPreparedPhoto] in
             do {
                 try await Task.sleep(nanoseconds: 350_000_000)
                 guard isCurrentAssembly(token) else { return }
-                assemblyMessage = "Transformando em melodia…"
+                assemblyMessage = "Turning it into a melody…"
 
                 let sound: PhotoSound
                 switch input {
@@ -928,16 +933,25 @@ struct OnboardingView: View {
                 }
 
                 guard isCurrentAssembly(token) else { return }
-                library.playTransientSequence(sound.sequence)
+                transientPlaybackToken = library.playTransientSequence(
+                    sound.sequence,
+                    completionAccent: true,
+                    onFinished: { [token] in
+                        guard phase == .ready,
+                              assemblyToken == token,
+                              !completionHapticPlayed else { return }
+                        transientPlaybackToken = nil
+                        completionHapticPlayed = true
+                        if !onboardingHapticPlayer.playCompletion() {
+                            completionFeedback += 1
+                        }
+                    }
+                )
                 withAnimation(clusterAnimation) {
                     hasAnimatedCluster = true
                     clusterAssembled = true
                 }
                 self.preparedPhoto = nil
-                try await Task.sleep(nanoseconds: reduceMotion ? 180_000_000 : 920_000_000)
-                guard isCurrentAssembly(token) else { return }
-
-                completionFeedback += 1
                 withAnimation(.easeOut(duration: 0.16)) {
                     phase = .ready
                 }
@@ -953,6 +967,16 @@ struct OnboardingView: View {
                 assemblyTask = nil
             }
         }
+    }
+
+    @MainActor
+    private func stopOnboardingPlayback(origin: String) {
+        guard let transientPlaybackToken else { return }
+        library.stopTransientPlayback(
+            ownedBy: transientPlaybackToken,
+            origin: origin
+        )
+        self.transientPlaybackToken = nil
     }
 
     private var clusterAnimation: Animation {
@@ -1041,7 +1065,7 @@ struct OnboardingView: View {
 }
 
 @MainActor
-private final class SplashHapticPlayer {
+private final class OnboardingHapticPlayer {
     private var engine: CHHapticEngine?
     private var player: CHHapticPatternPlayer?
 
@@ -1049,7 +1073,7 @@ private final class SplashHapticPlayer {
     private var releaseTickResourceID: CHHapticAudioResourceID?
     private var exitTickResourceID: CHHapticAudioResourceID?
 
-    func startPattern() -> Bool {
+    func playSplash() -> Bool {
         try? player?.stop(atTime: CHHapticTimeImmediate)
         player = nil
         guard prepare(), let engine else { return false }
@@ -1106,6 +1130,28 @@ private final class SplashHapticPlayer {
 
         do {
             let pattern = try CHHapticPattern(events: events, parameterCurves: [riseCurve])
+            let player = try engine.makePlayer(with: pattern)
+            try player.start(atTime: CHHapticTimeImmediate)
+            self.player = player
+            return true
+        } catch {
+            stop()
+            return false
+        }
+    }
+
+    func playCompletion() -> Bool {
+        try? player?.stop(atTime: CHHapticTimeImmediate)
+        player = nil
+        guard prepare(), let engine else { return false }
+
+        let events = [
+            transient(intensity: 0.56, sharpness: 0.52, at: 0),
+            transient(intensity: 1.0, sharpness: 0.92, at: 0.095)
+        ]
+
+        do {
+            let pattern = try CHHapticPattern(events: events, parameterCurves: [])
             let player = try engine.makePlayer(with: pattern)
             try player.start(atTime: CHHapticTimeImmediate)
             self.player = player
@@ -1180,6 +1226,9 @@ private final class SplashHapticPlayer {
     private func handleEngineReset() {
         player = nil
         engine = nil
+        peakHitResourceID = nil
+        releaseTickResourceID = nil
+        exitTickResourceID = nil
     }
 }
 
@@ -1251,17 +1300,17 @@ private enum OnboardingPermissionIssue: Equatable {
 
     var title: String {
         switch self {
-        case .denied: "Câmera desativada"
-        case .restricted: "Câmera indisponível"
+        case .denied: "Camera access is off"
+        case .restricted: "Camera unavailable"
         }
     }
 
     var message: String {
         switch self {
         case .denied:
-            "Você pode ativar o acesso à câmera nos Ajustes do sistema ou continuar com uma demonstração."
+            "You can enable camera access in Settings or continue with a demo."
         case .restricted:
-            "O acesso à câmera está bloqueado por uma restrição do sistema. Continue com uma demonstração para conhecer o Dap."
+            "Camera access is blocked by a system restriction. Continue with a demo to learn about Dap."
         }
     }
 }
@@ -1275,13 +1324,13 @@ private enum OnboardingFailure {
     var message: String {
         switch self {
         case .permissionCheckFailed:
-            "Não foi possível verificar o acesso à câmera."
+            "Could not check camera access."
         case .captureFailed:
-            "Não foi possível capturar a foto. Tente novamente ou use uma demonstração."
+            "Could not capture the photo. Try again or use a demo."
         case .importFailed:
-            "Não foi possível salvar essa foto. Tente novamente ou use uma demonstração."
+            "Could not save this photo. Try again or use a demo."
         case .generationFailed:
-            "Não foi possível transformar a demonstração em música. Tente novamente."
+            "Could not turn the demo into music. Try again."
         }
     }
 }
@@ -2044,7 +2093,7 @@ private struct OnboardingPhotoClusterView: View {
                 OnboardingClusterCard(
                     color: OnboardingTemporaryArtwork.centerFallbackColor,
                     image: centerImage.map { Image(uiImage: $0) },
-                    label: "Sua criação musical"
+                    label: "Your musical creation"
                 )
                 .frame(width: cardWidth * 1.1, height: cardHeight * 1.1)
                 .scaleEffect(showsPulse && !reduceMotion ? 1.035 : 1)
@@ -2056,7 +2105,7 @@ private struct OnboardingPhotoClusterView: View {
         }
         .frame(height: 390)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Composição musical criada a partir da imagem")
+        .accessibilityLabel("Musical composition created from the image")
     }
 }
 
@@ -2106,7 +2155,7 @@ private enum OnboardingTemporaryArtwork {
     static let clusterItems: [OnboardingClusterItem] = [
         OnboardingClusterItem(
             id: 0,
-            label: "Camada visual um",
+            label: "Visual layer one",
             imageName: "OnboardingSample03",
             color: Color(red: 0.12, green: 0.72, blue: 0.86),
             startOffset: CGSize(width: -190, height: -230),
@@ -2119,7 +2168,7 @@ private enum OnboardingTemporaryArtwork {
         ),
         OnboardingClusterItem(
             id: 1,
-            label: "Camada visual dois",
+            label: "Visual layer two",
             imageName: "OnboardingSample04",
             color: Color(red: 0.98, green: 0.72, blue: 0.18),
             startOffset: CGSize(width: 196, height: -218),
@@ -2132,7 +2181,7 @@ private enum OnboardingTemporaryArtwork {
         ),
         OnboardingClusterItem(
             id: 2,
-            label: "Camada visual três",
+            label: "Visual layer three",
             imageName: "OnboardingSample05",
             color: Color(red: 0.44, green: 0.34, blue: 0.96),
             startOffset: CGSize(width: -202, height: 230),
@@ -2145,7 +2194,7 @@ private enum OnboardingTemporaryArtwork {
         ),
         OnboardingClusterItem(
             id: 3,
-            label: "Camada visual quatro",
+            label: "Visual layer four",
             imageName: "OnboardingSample06",
             color: Color(red: 0.36, green: 0.88, blue: 0.38),
             startOffset: CGSize(width: 204, height: 224),

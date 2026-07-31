@@ -28,6 +28,7 @@ struct JamView: View {
     @State private var selectedHarmonyIntent: HarmonyPatternIntent = .sustained
     @State private var selectedMelodyIntent: MelodyPhraseIntent = .subtle
     @State private var playbackController = JamPlaybackController()
+    @State private var transientPlaybackToken: UUID?
     @State private var isPhotoSelectorPresented = false
     @State private var swapArrangementVersion = 0
     @State private var transportTask: Task<Void, Never>?
@@ -1447,10 +1448,29 @@ struct JamView: View {
         }
 
         session.activeArrangement = arrangement
-        library.playTransientSequence(
+        session.isPlaying = false
+        let percussionEventCount = arrangement.percussion.kickHits.count
+            + arrangement.percussion.snareHits.count
+            + arrangement.percussion.openHatHits.count
+            + arrangement.percussion.closedHatHits.count
+            + arrangement.percussion.rimHits.count
+        logger.debug(
+            "Jam arrangement created for play: notes=\(arrangement.sequence.notes.count, privacy: .public), percussionEvents=\(percussionEventCount, privacy: .public)"
+        )
+        transientPlaybackToken = library.playTransientSequence(
             arrangement.sequence,
             percussion: arrangement.percussion,
-            loops: true
+            loops: true,
+            onStarted: {
+                guard !session.isPlaying else { return }
+                logger.debug("Jam onStarted received")
+                session.isPlaying = true
+                startTransportLoop()
+            },
+            onFailed: {
+                logger.error("Jam playback failed before onStarted")
+                clearTransportState()
+            }
         )
         // Forward the current Effect Rack settings to the dedicated Jam chain.
         library.setJamEffects(session.effectSettings, bpm: Double(arrangement.sequence.harmony.bpm))
@@ -1458,10 +1478,8 @@ struct JamView: View {
         // read the real sample position from the AVAudioPlayerNode and
         // surface the first valid step. Until then the sequencer shows nil.
         visualTransport.reset()
-        session.isPlaying = true
         playbackController.clearDrumKitPendingFeedback()
         playbackController.clearPendingState()
-        startTransportLoop()
     }
 
     /// Sends the latest arrangement to the MusicPlayer immediately so it can
@@ -1490,7 +1508,13 @@ struct JamView: View {
     private func clearTransportAndPlayback(clearPending: Bool = true) {
         cancelTransportTask()
         playbackController.clearDrumKitPendingFeedback()
-        library.stopTransientPlayback()
+        if let transientPlaybackToken {
+            library.stopTransientPlayback(
+                ownedBy: transientPlaybackToken,
+                origin: "JamView.clearTransportAndPlayback"
+            )
+            self.transientPlaybackToken = nil
+        }
         session.activeArrangement = nil
         visualTransport.reset()
         session.isPlaying = false
@@ -1508,6 +1532,7 @@ struct JamView: View {
         session.activeArrangement = nil
         visualTransport.reset()
         session.isPlaying = false
+        transientPlaybackToken = nil
         playbackController.clearPendingState()
     }
 
@@ -1852,7 +1877,7 @@ struct JamView: View {
         playbackController.clearDrumKitPendingFeedback()
         session.activeArrangement = arrangement
 
-        library.playTransientSequence(
+        transientPlaybackToken = library.playTransientSequence(
             arrangement.sequence,
             percussion: arrangement.percussion,
             loops: true

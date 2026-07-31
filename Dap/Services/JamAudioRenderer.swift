@@ -242,6 +242,54 @@ enum JamAudioRenderer {
         return output
     }
 
+    nonisolated static func renderCompletionAccent(
+        for sequence: MusicSequence,
+        sampleRate: Int
+    ) throws -> RenderedJamAudio {
+        try Task.checkCancellation()
+
+        let durationSamples = max(1, Int((0.110 * Double(sampleRate)).rounded()))
+        let attackSamples = max(1, Int((0.004 * Double(sampleRate)).rounded()))
+        let releaseSamples = max(1, Int((0.018 * Double(sampleRate)).rounded()))
+        let releaseStart = max(attackSamples, durationSamples - releaseSamples)
+        let wave = waveformTable(sequence.soundProfile.waveform, size: 512)
+        let frequency = 440.0 * pow(
+            2.0,
+            Double(sequence.completionAccentMIDINote - 69) / 12.0
+        )
+        let phaseIncrement = frequency * Double(wave.count) / Double(sampleRate)
+        var output = RenderedJamAudio(
+            left: [Float](repeating: 0, count: durationSamples),
+            right: [Float](repeating: 0, count: durationSamples)
+        )
+
+        for frame in 0..<durationSamples {
+            if frame.isMultiple(of: 512) {
+                try Task.checkCancellation()
+            }
+
+            let envelope: Double
+            if frame < attackSamples {
+                envelope = Double(frame) / Double(attackSamples)
+            } else if frame < releaseStart {
+                let progress = Double(frame - attackSamples) / Double(max(1, releaseStart - attackSamples))
+                envelope = 0.08 + 0.92 * pow(1.0 - progress, 1.4)
+            } else {
+                let progress = Double(frame - releaseStart) / Double(max(1, durationSamples - releaseStart))
+                envelope = 0.08 * (1.0 - progress)
+            }
+
+            let phaseIndex = Int(Double(frame) * phaseIncrement) % wave.count
+            let sample = wave[phaseIndex] * Float(envelope * 0.18)
+            output.left[frame] = sample
+            output.right[frame] = sample
+        }
+
+        clamp(&output.left)
+        clamp(&output.right)
+        return output
+    }
+
     nonisolated private static func renderPercussion(
         _ pattern: MusicPercussionPattern,
         into output: inout RenderedJamAudio,
