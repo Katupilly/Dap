@@ -10,7 +10,7 @@ struct OnboardingView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var phase: OnboardingPhase = .welcome
+    @State private var phase: OnboardingPhase = .splash
     @State private var controller: CameraController?
     @State private var input: OnboardingInput?
     @State private var centralDisplayImage: UIImage?
@@ -25,28 +25,25 @@ struct OnboardingView: View {
     @State private var assemblyMessage = "Lendo as cores da sua foto…"
     @State private var captureFeedback = 0
     @State private var completionFeedback = 0
+    @State private var splashRiseFeedback = 0
+    @State private var splashRotationFeedback = 0
+    @State private var primaryActionFeedback = 0
+    @State private var secondaryActionFeedback = 0
     @State private var permissionIssue: OnboardingPermissionIssue = .denied
     @State private var failure: OnboardingFailure?
 
     var body: some View {
         ZStack {
-            OnboardingBackground(reduceMotion: reduceMotion)
+            Color.onboardingCanvas
+                .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                header
-
-                Spacer(minLength: 22)
-
-                mainContent
-                    .frame(maxWidth: .infinity)
-
-                Spacer(minLength: 28)
-
-                footer
+            Group {
+                if phase.usesLightLayout {
+                    lightContent
+                } else {
+                    darkContent
+                }
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 24)
-            .padding(.bottom, 34)
         }
         .onChange(of: phase) { _, newPhase in
             if newPhase != .capture {
@@ -76,7 +73,143 @@ struct OnboardingView: View {
         }
         .sensoryFeedback(.selection, trigger: captureFeedback)
         .sensoryFeedback(.success, trigger: completionFeedback)
-        .statusBarHidden(true)
+        .sensoryFeedback(
+            .impact(weight: .heavy, intensity: 0.8),
+            trigger: splashRiseFeedback
+        )
+        .sensoryFeedback(
+            .impact(weight: .medium, intensity: 0.55),
+            trigger: splashRotationFeedback
+        )
+        .sensoryFeedback(
+            .impact(weight: .medium, intensity: 0.8),
+            trigger: primaryActionFeedback
+        )
+        .sensoryFeedback(
+            .impact(weight: .light, intensity: 0.65),
+            trigger: secondaryActionFeedback
+        )
+        .statusBarHidden(!phase.usesLightLayout)
+        .task(id: phase) {
+            await advanceSplashIfNeeded()
+        }
+    }
+
+    private var darkContent: some View {
+        ZStack {
+            OnboardingBackground(reduceMotion: reduceMotion)
+
+            VStack(spacing: 0) {
+                header
+
+                Spacer(minLength: 22)
+
+                mainContent
+                    .frame(maxWidth: .infinity)
+
+                Spacer(minLength: 28)
+
+                footer
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 24)
+            .padding(.bottom, 34)
+        }
+    }
+
+    @ViewBuilder
+    private var lightContent: some View {
+        switch phase {
+        case .splash:
+            OnboardingSplashMotionView(reduceMotion: reduceMotion)
+        case .photoIntoMusic:
+            OnboardingPhotoIntoMusicView(reduceMotion: reduceMotion) {
+                primaryActionFeedback += 1
+                setPhaseWithoutAnimation(.permissionPrimer)
+            }
+        case .permissionPrimer:
+            OnboardingPermissionPrimerView(
+                reduceMotion: reduceMotion,
+                isAllowDisabled: isRequestingPermission,
+                onAllow: {
+                    guard !isRequestingPermission else { return }
+                    isRequestingPermission = true
+                    primaryActionFeedback += 1
+                    Task { await requestCameraAccess() }
+                },
+                onDemo: {
+                    guard !isRequestingPermission else { return }
+                    secondaryActionFeedback += 1
+                    beginAssembly(.demo)
+                }
+            )
+        case .capture, .review, .assembling, .ready, .permissionDenied, .technicalError:
+            EmptyView()
+        }
+    }
+
+    @MainActor
+    private func advanceSplashIfNeeded() async {
+        guard isCurrentSplashTask() else { return }
+
+        if reduceMotion {
+            do {
+                try await Task.sleep(nanoseconds: OnboardingSplashTiming.reduceMotionAdvanceNanoseconds)
+            } catch {
+                return
+            }
+
+            guard isCurrentSplashTask() else { return }
+            setPhaseWithoutAnimation(.photoIntoMusic)
+            return
+        }
+
+        do {
+            try await Task.sleep(nanoseconds: OnboardingSplashTiming.riseStartNanoseconds)
+        } catch {
+            return
+        }
+
+        guard isCurrentSplashTask() else { return }
+        splashRiseFeedback += 1
+
+        do {
+            try await Task.sleep(
+                nanoseconds: OnboardingSplashTiming.rotationStartNanoseconds
+                    - OnboardingSplashTiming.riseStartNanoseconds
+            )
+        } catch {
+            return
+        }
+
+        guard isCurrentSplashTask() else { return }
+        splashRotationFeedback += 1
+
+        do {
+            try await Task.sleep(
+                nanoseconds: OnboardingSplashTiming.durationNanoseconds
+                    - OnboardingSplashTiming.rotationStartNanoseconds
+            )
+        } catch {
+            return
+        }
+
+        guard isCurrentSplashTask() else { return }
+        setPhaseWithoutAnimation(.photoIntoMusic)
+    }
+
+    @MainActor
+    private func setPhaseWithoutAnimation(_ nextPhase: OnboardingPhase) {
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            phase = nextPhase
+        }
+    }
+
+    @MainActor
+    private func isCurrentSplashTask() -> Bool {
+        !Task.isCancelled && phase == .splash
     }
 
     private var header: some View {
@@ -90,38 +223,11 @@ struct OnboardingView: View {
     @ViewBuilder
     private var mainContent: some View {
         switch phase {
-        case .welcome:
-            VStack(spacing: 18) {
-                OnboardingMechanismView()
-
-                Text("Toda foto tem uma música escondida nela.")
-                    .font(.custom("ZTTalk-Bold", size: 25, relativeTo: .title2))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-
-                Text("As cores viram notas. A imagem cria o ritmo.")
-                    .font(.custom("ZTTalk-Medium", size: 16, relativeTo: .body))
-                    .foregroundStyle(.white.opacity(0.76))
-                    .multilineTextAlignment(.center)
-            }
+        case .splash, .photoIntoMusic:
+            EmptyView()
 
         case .permissionPrimer:
-            VStack(spacing: 16) {
-                Image(systemName: "camera.fill")
-                    .font(.system(size: 34, weight: .medium))
-                    .foregroundStyle(.white)
-
-                Text("Precisamos da câmera")
-                    .font(.custom("ZTTalk-Bold", size: 25, relativeTo: .title2))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-
-                Text("Vamos usar sua câmera só para capturar a foto que vira sua primeira música. Nada é enviado para fora do dispositivo durante esse processo.")
-                    .font(.custom("ZTTalk-Medium", size: 16, relativeTo: .body))
-                    .foregroundStyle(.white.opacity(0.76))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 330)
-            }
+            EmptyView()
 
         case .assembling, .ready:
             OnboardingPhotoClusterView(
@@ -256,25 +362,11 @@ struct OnboardingView: View {
     @ViewBuilder
     private var footer: some View {
         switch phase {
-        case .welcome:
-            primaryButton("Criar meu primeiro som", systemImage: "arrow.right") {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    phase = .permissionPrimer
-                }
-            }
-
         case .permissionPrimer:
-            VStack(spacing: 12) {
-                primaryButton("Permitir câmera", systemImage: "camera.fill") {
-                    Task { await requestCameraAccess() }
-                }
-                .disabled(isRequestingPermission)
+            EmptyView()
 
-                secondaryButton("Usar uma imagem de demonstração") {
-                    beginAssembly(.demo)
-                }
-                .disabled(isRequestingPermission)
-            }
+        case .splash, .photoIntoMusic:
+            EmptyView()
 
         case .capture:
             VStack(spacing: 16) {
@@ -407,8 +499,10 @@ struct OnboardingView: View {
 
     @MainActor
     private func requestCameraAccess() async {
-        guard phase == .permissionPrimer, !isRequestingPermission else { return }
-        isRequestingPermission = true
+        guard phase == .permissionPrimer else {
+            isRequestingPermission = false
+            return
+        }
         defer { isRequestingPermission = false }
 
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -690,8 +784,17 @@ struct OnboardingView: View {
     }
 }
 
-private enum OnboardingPhase {
-    case welcome
+private enum OnboardingSplashTiming {
+    static let duration: TimeInterval = 4
+    static let durationNanoseconds: UInt64 = 4_000_000_000
+    static let riseStartNanoseconds: UInt64 = 404_000_000
+    static let rotationStartNanoseconds: UInt64 = 2_227_240_000
+    static let reduceMotionAdvanceNanoseconds: UInt64 = 180_000_000
+}
+
+private enum OnboardingPhase: Equatable {
+    case splash
+    case photoIntoMusic
     case permissionPrimer
     case capture
     case review
@@ -699,6 +802,15 @@ private enum OnboardingPhase {
     case ready
     case permissionDenied
     case technicalError
+
+    var usesLightLayout: Bool {
+        switch self {
+        case .splash, .photoIntoMusic, .permissionPrimer:
+            true
+        case .capture, .review, .assembling, .ready, .permissionDenied, .technicalError:
+            false
+        }
+    }
 }
 
 private enum OnboardingInput: Equatable {
@@ -751,6 +863,592 @@ private enum OnboardingImportError: Error {
     case alreadyImporting
 }
 
+private extension Color {
+    static let onboardingCanvas = Color(red: 251 / 255, green: 251 / 255, blue: 251 / 255)
+    static let onboardingInkwell = Color(red: 26 / 255, green: 26 / 255, blue: 30 / 255)
+    static let onboardingInactive = Color(red: 174 / 255, green: 174 / 255, blue: 178 / 255)
+}
+
+private struct OnboardingCanvasMetrics {
+    let scale: CGFloat
+    let origin: CGPoint
+
+    func point(x: CGFloat, y: CGFloat) -> CGPoint {
+        CGPoint(x: origin.x + x * scale, y: origin.y + y * scale)
+    }
+
+    func length(_ value: CGFloat) -> CGFloat {
+        value * scale
+    }
+}
+
+private struct OnboardingReferenceCanvas<Content: View>: View {
+    let content: (OnboardingCanvasMetrics) -> Content
+
+    init(@ViewBuilder content: @escaping (OnboardingCanvasMetrics) -> Content) {
+        self.content = content
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let scale = min(proxy.size.width / 393, proxy.size.height / 852)
+            let origin = CGPoint(
+                x: (proxy.size.width - 393 * scale) / 2,
+                y: (proxy.size.height - 852 * scale) / 2
+            )
+
+            content(OnboardingCanvasMetrics(scale: scale, origin: origin))
+        }
+        .ignoresSafeArea()
+    }
+}
+
+private struct OnboardingLightLogo: View {
+    let scale: CGFloat
+
+    init(scale: CGFloat = 1) {
+        self.scale = scale
+    }
+
+    var body: some View {
+        Text("dap")
+            .font(.custom("ZTTalk-Bold", size: 30.436 * scale, relativeTo: .title))
+            .foregroundStyle(Color.onboardingInkwell)
+            .fixedSize()
+            .accessibilityLabel("Dap")
+    }
+}
+
+private let onboardingSplashScaleNormalization = 567.157 / 30.436
+private let onboardingHeaderLogoScale = 0.05 * onboardingSplashScaleNormalization
+
+private struct OnboardingStepIndicator: View {
+    let firstColor: Color
+    let secondColor: Color
+    let scale: CGFloat
+
+    var body: some View {
+        HStack(spacing: 4 * scale) {
+            Capsule()
+                .fill(firstColor)
+                .frame(width: 40.27 * scale, height: 2.822 * scale)
+
+            Capsule()
+                .fill(secondColor)
+                .frame(width: 40.27 * scale, height: 2.822 * scale)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Onboarding progress, two steps")
+    }
+}
+
+private struct OnboardingDarkPillButton: View {
+    let title: String
+    let size: CGSize
+    let font: Font
+    let tracking: CGFloat
+    let action: () -> Void
+
+    var body: some View {
+        Button(title, action: action)
+            .font(font)
+            .tracking(tracking)
+            .foregroundStyle(.white)
+            .frame(width: size.width, height: size.height)
+            .background(Color.onboardingInkwell, in: Capsule())
+            .buttonStyle(.plain)
+    }
+}
+
+private struct OnboardingMotionKeyframe {
+    enum Easing {
+        case linear
+        case cubic(Double, Double, Double, Double)
+    }
+
+    let progress: Double
+    let value: Double
+    let easing: Easing
+
+    init(_ progress: Double, _ value: Double, easing: Easing = .linear) {
+        self.progress = progress
+        self.value = value
+        self.easing = easing
+    }
+}
+
+private func onboardingMotionValue(
+    at progress: Double,
+    keyframes: [OnboardingMotionKeyframe]
+) -> Double {
+    guard let first = keyframes.first else { return 0 }
+    guard progress > first.progress else { return first.value }
+
+    for index in 1 ..< keyframes.count {
+        let next = keyframes[index]
+        guard progress <= next.progress else { continue }
+        let previous = keyframes[index - 1]
+        let duration = next.progress - previous.progress
+        guard duration > 0 else { return next.value }
+        let localProgress = (progress - previous.progress) / duration
+        let easedProgress: Double
+        switch next.easing {
+        case .linear:
+            easedProgress = localProgress
+        case let .cubic(x1, y1, x2, y2):
+            easedProgress = onboardingCubicBezier(localProgress, x1: x1, y1: y1, x2: x2, y2: y2)
+        }
+        return previous.value + (next.value - previous.value) * easedProgress
+    }
+
+    return keyframes.last?.value ?? first.value
+}
+
+private func onboardingCubicBezier(
+    _ progress: Double,
+    x1: Double,
+    y1: Double,
+    x2: Double,
+    y2: Double
+) -> Double {
+    let target = min(max(progress, 0), 1)
+    var lower = 0.0
+    var upper = 1.0
+
+    for _ in 0 ..< 14 {
+        let guess = (lower + upper) / 2
+        if onboardingCubicComponent(guess, first: x1, second: x2) < target {
+            lower = guess
+        } else {
+            upper = guess
+        }
+    }
+
+    return onboardingCubicComponent((lower + upper) / 2, first: y1, second: y2)
+}
+
+private func onboardingCubicComponent(_ value: Double, first: Double, second: Double) -> Double {
+    let inverse = 1 - value
+    return 3 * inverse * inverse * value * first
+        + 3 * inverse * value * value * second
+        + value * value * value
+}
+
+private func onboardingPermissionBounce(_ progress: Double) -> Double {
+    let values = [
+        0.0, 0.0188, 0.0679, 0.1374, 0.2195, 0.308, 0.3978, 0.4856, 0.5686,
+        0.6452, 0.7142, 0.7753, 0.8283, 0.8735, 0.9113, 0.9423, 0.9671, 0.9866,
+        1.0014, 1.0123, 1.0198, 1.0247, 1.0274, 1.0283, 1.0281, 1.0268, 1.025,
+        1.0227, 1.0202, 1.0177, 1.0152, 1.0128, 1.0106, 1.0085, 1.0068, 1.0052,
+        1.0039, 1.0028, 1.0018, 1.0011, 1.0005, 1.0, 0.9997, 0.9995, 0.9993,
+        0.9992, 0.9992, 0.9992, 0.9993, 0.9993
+    ]
+    let clampedProgress = min(max(progress, 0), 1)
+    let scaledProgress = clampedProgress * Double(values.count - 1)
+    let index = min(Int(scaledProgress), values.count - 2)
+    let remainder = scaledProgress - Double(index)
+    return values[index] + (values[index + 1] - values[index]) * remainder
+}
+
+private struct OnboardingRGB {
+    let red: Double
+    let green: Double
+    let blue: Double
+}
+
+private let onboardingInkwellRGB = OnboardingRGB(red: 26 / 255, green: 26 / 255, blue: 30 / 255)
+private let onboardingInactiveRGB = OnboardingRGB(red: 174 / 255, green: 174 / 255, blue: 178 / 255)
+
+private func onboardingBlendedColor(from: OnboardingRGB, to: OnboardingRGB, progress: Double) -> Color {
+    let clampedProgress = min(max(progress, 0), 1)
+    return Color(
+        red: from.red + (to.red - from.red) * clampedProgress,
+        green: from.green + (to.green - from.green) * clampedProgress,
+        blue: from.blue + (to.blue - from.blue) * clampedProgress
+    )
+}
+
+private struct OnboardingSplashMotionView: View {
+    let reduceMotion: Bool
+
+    @State private var startDate = Date()
+
+    var body: some View {
+        if reduceMotion {
+            content(progress: 1, reduceMotion: true)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                content(
+                    progress: min(
+                        max(
+                            context.date.timeIntervalSince(startDate) / OnboardingSplashTiming.duration,
+                            0
+                        ),
+                        1
+                    ),
+                    reduceMotion: false
+                )
+            }
+        }
+    }
+
+    private func content(progress: Double, reduceMotion: Bool) -> some View {
+        let timelineProgress = reduceMotion ? 1 : progress
+        let scale = reduceMotion ? 1 : onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 6.37 * onboardingSplashScaleNormalization),
+                .init(0.101, 6.37 * onboardingSplashScaleNormalization),
+                .init(0.55681, 1 * onboardingSplashScaleNormalization, easing: .cubic(1, 0.006, 0, 0.993)),
+                .init(0.751, 0.15 * onboardingSplashScaleNormalization, easing: .cubic(1, 0.005, 0, 0.995)),
+                .init(0.90225, 0.05 * onboardingSplashScaleNormalization, easing: .cubic(1, 0.007, 0, 0.991)),
+                .init(1, 0.05 * onboardingSplashScaleNormalization)
+            ]
+        )
+        let translationY = reduceMotion ? 0 : onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, -1802.001),
+                .init(0.101, -1802.001),
+                .init(0.55681, 30.998, easing: .cubic(1, -0.007, 0, 0.977)),
+                .init(0.751, 30.998),
+                .init(0.90225, -313.303, easing: .cubic(1, 0.01, 0, 1.002)),
+                .init(1, -313.303)
+            ]
+        )
+        let translationX = reduceMotion ? 0 : onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.101, 0),
+                .init(0.55681, -3.719, easing: .cubic(1, -0.007, 0, 0.977)),
+                .init(1, -3.719)
+            ]
+        )
+        let rotation = reduceMotion ? 0 : onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.55681, 0),
+                .init(0.751, -360, easing: .cubic(1, -0.019, 0, 0.972)),
+                .init(1, -360)
+            ]
+        )
+        let flashOpacity = reduceMotion ? 0 : onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.05039, 1, easing: .cubic(1, -0.002, 0, 0.995)),
+                .init(0.101, 0, easing: .cubic(1, 0, 0, 0.995)),
+                .init(1, 0)
+            ]
+        )
+
+        return OnboardingReferenceCanvas { metrics in
+            ZStack {
+                OnboardingLightLogo(scale: metrics.scale * CGFloat(scale))
+                    .rotationEffect(.degrees(rotation))
+                    .position(
+                        metrics.point(
+                            x: reduceMotion ? 196.5 : 200.219,
+                            y: reduceMotion ? 81.8 : 395.103
+                        )
+                    )
+                    .offset(x: metrics.length(translationX), y: metrics.length(translationY))
+
+                Color.onboardingInkwell
+                    .opacity(flashOpacity)
+                    .ignoresSafeArea()
+            }
+        }
+    }
+}
+
+private struct OnboardingPhotoIntoMusicView: View {
+    let reduceMotion: Bool
+    let onCreate: () -> Void
+
+    @State private var startDate = Date()
+
+    var body: some View {
+        if reduceMotion {
+            content(progress: 1, reduceMotion: true)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                content(
+                    progress: min(max(context.date.timeIntervalSince(startDate) / 4, 0), 1),
+                    reduceMotion: false
+                )
+            }
+        }
+    }
+
+    private func content(progress: Double, reduceMotion: Bool) -> some View {
+        let timelineProgress = reduceMotion ? 1 : progress
+        let titleOpacity = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.25025, 1, easing: .cubic(0.5, 0, 0.5, 1)),
+                .init(1, 1)
+            ]
+        )
+        let titleTranslation = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.25025, 0),
+                .init(0.49975, -11.108, easing: .cubic(0.42, 0, 0.58, 1)),
+                .init(1, -11.108)
+            ]
+        )
+        let imageOpacity = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.4995, 0),
+                .init(0.625, 1, easing: .cubic(0, 0, 0.58, 1)),
+                .init(1, 1)
+            ]
+        )
+        let imageScale = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 1),
+                .init(0.625, 1.66, easing: .cubic(0.5, 0, 0.5, 1)),
+                .init(1, 1.66)
+            ]
+        )
+        let indicatorOpacity = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.4995, 1, easing: .cubic(0.5, 0, 0.5, 1)),
+                .init(1, 1)
+            ]
+        )
+        let descriptionOpacity = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.55125, 0),
+                .init(0.625, 1, easing: .cubic(0.5, 0, 0.5, 1)),
+                .init(1, 1)
+            ]
+        )
+        let ctaOpacity = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.75, 0),
+                .init(0.8, 1, easing: .cubic(0.5, 0, 0.5, 1)),
+                .init(1, 1)
+            ]
+        )
+        let ctaVisible = reduceMotion || timelineProgress >= 0.8
+
+        return OnboardingReferenceCanvas { metrics in
+            ZStack {
+                OnboardingLightLogo(scale: metrics.scale * CGFloat(onboardingHeaderLogoScale))
+                    .position(metrics.point(x: 196.5, y: 81.8))
+
+                OnboardingStepIndicator(
+                    firstColor: .onboardingInkwell,
+                    secondColor: .onboardingInactive,
+                    scale: metrics.scale
+                )
+                .opacity(indicatorOpacity)
+                .position(metrics.point(x: 196.5, y: 109.54))
+
+                Text("Your photos already\nhave a soundtrack")
+                    .font(.custom("ZTTalk-Bold", size: metrics.length(22), relativeTo: .title2))
+                    .foregroundStyle(Color.onboardingInkwell)
+                    .multilineTextAlignment(.center)
+                    .frame(width: metrics.length(300), height: metrics.length(58))
+                    .opacity(titleOpacity)
+                    .position(metrics.point(x: 196.71, y: 292.11))
+                    .offset(y: metrics.length(titleTranslation))
+
+                Image("OnboardingSample01")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: metrics.length(162.849), height: metrics.length(122.137))
+                    .clipped()
+                    .scaleEffect(CGFloat(imageScale))
+                    .opacity(imageOpacity)
+                    .position(metrics.point(x: 194.5, y: 426.0))
+
+                Text("Colors become notes. The image sets the rhythm.")
+                    .font(.custom("ZTTalk-Regular", size: metrics.length(17), relativeTo: .body))
+                    .foregroundStyle(Color.onboardingInkwell)
+                    .multilineTextAlignment(.center)
+                    .frame(width: metrics.length(266.318), height: metrics.length(44))
+                    .opacity(descriptionOpacity)
+                    .position(metrics.point(x: 196.5, y: 564.19))
+
+                OnboardingDarkPillButton(
+                    title: "Create my first sound",
+                    size: CGSize(width: metrics.length(249), height: metrics.length(42)),
+                    font: .custom("ZTTalk-SemiBold", size: metrics.length(17), relativeTo: .body),
+                    tracking: -0.43,
+                    action: onCreate
+                )
+                .opacity(ctaOpacity)
+                .allowsHitTesting(ctaVisible)
+                .accessibilityHidden(!ctaVisible)
+                .position(metrics.point(x: 196.5, y: 744.24))
+            }
+        }
+    }
+}
+
+private struct OnboardingPermissionPrimerView: View {
+    let reduceMotion: Bool
+    let isAllowDisabled: Bool
+    let onAllow: () -> Void
+    let onDemo: () -> Void
+
+    @State private var startDate = Date()
+
+    var body: some View {
+        if reduceMotion {
+            content(progress: 1, reduceMotion: true)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                content(
+                    progress: min(max(context.date.timeIntervalSince(startDate) / 2, 0), 1),
+                    reduceMotion: false
+                )
+            }
+        }
+    }
+
+    private func content(progress: Double, reduceMotion: Bool) -> some View {
+        let timelineProgress = reduceMotion ? 1 : progress
+        let iconOpacity = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0), .init(0.05, 0.5), .init(0.1, 0.567), .init(0.15, 0.75),
+                .init(0.2, 0.912), .init(0.25, 0.991), .init(0.3, 1), .init(1, 1)
+            ]
+        )
+        let iconScale = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 1),
+                .init(0.025, 0.8, easing: .cubic(0.15, 0.85, 0.3, 1)),
+                .init(0.0575, 0.8),
+                .init(0.3, 1, easing: .cubic(0.3, 0, 0.5, 1)),
+                .init(1, 1)
+            ]
+        )
+        let textOpacity = timelineProgress < 0.25
+            ? 0
+            : timelineProgress < 0.5
+                ? onboardingPermissionBounce((timelineProgress - 0.25) / 0.25)
+                : 1
+        let demoOpacity = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.6505, 0),
+                .init(0.7505, 1, easing: .cubic(0.5, 0, 0.5, 1)),
+                .init(1, 1)
+            ]
+        )
+        let allowOpacity = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.6505, 0),
+                .init(0.8995, 1, easing: .cubic(0.5, 0, 0.5, 1)),
+                .init(1, 1)
+            ]
+        )
+        let barProgress = onboardingMotionValue(
+            at: timelineProgress,
+            keyframes: [
+                .init(0, 0),
+                .init(0.25, 1, easing: .cubic(0.5, 0, 0.5, 1)),
+                .init(1, 1)
+            ]
+        )
+        let firstBar = onboardingBlendedColor(
+            from: onboardingInkwellRGB,
+            to: onboardingInactiveRGB,
+            progress: barProgress
+        )
+        let secondBar = onboardingBlendedColor(
+            from: onboardingInactiveRGB,
+            to: onboardingInkwellRGB,
+            progress: barProgress
+        )
+        let actionsVisible = reduceMotion || timelineProgress >= 0.7505
+
+        return OnboardingReferenceCanvas { metrics in
+            ZStack {
+                OnboardingLightLogo(scale: metrics.scale * CGFloat(onboardingHeaderLogoScale))
+                    .position(metrics.point(x: 197.3, y: 81.8))
+
+                OnboardingStepIndicator(
+                    firstColor: firstBar,
+                    secondColor: secondBar,
+                    scale: metrics.scale
+                )
+                .position(metrics.point(x: 197.68, y: 109.54))
+
+                Image(systemName: "camera.fill")
+                    .font(.system(size: metrics.length(72), weight: .regular))
+                    .foregroundStyle(Color.onboardingInkwell)
+                    .frame(width: metrics.length(84), height: metrics.length(72))
+                    .opacity(iconOpacity)
+                    .scaleEffect(CGFloat(iconScale))
+                    .position(metrics.point(x: 196.5, y: 407))
+
+                Text("We need your camera")
+                    .font(.custom("ZTTalk-Bold", size: metrics.length(22), relativeTo: .title2))
+                    .foregroundStyle(Color.onboardingInkwell)
+                    .multilineTextAlignment(.center)
+                    .frame(width: metrics.length(300), height: metrics.length(28))
+                    .opacity(textOpacity)
+                    .position(metrics.point(x: 196.5, y: 468.56))
+
+                Text("We'll use it only to capture the photo that becomes your first song. Nothing ever leaves your device.")
+                    .font(.custom("ZTTalk-Regular", size: metrics.length(17), relativeTo: .body))
+                    .foregroundStyle(Color.onboardingInkwell)
+                    .multilineTextAlignment(.center)
+                    .frame(width: metrics.length(291.924), height: metrics.length(72))
+                    .opacity(textOpacity)
+                    .position(metrics.point(x: 196.5, y: 519.56))
+
+                OnboardingDarkPillButton(
+                    title: "Allow camera",
+                    size: CGSize(width: metrics.length(156), height: metrics.length(42)),
+                    font: .system(size: metrics.length(13), weight: .semibold),
+                    tracking: -0.08,
+                    action: onAllow
+                )
+                .disabled(isAllowDisabled)
+                .opacity(allowOpacity)
+                .allowsHitTesting(actionsVisible && !isAllowDisabled)
+                .accessibilityHidden(!actionsVisible)
+                .position(metrics.point(x: 196.5, y: 744))
+
+                Button("Use a demo photo", action: onDemo)
+                    .font(.system(size: metrics.length(13), weight: .semibold))
+                    .tracking(-0.08)
+                    .foregroundStyle(Color.onboardingInkwell)
+                    .buttonStyle(.plain)
+                    .disabled(isAllowDisabled)
+                    .opacity(demoOpacity)
+                    .allowsHitTesting(actionsVisible && !isAllowDisabled)
+                    .accessibilityHidden(!actionsVisible)
+                    .position(metrics.point(x: 197.3, y: 792.59))
+            }
+        }
+    }
+}
+
 private struct OnboardingBackground: View {
     let reduceMotion: Bool
 
@@ -780,70 +1478,6 @@ private struct OnboardingBackground: View {
     }
 }
 
-private struct OnboardingMechanismView: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            if let image = OnboardingTemporaryArtwork.demoImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 104, height: 130)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-
-            Image(systemName: "arrow.right")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.white.opacity(0.65))
-
-            OnboardingColorStrip()
-                .frame(width: 34, height: 130)
-
-            Image(systemName: "arrow.right")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.white.opacity(0.65))
-
-            OnboardingSequenceGraphic()
-                .frame(width: 88, height: 130)
-        }
-        .frame(height: 150)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Uma foto se transforma em cores e depois em uma sequência musical")
-    }
-}
-
-private struct OnboardingColorStrip: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            Rectangle().fill(Color(red: 0.94, green: 0.20, blue: 0.32))
-            Rectangle().fill(Color(red: 0.12, green: 0.72, blue: 0.86))
-            Rectangle().fill(Color(red: 0.98, green: 0.72, blue: 0.18))
-            Rectangle().fill(Color(red: 0.44, green: 0.34, blue: 0.96))
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-private struct OnboardingSequenceGraphic: View {
-    private let lengths: [CGFloat] = [0.72, 0.42, 0.88, 0.56, 0.78, 0.34, 0.64, 0.48]
-
-    var body: some View {
-        VStack(spacing: 7) {
-            ForEach(Array(lengths.enumerated()), id: \.offset) { index, length in
-                HStack(spacing: 5) {
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(index.isMultiple(of: 2) ? Color(red: 0.12, green: 0.72, blue: 0.86) : .white.opacity(0.72))
-                        .frame(width: 68 * length, height: 7)
-                    Circle()
-                        .fill(.white.opacity(0.42))
-                        .frame(width: 5, height: 5)
-                }
-            }
-        }
-        .padding(10)
-        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
 private struct OnboardingPhotoClusterView: View {
     let centerImage: UIImage?
     let isAssembled: Bool
@@ -864,7 +1498,7 @@ private struct OnboardingPhotoClusterView: View {
                 ForEach(items) { item in
                     OnboardingClusterCard(
                         color: item.color,
-                        image: nil,
+                        image: Image(item.imageName),
                         label: item.label
                     )
                     .frame(width: cardWidth, height: cardHeight)
@@ -887,7 +1521,8 @@ private struct OnboardingPhotoClusterView: View {
 
                 OnboardingClusterCard(
                     color: OnboardingTemporaryArtwork.centerFallbackColor,
-                    image: centerImage,
+                    image: centerImage.map { Image(uiImage: $0) }
+                        ?? Image(OnboardingTemporaryArtwork.demoAssetName),
                     label: "Sua criação musical"
                 )
                 .frame(width: cardWidth * 1.1, height: cardHeight * 1.1)
@@ -906,22 +1541,16 @@ private struct OnboardingPhotoClusterView: View {
 
 private struct OnboardingClusterCard: View {
     let color: Color
-    let image: UIImage?
+    let image: Image
     let label: String
 
     var body: some View {
         RoundedRectangle(cornerRadius: 7, style: .continuous)
             .fill(color)
             .overlay {
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    OnboardingTemporaryBlock()
-                        .foregroundStyle(.white.opacity(0.18))
-                        .padding(18)
-                }
+                image
+                    .resizable()
+                    .scaledToFill()
             }
             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay {
@@ -933,24 +1562,10 @@ private struct OnboardingClusterCard: View {
     }
 }
 
-private struct OnboardingTemporaryBlock: View {
-    var body: some View {
-        VStack(spacing: 8) {
-            ForEach(0..<5, id: \.self) { row in
-                HStack(spacing: 8) {
-                    ForEach(0..<4, id: \.self) { column in
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .opacity((row + column).isMultiple(of: 2) ? 0.96 : 0.52)
-                    }
-                }
-            }
-        }
-    }
-}
-
 private struct OnboardingClusterItem: Identifiable {
     let id: Int
     let label: String
+    let imageName: String
     let color: Color
     let startOffset: CGSize
     let finalOffset: CGSize
@@ -962,13 +1577,14 @@ private struct OnboardingClusterItem: Identifiable {
 }
 
 private enum OnboardingTemporaryArtwork {
-    static let centerFallbackColor = Color(red: 0.94, green: 0.20, blue: 0.32)
-    static let demoImage = displayImage(from: fallbackImageData())
+    static let demoAssetName = "OnboardingSample02"
+    static let centerFallbackColor = Color.onboardingCanvas
 
     static let clusterItems: [OnboardingClusterItem] = [
         OnboardingClusterItem(
             id: 0,
             label: "Camada visual um",
+            imageName: "OnboardingSample03",
             color: Color(red: 0.12, green: 0.72, blue: 0.86),
             startOffset: CGSize(width: -190, height: -230),
             finalOffset: CGSize(width: -84, height: -96),
@@ -981,6 +1597,7 @@ private enum OnboardingTemporaryArtwork {
         OnboardingClusterItem(
             id: 1,
             label: "Camada visual dois",
+            imageName: "OnboardingSample04",
             color: Color(red: 0.98, green: 0.72, blue: 0.18),
             startOffset: CGSize(width: 196, height: -218),
             finalOffset: CGSize(width: 82, height: -88),
@@ -993,6 +1610,7 @@ private enum OnboardingTemporaryArtwork {
         OnboardingClusterItem(
             id: 2,
             label: "Camada visual três",
+            imageName: "OnboardingSample05",
             color: Color(red: 0.44, green: 0.34, blue: 0.96),
             startOffset: CGSize(width: -202, height: 230),
             finalOffset: CGSize(width: -88, height: 94),
@@ -1005,6 +1623,7 @@ private enum OnboardingTemporaryArtwork {
         OnboardingClusterItem(
             id: 3,
             label: "Camada visual quatro",
+            imageName: "OnboardingSample06",
             color: Color(red: 0.36, green: 0.88, blue: 0.38),
             startOffset: CGSize(width: 204, height: 224),
             finalOffset: CGSize(width: 88, height: 98),
@@ -1017,37 +1636,7 @@ private enum OnboardingTemporaryArtwork {
     ]
 
     static func fallbackImageData() -> Data {
-        let size = CGSize(width: 900, height: 1125)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.pngData { context in
-            let rect = CGRect(origin: .zero, size: size)
-            UIColor(red: 0.94, green: 0.20, blue: 0.32, alpha: 1).setFill()
-            context.cgContext.fill(rect)
-
-            let blocks: [(UIColor, CGRect)] = [
-                (
-                    UIColor(red: 0.12, green: 0.72, blue: 0.86, alpha: 1),
-                    CGRect(x: 82, y: 96, width: 328, height: 318)
-                ),
-                (
-                    UIColor(red: 0.98, green: 0.72, blue: 0.18, alpha: 1),
-                    CGRect(x: 476, y: 150, width: 260, height: 292)
-                ),
-                (
-                    UIColor(red: 0.44, green: 0.34, blue: 0.96, alpha: 1),
-                    CGRect(x: 146, y: 548, width: 286, height: 344)
-                ),
-                (
-                    UIColor(red: 0.36, green: 0.88, blue: 0.38, alpha: 1),
-                    CGRect(x: 508, y: 604, width: 264, height: 312)
-                )
-            ]
-
-            for (color, blockRect) in blocks {
-                color.setFill()
-                UIBezierPath(roundedRect: blockRect, cornerRadius: 18).fill()
-            }
-        }
+        UIImage(named: demoAssetName)?.pngData() ?? Data()
     }
 
     static func displayImage(from data: Data) -> UIImage? {
