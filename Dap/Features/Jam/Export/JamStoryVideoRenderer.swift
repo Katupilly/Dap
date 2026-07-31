@@ -7,6 +7,7 @@ import VideoToolbox
 
 struct JamStoryVideoRenderResult: Sendable {
     let fileURL: URL
+    let previewImageData: Data
     let duration: CMTime
     let pixelSize: CGSize
     let framesPerSecond: Int
@@ -178,6 +179,7 @@ struct JamStoryVideoRenderer {
             shouldKeepFinal = true
             return JamStoryVideoRenderResult(
                 fileURL: finalURL,
+                previewImageData: baseImageResult.pngData,
                 duration: min(audioDuration, videoDuration),
                 pixelSize: Self.outputPixelSize,
                 framesPerSecond: Self.framesPerSecond

@@ -1,4 +1,5 @@
-import CoreTransferable
+import Foundation
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -40,23 +41,166 @@ struct StoryShareActions<ShareContent: View>: View {
     }
 }
 
-struct StoryImageExport: Transferable {
-    let data: Data
+enum DapExportFileHelper {
+    private static let directoryName = "Dap-Exports"
 
-    static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(exportedContentType: .png) { export in
-            export.data
+    static func preparePhoto(data: Data, date: Date = Date()) throws -> URL {
+        try prepareSingle(data: data, kind: .photo, date: date)
+    }
+
+    static func preparePhotos(data: [Data], date: Date = Date()) throws -> [URL] {
+        let directory = try resetDirectory()
+        return try data.enumerated().map { index, data in
+            try write(
+                data: data,
+                kind: .photos(index: index + 1),
+                date: date,
+                to: directory
+            )
         }
     }
-}
 
-struct StoryVideoExport: Transferable {
-    let fileURL: URL
+    static func prepareStory(data: Data, date: Date = Date()) throws -> URL {
+        try prepareSingle(data: data, kind: .story, date: date)
+    }
 
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(exportedContentType: .mpeg4Movie) { export in
-            SentTransferredFile(export.fileURL)
+    static func prepareJamImage(data: Data, name: String, date: Date = Date()) throws -> URL {
+        try prepareSingle(data: data, kind: .jam(name: name, fileExtension: "png"), date: date)
+    }
+
+    static func prepareJamVideo(
+        from sourceURL: URL,
+        name: String,
+        date: Date = Date()
+    ) throws -> URL {
+        let directory = try resetDirectory()
+        let destination = try uniqueURL(
+            in: directory,
+            fileName: fileName(for: .jam(name: name, fileExtension: "mp4"), date: date)
+        )
+        try FileManager.default.copyItem(at: sourceURL, to: destination)
+        return destination
+    }
+
+    static func removeTemporaryExports() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(directoryName, isDirectory: true)
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private static func prepareSingle(data: Data, kind: FileKind, date: Date) throws -> URL {
+        let directory = try resetDirectory()
+        return try write(data: data, kind: kind, date: date, to: directory)
+    }
+
+    private static func write(
+        data: Data,
+        kind: FileKind,
+        date: Date,
+        to directory: URL
+    ) throws -> URL {
+        let destination = try uniqueURL(
+            in: directory,
+            fileName: fileName(for: kind, date: date, data: data)
+        )
+        try data.write(to: destination, options: .atomic)
+        return destination
+    }
+
+    private static func resetDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(directoryName, isDirectory: true)
+        if FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
         }
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
+    }
+
+    private static func uniqueURL(in directory: URL, fileName: String) throws -> URL {
+        let fileManager = FileManager.default
+        let baseURL = directory.appendingPathComponent(fileName)
+        guard fileManager.fileExists(atPath: baseURL.path) else { return baseURL }
+
+        let stem = baseURL.deletingPathExtension().lastPathComponent
+        let pathExtension = baseURL.pathExtension
+        var sequence = 2
+        while true {
+            let candidate = directory.appendingPathComponent(
+                "\(stem)-\(sequence).\(pathExtension)"
+            )
+            if !fileManager.fileExists(atPath: candidate.path) { return candidate }
+            sequence += 1
+        }
+    }
+
+    private static func fileName(for kind: FileKind, date: Date, data: Data? = nil) -> String {
+        switch kind {
+        case .photo:
+            return "Dap-Photo-\(dateString(date)).\(imageExtension(for: data))"
+        case .photos(let index):
+            return "Dap-Photos-\(dayString(date))-\(String(format: "%02d", index)).\(imageExtension(for: data))"
+        case .story:
+            return "Dap-Story-\(dateString(date)).png"
+        case .jam(let name, let fileExtension):
+            return "Dap-Jam-\(sanitizedJamName(name)).\(fileExtension)"
+        }
+    }
+
+    private static func dateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
+        return formatter.string(from: date)
+    }
+
+    private static func dayString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private static func imageExtension(for data: Data?) -> String {
+        guard let data,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let typeIdentifier = CGImageSourceGetType(source),
+              let fileExtension = UTType(typeIdentifier as String)?.preferredFilenameExtension else {
+            return "png"
+        }
+        return fileExtension
+    }
+
+    private static func sanitizedJamName(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.caseInsensitiveCompare("Untitled Jam") != .orderedSame else {
+            return "Untitled"
+        }
+
+        let allowed = CharacterSet.alphanumerics
+            .union(.whitespaces)
+            .union(CharacterSet(charactersIn: "-_"))
+        let filtered = String(trimmed.unicodeScalars.filter(allowed.contains))
+        let components = filtered
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        let sanitized = String(components.joined(separator: "-").prefix(80))
+        return sanitized.isEmpty ? "Untitled" : sanitized
+    }
+
+    private enum FileKind {
+        case photo
+        case photos(index: Int)
+        case story
+        case jam(name: String, fileExtension: String)
     }
 }
 

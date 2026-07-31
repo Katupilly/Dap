@@ -25,6 +25,7 @@ final class JamStoryExportCoordinator {
     private(set) var errorMessage: String?
     private(set) var player: AVPlayer?
     private(set) var isVideoPlaying = false
+    private(set) var shareURL: URL?
 
     @ObservationIgnored private let imageRenderer = JamStoryRenderer()
     @ObservationIgnored private let videoRenderer = JamStoryVideoRenderer()
@@ -69,6 +70,10 @@ final class JamStoryExportCoordinator {
                 case .image:
                     let renderedImage = try await imageRenderer.render(snapshot: snapshot)
                     try Task.checkCancellation()
+                    let preparedURL = try DapExportFileHelper.prepareJamImage(
+                        data: renderedImage.pngData,
+                        name: snapshot.jamName
+                    )
                     progress = makeProgress(
                         stage: .complete,
                         completedFrames: 1,
@@ -77,6 +82,7 @@ final class JamStoryExportCoordinator {
                         startedAt: startedAt
                     )
                     result = .image(renderedImage)
+                    shareURL = preparedURL
                 case .video:
                     let renderedVideo = try await videoRenderer.render(
                         snapshot: snapshot,
@@ -85,7 +91,12 @@ final class JamStoryExportCoordinator {
                         self?.progress = exportProgress
                     }
                     try Task.checkCancellation()
+                    let preparedURL = try DapExportFileHelper.prepareJamVideo(
+                        from: renderedVideo.fileURL,
+                        name: snapshot.jamName
+                    )
                     result = .video(renderedVideo)
+                    shareURL = preparedURL
                     preparePlayer(for: renderedVideo.fileURL)
                 }
                 phase = .ready
@@ -162,6 +173,8 @@ final class JamStoryExportCoordinator {
         if case .video(let videoResult) = result {
             JamStoryVideoRenderer.removeExport(at: videoResult.fileURL)
         }
+        DapExportFileHelper.removeTemporaryExports()
+        shareURL = nil
         result = nil
     }
 

@@ -80,6 +80,7 @@ struct PhotoStoryExportSheet: View {
     @State private var format: PhotoExportFormat = .photo
     @State private var phase = Phase.preparing
     @State private var result: PhotoExportResult?
+    @State private var shareURL: URL?
     @State private var errorMessage: String?
     @State private var renderTask: Task<Void, Never>?
     @State private var renderToken = UUID()
@@ -162,10 +163,10 @@ struct PhotoStoryExportSheet: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
-            if let result {
+            if let result, let shareURL {
                 PhotoStoryReadyView(
-                    title: snapshot.title,
                     result: result,
+                    shareURL: shareURL,
                     format: format,
                     isInstagramAvailable: instagramExporter.isInstagramStoriesAvailable,
                     onInstagram: { Task { await shareToInstagram(result.image) } },
@@ -187,6 +188,8 @@ struct PhotoStoryExportSheet: View {
         renderToken = token
         phase = .preparing
         result = nil
+        shareURL = nil
+        DapExportFileHelper.removeTemporaryExports()
         errorMessage = nil
         renderTask = Task { @MainActor [format, token] in
             await prepare(format: format, token: token)
@@ -197,12 +200,23 @@ struct PhotoStoryExportSheet: View {
     private func prepare(format: PhotoExportFormat, token: UUID) async {
         phase = .preparing
         result = nil
+        shareURL = nil
         errorMessage = nil
 
         do {
             let rendered = try await renderer.render(format: format, snapshot: snapshot)
             guard !Task.isCancelled, token == renderToken, format == self.format else { return }
+            let preparedURL: URL
+            switch format {
+            case .photo:
+                preparedURL = try DapExportFileHelper.preparePhoto(data: rendered.pngData)
+            case .story:
+                preparedURL = try DapExportFileHelper.prepareStory(data: rendered.pngData)
+            }
+            try Task.checkCancellation()
+            guard token == renderToken, format == self.format else { return }
             result = rendered
+            shareURL = preparedURL
             phase = .ready
             renderTask = nil
         } catch is CancellationError {
@@ -237,8 +251,8 @@ struct PhotoStoryExportSheet: View {
 }
 
 private struct PhotoStoryReadyView: View {
-    let title: String
     let result: PhotoExportResult
+    let shareURL: URL
     let format: PhotoExportFormat
     let isInstagramAvailable: Bool
     let onInstagram: () -> Void
@@ -259,8 +273,11 @@ private struct PhotoStoryReadyView: View {
                 .accessibilityLabel(format == .story ? "Pré-visualização do Story" : "Pré-visualização da foto")
 
             ShareLink(
-                item: StoryImageExport(data: result.pngData),
-                preview: SharePreview(title, image: Image(uiImage: result.image))
+                item: shareURL,
+                preview: SharePreview(
+                    shareURL.lastPathComponent,
+                    image: Image(uiImage: result.image)
+                )
             ) {
                 Label("Compartilhar", systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity, minHeight: 52)

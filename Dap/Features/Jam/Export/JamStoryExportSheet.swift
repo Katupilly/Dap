@@ -282,7 +282,9 @@ private struct JamStoryExportReadyView: View {
                     Task { await coordinator.shareReadyResultToInstagram() }
                 }
             ) {
-                shareLink
+                if let shareURL = coordinator.shareURL {
+                    shareLink(shareURL: shareURL)
+                }
             }
         }
         .padding(.horizontal, 20)
@@ -323,24 +325,36 @@ private struct JamStoryExportReadyView: View {
     }
 
     @ViewBuilder
-    private var shareLink: some View {
+    private func shareLink(shareURL: URL) -> some View {
         switch result {
         case .image(let imageResult):
             ShareLink(
-                item: StoryImageExport(data: imageResult.pngData),
+                item: shareURL,
                 preview: SharePreview(
-                    snapshot.jamName,
+                    shareURL.lastPathComponent,
                     image: Image(uiImage: imageResult.image)
                 )
             ) {
                 shareLabel
             }
         case .video(let videoResult):
-            ShareLink(
-                item: StoryVideoExport(fileURL: videoResult.fileURL),
-                preview: SharePreview(snapshot.jamName)
-            ) {
-                shareLabel
+            if let previewImage = UIImage(data: videoResult.previewImageData) {
+                ShareLink(
+                    item: shareURL,
+                    preview: SharePreview(
+                        shareURL.lastPathComponent,
+                        image: Image(uiImage: previewImage)
+                    )
+                ) {
+                    shareLabel
+                }
+            } else {
+                ShareLink(
+                    item: shareURL,
+                    preview: SharePreview(shareURL.lastPathComponent)
+                ) {
+                    shareLabel
+                }
             }
         }
     }
