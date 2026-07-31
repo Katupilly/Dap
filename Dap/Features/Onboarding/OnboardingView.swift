@@ -1045,26 +1045,68 @@ private final class SplashHapticPlayer {
     private var engine: CHHapticEngine?
     private var player: CHHapticPatternPlayer?
 
+    private var peakHitResourceID: CHHapticAudioResourceID?
+    private var releaseTickResourceID: CHHapticAudioResourceID?
+    private var exitTickResourceID: CHHapticAudioResourceID?
+
     func startPattern() -> Bool {
         try? player?.stop(atTime: CHHapticTimeImmediate)
         player = nil
-        guard prepare() else { return false }
+        guard prepare(), let engine else { return false }
 
-        let events = [
-            transient(intensity: 0.48, sharpness: 0.38, at: 0.404),
-            transient(intensity: 0.58, sharpness: 0.44, at: 0.800),
-            transient(intensity: 0.68, sharpness: 0.50, at: 1.200),
-            transient(intensity: 0.78, sharpness: 0.58, at: 1.600),
-            transient(intensity: 0.88, sharpness: 0.68, at: 1.960),
-            transient(intensity: 1.00, sharpness: 1.00, at: 2.22724),
-            transient(intensity: 0.72, sharpness: 0.90, at: 2.300),
-            transient(intensity: 0.65, sharpness: 0.48, at: 3.004)
+        var events: [CHHapticEvent] = [
+            // Acentos rítmicos durante o rise, construindo aos poucos.
+            transient(intensity: 0.30, sharpness: 0.32, at: 0.404),
+            transient(intensity: 0.38, sharpness: 0.38, at: 0.800),
+            transient(intensity: 0.46, sharpness: 0.44, at: 1.200),
+            transient(intensity: 0.54, sharpness: 0.52, at: 1.600),
+            transient(intensity: 0.62, sharpness: 0.60, at: 1.960)
         ]
 
+        // "Colchão" contínuo por baixo do rise; a curva abaixo controla o swell.
+        events.append(
+            CHHapticEvent(
+                eventType: .hapticContinuous,
+                parameters: [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.20),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.25)
+                ],
+                relativeTime: 0.404,
+                duration: 2.22724 - 0.404
+            )
+        )
+
+        // O pico, exatamente quando a arte "trava" na rotação — casado com um hit real.
+        events.append(transient(intensity: 1.00, sharpness: 1.00, at: 2.22724))
+        if let peakHitResourceID {
+            events.append(audioEvent(resource: peakHitResourceID, volume: 0.9, at: 2.22724))
+        }
+
+        // Release logo depois, mais suave, casado com um tick leve.
+        events.append(transient(intensity: 0.55, sharpness: 0.45, at: 2.300))
+        if let releaseTickResourceID {
+            events.append(audioEvent(resource: releaseTickResourceID, volume: 0.55, at: 2.300))
+        }
+
+        // Saída, quando o splash começa a sumir.
+        events.append(transient(intensity: 0.50, sharpness: 0.42, at: 3.004))
+        if let exitTickResourceID {
+            events.append(audioEvent(resource: exitTickResourceID, volume: 0.6, at: 3.004))
+        }
+
+        let riseCurve = CHHapticParameterCurve(
+            parameterID: .hapticIntensityControl,
+            controlPoints: [
+                .init(relativeTime: 0, value: 0.0),
+                .init(relativeTime: 1.4, value: 0.5),
+                .init(relativeTime: 1.82324, value: 1.0)
+            ],
+            relativeTime: 0.404
+        )
+
         do {
-            let pattern = try CHHapticPattern(events: events, parameters: [])
-            let player = try engine?.makePlayer(with: pattern)
-            guard let player else { return false }
+            let pattern = try CHHapticPattern(events: events, parameterCurves: [riseCurve])
+            let player = try engine.makePlayer(with: pattern)
             try player.start(atTime: CHHapticTimeImmediate)
             self.player = player
             return true
@@ -1087,6 +1129,7 @@ private final class SplashHapticPlayer {
             }
             try engine.start()
             self.engine = engine
+            registerAudioResources(on: engine)
             return true
         } catch {
             self.engine = nil
@@ -1101,6 +1144,20 @@ private final class SplashHapticPlayer {
         engine = nil
     }
 
+    private func registerAudioResources(on engine: CHHapticEngine) {
+        peakHitResourceID = registerAudio(on: engine, relativePath: "Kicks/Kick_Club.wav")
+        releaseTickResourceID = registerAudio(on: engine, relativePath: "Rimshots/Rim_Soft.wav")
+        exitTickResourceID = registerAudio(on: engine, relativePath: "Rimshots/Rim_Main.wav")
+    }
+
+    private func registerAudio(on engine: CHHapticEngine, relativePath: String) -> CHHapticAudioResourceID? {
+        guard let resourceURL = Bundle.main.resourceURL else { return nil }
+        let fileURL = resourceURL
+            .appendingPathComponent("Drums", isDirectory: true)
+            .appendingPathComponent(relativePath)
+        return try? engine.registerAudioResource(fileURL, options: [:])
+    }
+
     private func transient(intensity: Float, sharpness: Float, at time: TimeInterval) -> CHHapticEvent {
         CHHapticEvent(
             eventType: .hapticTransient,
@@ -1108,6 +1165,14 @@ private final class SplashHapticPlayer {
                 CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity),
                 CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness)
             ],
+            relativeTime: time
+        )
+    }
+
+    private func audioEvent(resource: CHHapticAudioResourceID, volume: Float, at time: TimeInterval) -> CHHapticEvent {
+        CHHapticEvent(
+            audioResourceID: resource,
+            parameters: [CHHapticEventParameter(parameterID: .audioVolume, value: volume)],
             relativeTime: time
         )
     }
