@@ -18,6 +18,7 @@ struct AppRootView: View {
     @State private var isCapturePresented = false
     @State private var galleryPath: [UUID] = []
     @State private var library = PhotoLibraryViewModel()
+    @State private var isGallerySelecting = false
     @State private var isJamSessionPresented = false
     @State private var createJamTrigger: UUID?
     @State private var initialRootState: InitialRootState = .loading
@@ -58,10 +59,45 @@ struct AppRootView: View {
         .animation(.easeOut(duration: 0.18), value: initialRootState)
         .safeAreaInset(edge: .top) {
             if initialRootState == .mainApp && showsSectionSwitcher {
-                SectionSwitcher(selection: $section)
-                    .padding(.top, 8)
-                    .padding(.bottom, 10)
-                    .frame(maxWidth: .infinity)
+                ZStack {
+                    if isGallerySelecting {
+                        HStack {
+                            Spacer()
+
+                            Button {
+                                isGallerySelecting = false
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 18, weight: .semibold))
+                            }
+                            .buttonStyle(StoryHeaderGlassButtonStyle())
+                            .accessibilityLabel("Cancel Selection")
+                        }
+                        .padding(.horizontal, 16)
+                    } else {
+                        SectionSwitcher(selection: $section)
+
+                        if section == .gallery, !library.items.isEmpty {
+                            HStack {
+                                Spacer()
+
+                                Button {
+                                    isGallerySelecting = true
+                                } label: {
+                                    Image(systemName: "checkmark.app")
+                                        .font(.system(size: 18, weight: .semibold))
+                                }
+                                .buttonStyle(StoryHeaderGlassButtonStyle())
+                                .accessibilityLabel("Select Photos")
+                            }
+                            .padding(.horizontal, 16)
+                        }
+                    }
+                }
+                .frame(height: 38)
+                .padding(.top, 8)
+                .padding(.bottom, 10)
+                .frame(maxWidth: .infinity)
             }
         }
         .fullScreenCover(isPresented: $isCapturePresented) {
@@ -90,7 +126,12 @@ struct AppRootView: View {
     private var appContent: some View {
         ZStack(alignment: .bottomLeading) {
             ZStack {
-                GalleryView(library: library, path: $galleryPath)
+                GalleryView(
+                    library: library,
+                    path: $galleryPath,
+                    isGallerySelecting: $isGallerySelecting,
+                    isActive: section == .gallery
+                )
                     .opacity(section == .gallery ? 1 : 0)
                     .allowsHitTesting(section == .gallery)
                     .accessibilityHidden(section != .gallery)
@@ -109,7 +150,7 @@ struct AppRootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if section == .gallery && !isGalleryInspectorPresented {
+            if section == .gallery && !isGalleryInspectorPresented && !isGallerySelecting {
                 VStack(spacing: 0) {
                     Spacer(minLength: 0)
 
@@ -138,7 +179,7 @@ struct AppRootView: View {
                 .allowsHitTesting(false)
             }
 
-            if section == .gallery && !isGalleryInspectorPresented {
+            if section == .gallery && !isGalleryInspectorPresented && !isGallerySelecting {
                 Button {
                     isCapturePresented = true
                 } label: {
@@ -183,11 +224,13 @@ struct AppRootView: View {
         switch request.action {
         case .openCapture:
             galleryPath.removeAll()
+            isGallerySelecting = false
             section = .gallery
             isCapturePresented = true
         case .createJam:
             isCapturePresented = false
             galleryPath.removeAll()
+            isGallerySelecting = false
             section = .jam
             createJamTrigger = request.id
         }

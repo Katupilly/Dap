@@ -17,6 +17,44 @@ struct PhotoStoryExportSnapshot: Identifiable, Sendable {
     let bpm: Int
     let notes: [Note]
     let palette: ColorPalette
+
+    private init(
+        id: UUID,
+        imageData: Data,
+        title: String,
+        root: String,
+        scale: String,
+        bpm: Int,
+        notes: [Note],
+        palette: ColorPalette
+    ) {
+        self.id = id
+        self.imageData = imageData
+        self.title = title
+        self.root = root
+        self.scale = scale
+        self.bpm = bpm
+        self.notes = notes
+        self.palette = palette
+    }
+
+    init?(sound: PhotoSound, coverData: Data?) {
+        guard let coverData else { return nil }
+
+        let pitch = PitchClass(rawValue: sound.sequence.harmony.rootPitchClass) ?? .c
+        self.init(
+            id: sound.id,
+            imageData: coverData,
+            title: sound.displayTitle,
+            root: pitch.symbol,
+            scale: sound.sequence.harmony.scale.displayName,
+            bpm: sound.sequence.harmony.bpm,
+            notes: sound.sequence.notes.map {
+                Note(step: $0.step, row: $0.row)
+            },
+            palette: RetroCoverRenderer.tonalPalette(for: pitch)
+        )
+    }
 }
 
 enum PhotoExportFormat: String, CaseIterable, Identifiable, Sendable {

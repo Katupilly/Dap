@@ -291,20 +291,7 @@ struct PhotoInspectorView: View {
     }
 
     private func makePhotoStoryExportSnapshot() -> PhotoStoryExportSnapshot? {
-        guard let coverData else { return nil }
-        let pitch = rootPitch
-        return PhotoStoryExportSnapshot(
-            id: sound.id,
-            imageData: coverData,
-            title: sound.displayTitle,
-            root: pitch.symbol,
-            scale: sound.sequence.harmony.scale.displayName,
-            bpm: sound.sequence.harmony.bpm,
-            notes: sound.sequence.notes.map {
-                PhotoStoryExportSnapshot.Note(step: $0.step, row: $0.row)
-            },
-            palette: RetroCoverRenderer.tonalPalette(for: pitch)
-        )
+        PhotoStoryExportSnapshot(sound: sound, coverData: coverData)
     }
 
     private func handleJamAdded() {

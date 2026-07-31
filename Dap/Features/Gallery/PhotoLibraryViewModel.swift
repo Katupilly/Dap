@@ -275,6 +275,18 @@ final class PhotoLibraryViewModel {
             ?? (sound.trimmedName == nil ? .idle : .available)
     }
 
+    struct BatchDeletionResult {
+        let requestedIDs: [UUID]
+        let deletedIDs: [UUID]
+        let remainingIDs: [UUID]
+        let unavailableIDs: [UUID]
+        let failedIDs: [UUID]
+
+        var didRemoveAllExistingPhotos: Bool {
+            remainingIDs.isEmpty && failedIDs.isEmpty
+        }
+    }
+
     func delete(sound: PhotoSound) async throws {
         let updated = try await PhotoStore.shared.delete(id: sound.id)
 
@@ -288,6 +300,52 @@ final class PhotoLibraryViewModel {
         metadataStateByID.removeValue(forKey: sound.id)
         coverDataByID.removeValue(forKey: sound.id)
         items = updated
+    }
+
+    func delete(ids: [UUID]) async -> BatchDeletionResult {
+        var seenIDs = Set<UUID>()
+        let requestedIDs = ids.filter { seenIDs.insert($0).inserted }
+        var deletedIDs: [UUID] = []
+        var unavailableIDs: [UUID] = []
+        var failedIDs: [UUID] = []
+
+        for id in requestedIDs {
+            guard let sound = items.first(where: { $0.id == id }) else {
+                unavailableIDs.append(id)
+                continue
+            }
+
+            do {
+                try await delete(sound: sound)
+                deletedIDs.append(id)
+            } catch {
+                failedIDs.append(id)
+                break
+            }
+        }
+
+        let deletedIDSet = Set(deletedIDs)
+        let unavailableIDSet = Set(unavailableIDs)
+        let failedIDSet = Set(failedIDs)
+        for id in requestedIDs
+            where !deletedIDSet.contains(id)
+            && !unavailableIDSet.contains(id)
+            && !failedIDSet.contains(id)
+            && items.contains(where: { $0.id == id }) {
+            failedIDs.append(id)
+        }
+
+        let remainingIDs = requestedIDs.filter { id in
+            items.contains(where: { $0.id == id })
+        }
+
+        return BatchDeletionResult(
+            requestedIDs: requestedIDs,
+            deletedIDs: deletedIDs,
+            remainingIDs: remainingIDs,
+            unavailableIDs: unavailableIDs,
+            failedIDs: failedIDs
+        )
     }
 
     // MARK: - Playback
