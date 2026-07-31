@@ -17,6 +17,11 @@ struct GalleryView: View {
     @State private var isDeleting = false
     @State private var deleteErrorMessage: String?
     @State private var deletionFeedbackToken = 0
+    @State private var jamAdditionFeedbackToken = 0
+    @State private var isShowingJamPicker = false
+    @State private var isShowingJamPhotoChooser = false
+    @State private var pendingJamPhotos: [PhotoSound]?
+    @State private var jamPhotos: [PhotoSound] = []
 
     private let columns = [
         GridItem(.flexible(), spacing: 8),
@@ -72,6 +77,7 @@ struct GalleryView: View {
         }
         .sensoryFeedback(.selection, trigger: selectedPhotoIDs)
         .sensoryFeedback(.success, trigger: deletionFeedbackToken)
+        .sensoryFeedback(.success, trigger: jamAdditionFeedbackToken)
         .alert("Couldn't Share Photos", isPresented: shareErrorPresented) {
             Button("OK", role: .cancel) {
                 shareErrorMessage = nil
@@ -98,6 +104,26 @@ struct GalleryView: View {
         .sheet(item: $sharePresentation) { presentation in
             GalleryActivityViewController(activityItems: presentation.urls) {
                 DapExportFileHelper.removeTemporaryExports()
+            }
+        }
+        .sheet(isPresented: $isShowingJamPicker) {
+            AddToJamSheet(
+                library: library,
+                photos: jamPhotos,
+                isPresented: $isShowingJamPicker,
+                onAdded: handleJamAdded
+            )
+        }
+        .sheet(
+            isPresented: $isShowingJamPhotoChooser,
+            onDismiss: presentJamPickerAfterPhotoChoice
+        ) {
+            ChooseJamPhotosSheet(
+                library: library,
+                photos: orderedSelectedSounds
+            ) { selectedPhotos in
+                pendingJamPhotos = selectedPhotos
+                isShowingJamPhotoChooser = false
             }
         }
     }
@@ -196,6 +222,20 @@ struct GalleryView: View {
                 Spacer()
 
                 Button {
+                    beginAddToJam()
+                } label: {
+                    Label(
+                        "Add to Jam",
+                        systemImage: "dot.radiowaves.left.and.right"
+                    )
+                }
+                .buttonStyle(GalleryAddToJamButtonStyle())
+                .disabled(selectionCount == 0 || isPreparingShare || isDeleting)
+                .accessibilityLabel(addToJamAccessibilityLabel)
+
+                Spacer()
+
+                Button {
                     isShowingDeleteConfirmation = true
                 } label: {
                     Image(systemName: "trash")
@@ -209,7 +249,6 @@ struct GalleryView: View {
             .padding(.top, 12)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity)
-            .background(.regularMaterial)
         }
     }
 
@@ -237,6 +276,10 @@ struct GalleryView: View {
 
     private var deleteAccessibilityLabel: String {
         selectionCount == 1 ? "Delete 1 Photo" : "Delete \(selectionCount) Photos"
+    }
+
+    private var addToJamAccessibilityLabel: String {
+        selectionCount == 1 ? "Add 1 Photo to Jam" : "Add \(selectionCount) Photos to Jam"
     }
 
     private func beginSelection(with id: UUID) {
@@ -332,6 +375,39 @@ struct GalleryView: View {
         }
     }
 
+    private func handleJamAdded() {
+        jamAdditionFeedbackToken += 1
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: selectionCount == 1
+                ? "Added 1 Photo to Jam"
+                : "Added \(selectionCount) Photos to Jam"
+        )
+        selectedPhotoIDs.removeAll()
+        jamPhotos.removeAll()
+        isGallerySelecting = false
+    }
+
+    private func beginAddToJam() {
+        let selectedPhotos = orderedSelectedSounds
+        guard !selectedPhotos.isEmpty else { return }
+
+        if selectedPhotos.count > JamSlotAssignments.maximumPhotoCount {
+            pendingJamPhotos = nil
+            isShowingJamPhotoChooser = true
+        } else {
+            jamPhotos = selectedPhotos
+            isShowingJamPicker = true
+        }
+    }
+
+    private func presentJamPickerAfterPhotoChoice() {
+        guard let pendingJamPhotos else { return }
+        self.pendingJamPhotos = nil
+        jamPhotos = pendingJamPhotos
+        isShowingJamPicker = true
+    }
+
     private func deletionMessage(for result: PhotoLibraryViewModel.BatchDeletionResult) -> String {
         let deletedCount = result.deletedIDs.count
         let remainingCount = result.remainingIDs.count
@@ -342,6 +418,149 @@ struct GalleryView: View {
 
         return "Deleted \(deletedCount) of \(result.requestedIDs.count) photos. "
             + "\(remainingCount) photo\(remainingCount == 1 ? "" : "s") could not be deleted."
+    }
+}
+
+private struct GalleryAddToJamButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.primary.opacity(isEnabled ? 1 : 0.36))
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .opacity(isEnabled ? 1 : 0.62)
+            .glassEffect(
+                .regular
+                    .tint(.primary.opacity(isEnabled ? (configuration.isPressed ? 0.10 : 0.06) : 0.03))
+                    .interactive(isEnabled),
+                in: Capsule()
+            )
+            .contentShape(.interaction, Capsule())
+    }
+}
+
+private struct ChooseJamPhotosSheet: View {
+    let library: PhotoLibraryViewModel
+    let photos: [PhotoSound]
+    let onContinue: ([PhotoSound]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var selectedPhotoIDs = Set<UUID>()
+    @State private var selectionLimitFeedbackToken = 0
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8)
+    ]
+
+    private var maximumPhotoCount: Int {
+        JamSlotAssignments.maximumPhotoCount
+    }
+
+    private var selectedPhotos: [PhotoSound] {
+        photos.filter { selectedPhotoIDs.contains($0.id) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("A Jam can use up to \(maximumPhotoCount) photos.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        Text("\(selectedPhotoIDs.count) of \(maximumPhotoCount)")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+
+                    LazyVGrid(columns: columns, spacing: 8) {
+                        ForEach(photos) { photo in
+                            Button {
+                                toggle(photo.id)
+                            } label: {
+                                SoundCellView(
+                                    sound: photo,
+                                    coverData: library.coverDataByID[photo.id],
+                                    isPlaying: library.playingID == photo.id,
+                                    isRefining: library.refiningMetadataIDs.contains(photo.id),
+                                    isSelecting: true,
+                                    isSelected: selectedPhotoIDs.contains(photo.id),
+                                    reduceMotion: reduceMotion
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(photo.displayTitle)
+                            .accessibilityValue(
+                                selectedPhotoIDs.contains(photo.id)
+                                    ? "Selected"
+                                    : "Not selected"
+                            )
+                            .accessibilityHint(selectionHint(for: photo.id))
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 120)
+                }
+            }
+            .scrollIndicators(.hidden)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Button {
+                    onContinue(selectedPhotos)
+                } label: {
+                    Text("Continue")
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                }
+                .buttonStyle(DapPrimaryGlassButtonStyle(shape: .capsule))
+                .disabled(selectedPhotoIDs.isEmpty)
+                .accessibilityLabel("Continue with \(selectedPhotoIDs.count) photos")
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
+            .navigationTitle("Choose Photos")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cancel")
+                }
+            }
+        }
+        .sensoryFeedback(.warning, trigger: selectionLimitFeedbackToken)
+    }
+
+    private func toggle(_ id: UUID) {
+        if selectedPhotoIDs.contains(id) {
+            selectedPhotoIDs.remove(id)
+        } else if selectedPhotoIDs.count < maximumPhotoCount {
+            selectedPhotoIDs.insert(id)
+        } else {
+            selectionLimitFeedbackToken += 1
+        }
+    }
+
+    private func selectionHint(for id: UUID) -> String {
+        if selectedPhotoIDs.contains(id) {
+            return "Removes this photo from the Jam selection."
+        }
+        if selectedPhotoIDs.count >= maximumPhotoCount {
+            return "Selection limit reached. Choose up to \(maximumPhotoCount) photos."
+        }
+        return "Adds this photo to the Jam selection."
     }
 }
 

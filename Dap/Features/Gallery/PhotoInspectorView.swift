@@ -131,7 +131,7 @@ struct PhotoInspectorView: View {
             Text("Try again.")
         }
         .sheet(isPresented: $isShowingJamPicker) {
-            PhotoInspectorJamPickerSheet(
+            AddToJamSheet(
                 library: library,
                 sound: sound,
                 isPresented: $isShowingJamPicker
@@ -312,9 +312,9 @@ struct PhotoInspectorView: View {
     }
 }
 
-private struct PhotoInspectorJamPickerSheet: View {
+struct AddToJamSheet: View {
     let library: PhotoLibraryViewModel
-    let sound: PhotoSound
+    let photos: [PhotoSound]
     @Binding var isPresented: Bool
     let onAdded: () -> Void
 
@@ -325,13 +325,57 @@ private struct PhotoInspectorJamPickerSheet: View {
         GridItem(.flexible(), spacing: 14)
     ]
 
-    private var isPlayable: Bool {
-        !sound.sequence.notes.isEmpty
+    init(
+        library: PhotoLibraryViewModel,
+        photos: [PhotoSound],
+        isPresented: Binding<Bool>,
+        onAdded: @escaping () -> Void
+    ) {
+        self.library = library
+        self.photos = photos
+        self._isPresented = isPresented
+        self.onAdded = onAdded
     }
 
-    private var nonPlayableMessage: String {
-        "This photo can’t be added to a Jam yet."
+    init(
+        library: PhotoLibraryViewModel,
+        sound: PhotoSound,
+        isPresented: Binding<Bool>,
+        onAdded: @escaping () -> Void
+    ) {
+        self.init(
+            library: library,
+            photos: [sound],
+            isPresented: isPresented,
+            onAdded: onAdded
+        )
     }
+
+    private var photoIDs: [UUID] {
+        photos.map(\.id)
+    }
+
+    private var playablePhotoIDs: Set<UUID> {
+        Set(photos.filter { !$0.sequence.notes.isEmpty }.map(\.id))
+    }
+
+    private var selectionIssueMessage: String? {
+        switch JamSlotAssignments().addingPhotoIDs(
+            photoIDs,
+            playableIDs: playablePhotoIDs
+        ) {
+        case .added:
+            return nil
+        case .alreadyIncluded:
+            return "The selected photos cannot be added to a new Jam."
+        case .full(let availableSlots):
+            return "Only \(availableSlots) of \(photos.count) selected photos can fit in a Jam. Select up to \(availableSlots)."
+        case .unplayable(let count):
+            return "\(count) selected photo\(count == 1 ? "" : "s") cannot be added because it has no musical notes."
+        }
+    }
+
+    private var nonPlayableMessage: String? { selectionIssueMessage }
 
     var body: some View {
         NavigationStack {
@@ -387,7 +431,7 @@ private struct PhotoInspectorJamPickerSheet: View {
         case .loaded:
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if !isPlayable {
+                    if let nonPlayableMessage {
                         ContentUnavailableView(
                             nonPlayableMessage,
                             systemImage: "waveform.slash"
@@ -395,7 +439,7 @@ private struct PhotoInspectorJamPickerSheet: View {
                         .frame(maxWidth: .infinity)
                     }
 
-                    if state.jams.isEmpty && state.draftJam == nil && isPlayable {
+                    if state.jams.isEmpty && state.draftJam == nil && selectionIssueMessage == nil {
                         ContentUnavailableView(
                             "No Jams Yet",
                             systemImage: "waveform.path.ecg",
@@ -423,7 +467,7 @@ private struct PhotoInspectorJamPickerSheet: View {
                                     state.cancelDraftCreation()
                                 },
                                 onConfirmEdit: {
-                                    Task { await createJamAndAddPhoto() }
+                                    Task { await createJamAndAddPhotos() }
                                 },
                                 onCancelEdit: {
                                     state.cancelDraftCreation()
@@ -446,7 +490,7 @@ private struct PhotoInspectorJamPickerSheet: View {
                                 showsActions: false,
                                 isOpenDisabled: !availability.isSelectable,
                                 onOpen: {
-                                    Task { await addPhoto(to: jam) }
+                                    Task { await addPhotos(to: jam) }
                                 },
                                 onRename: {},
                                 onDelete: {},
@@ -466,7 +510,7 @@ private struct PhotoInspectorJamPickerSheet: View {
     }
 
     private var shouldShowCreateButton: Bool {
-        isPlayable && state.editingJamID == nil
+        selectionIssueMessage == nil && state.editingJamID == nil
     }
 
     private var createButton: some View {
@@ -493,43 +537,71 @@ private struct PhotoInspectorJamPickerSheet: View {
     }
 
     private func availability(for jam: PersistedJam) -> JamAvailability {
-        if !isPlayable {
+        let assignments = jam.slotAssignments.jamSlotAssignments
+        let capacityStatus = capacityStatus(for: assignments)
+
+        switch assignments.addingPhotoIDs(
+            photoIDs,
+            playableIDs: playablePhotoIDs
+        ) {
+        case .added:
+            return JamAvailability(
+                isSelectable: true,
+                status: capacityStatus,
+                accessibilityHint: "Adds all selected photos to the Jam."
+            )
+        case .alreadyIncluded(let count):
+            let noun = count == 1 ? "photo is" : "photos are"
             return JamAvailability(
                 isSelectable: false,
-                status: .init(text: "Unavailable", style: .warning),
-                accessibilityHint: nonPlayableMessage
+                status: capacityStatus,
+                accessibilityHint: "\(count) selected \(noun) already in this Jam. No photos will be added."
             )
-        }
-
-        if jam.slotAssignments.allPhotoIDs.contains(sound.id) {
+        case .full:
             return JamAvailability(
                 isSelectable: false,
-                status: .init(text: "In Jam", style: .success),
-                accessibilityHint: "This photo is already in this Jam."
+                status: capacityStatus,
+                accessibilityHint: "This Jam does not have enough capacity for all selected photos. No photos will be added."
             )
-        }
-
-        if jam.slotAssignments.allPhotoIDs.count >= JamSlotAssignments.maximumPhotoCount {
+        case .unplayable(let count):
             return JamAvailability(
                 isSelectable: false,
-                status: .init(text: "Jam Full", style: .warning),
-                accessibilityHint: "This Jam is full. Choose another Jam."
+                status: capacityStatus,
+                accessibilityHint: "\(count) selected photo\(count == 1 ? "" : "s") have no musical notes. No photos will be added."
             )
         }
-
-        return JamAvailability(
-            isSelectable: true,
-            status: nil,
-            accessibilityHint: "Adds this photo to the Jam."
-        )
     }
 
-    private func addPhoto(to jam: PersistedJam) async {
-        let result = jam.slotAssignments
-            .jamSlotAssignments
-            .addingPhotoID(sound.id, playable: isPlayable)
+    private func capacityStatus(for assignments: JamSlotAssignments) -> JamCard.Status {
+        let availablePhotoCount = assignments.availablePhotoCount
+        let text: String
+        let style: JamCard.Status.Style
 
-        guard case .added(let updatedAssignments) = result else { return }
+        switch availablePhotoCount {
+        case 0:
+            text = "Full"
+            style = .warning
+        case 1:
+            text = "1 spot available"
+            style = .neutral
+        default:
+            text = "\(availablePhotoCount) spots available"
+            style = .neutral
+        }
+
+        return JamCard.Status(text: text, style: style)
+    }
+
+    private func addPhotos(to jam: PersistedJam) async {
+        let result = jam.slotAssignments.jamSlotAssignments.addingPhotoIDs(
+            photoIDs,
+            playableIDs: playablePhotoIDs
+        )
+
+        guard case .added(let updatedAssignments) = result else {
+            state.errorMessage = message(for: result)
+            return
+        }
 
         var updatedJam = jam
         updatedJam.slotAssignments = PersistedJamSlotAssignments(updatedAssignments)
@@ -539,9 +611,26 @@ private struct PhotoInspectorJamPickerSheet: View {
         isPresented = false
     }
 
-    private func createJamAndAddPhoto() async {
+    private func createJamAndAddPhotos() async {
         guard let jam = await state.confirmDraftCreation() else { return }
-        await addPhoto(to: jam)
+        await addPhotos(to: jam)
+    }
+
+    private func message(for result: JamSlotAssignments.AddPhotosResult) -> String {
+        switch result {
+        case .added:
+            return ""
+        case .alreadyIncluded(let count):
+            return "\(count) selected photo\(count == 1 ? "" : "s") already belong to this Jam. No photos were added."
+        case .full(let availableSlots):
+            if availableSlots == 0 {
+                return "This Jam is full. No photos were added."
+            }
+            let noun = availableSlots == 1 ? "spot is" : "spots are"
+            return "This Jam has \(availableSlots) available \(noun), but all selected photos must be added together. No photos were added."
+        case .unplayable(let count):
+            return "\(count) selected photo\(count == 1 ? "" : "s") have no musical notes. No photos were added."
+        }
     }
 
     private var errorPresented: Binding<Bool> {

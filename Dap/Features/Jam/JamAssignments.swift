@@ -74,6 +74,10 @@ struct JamSlotAssignments: Equatable {
         activePhotoIDs + reserve
     }
 
+    var availablePhotoCount: Int {
+        max(Self.maximumPhotoCount - allPhotoIDs.count, 0)
+    }
+
     var assignedRolesByID: [UUID: JamRole] {
         var result: [UUID: JamRole] = [:]
         if let bass { result[bass] = .bass }
@@ -87,6 +91,13 @@ struct JamSlotAssignments: Equatable {
         case alreadyIncluded
         case full
         case unplayable
+    }
+
+    enum AddPhotosResult: Equatable {
+        case added(JamSlotAssignments)
+        case alreadyIncluded(count: Int)
+        case full(availableSlots: Int)
+        case unplayable(count: Int)
     }
 
     func hasDifferentActiveSlots(from other: JamSlotAssignments) -> Bool {
@@ -108,6 +119,33 @@ struct JamSlotAssignments: Equatable {
         guard allPhotoIDs.count < Self.maximumPhotoCount else { return .full }
         guard playable else { return .unplayable }
         return .added(appendingAddedID(id, playableIDs: [id]))
+    }
+
+    func addingPhotoIDs(_ ids: [UUID], playableIDs: Set<UUID>) -> AddPhotosResult {
+        let uniqueIDs = Self.orderedUnique(ids)
+        let alreadyIncludedCount = uniqueIDs.filter { allPhotoIDs.contains($0) }.count
+        guard alreadyIncludedCount == 0 else {
+            return .alreadyIncluded(count: alreadyIncludedCount)
+        }
+
+        let unplayableCount = uniqueIDs.filter { !playableIDs.contains($0) }.count
+        guard unplayableCount == 0 else {
+            return .unplayable(count: unplayableCount)
+        }
+
+        let availableSlots = Self.maximumPhotoCount - allPhotoIDs.count
+        guard uniqueIDs.count <= availableSlots else {
+            return .full(availableSlots: max(availableSlots, 0))
+        }
+
+        var updated = self
+        for id in uniqueIDs {
+            guard case .added(let next) = updated.addingPhotoID(id, playable: true) else {
+                return .full(availableSlots: max(Self.maximumPhotoCount - updated.allPhotoIDs.count, 0))
+            }
+            updated = next
+        }
+        return .added(updated)
     }
 
     func swapping(_ first: JamRole, _ second: JamRole) -> JamSlotAssignments {

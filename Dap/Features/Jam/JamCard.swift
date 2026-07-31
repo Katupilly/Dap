@@ -30,78 +30,134 @@ struct JamCard: View {
     let onCancelEdit: () -> Void
 
     @FocusState private var isNameFocused: Bool
+    @ScaledMetric(relativeTo: .body) private var infoAreaHeight = 76.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button(action: onOpen) {
-                cover
-            }
-            .buttonStyle(.plain)
-            .disabled(isOpenDisabled)
+            ZStack(alignment: .topTrailing) {
+                Button(action: onOpen) {
+                    cover
+                }
+                .buttonStyle(.plain)
+                .disabled(isOpenDisabled)
 
-            HStack(alignment: .center, spacing: 8) {
                 if isEditing {
-                    TextField(editingPlaceholder, text: $editingName)
-                        .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-                        .focused($isNameFocused)
-                        .submitLabel(.done)
-                        .onSubmit(onConfirmEdit)
-                        .onChange(of: editingName) { _, value in
-                            if value.count > 80 {
-                                editingName = String(value.prefix(80))
-                            }
-                        }
-                        .lineLimit(1)
-                        .onAppear {
-                            isNameFocused = true
-                        }
-
-                    Button(action: onConfirmEdit) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 26, height: 26)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Save Jam name")
-
-                    Button(action: onCancelEdit) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 26, height: 26)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Cancel Jam name edit")
-                } else {
-                    Button(action: onOpen) {
-                        cardTitle
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isOpenDisabled)
-
-                    if showsActions {
-                        Menu {
-                            Button("Rename", action: onRename)
-                            Button("Delete", role: .destructive, action: onDelete)
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 28, height: 28)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Jam actions")
-                    }
+                    editingControls
+                        .padding(8)
                 }
             }
-            .frame(minHeight: 28)
+
+            infoArea
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(name)
         .accessibilityValue(accessibilityValue)
+    }
+
+    private var infoArea: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            titleRow
+
+            if let detailText {
+                Text(detailText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let status {
+                Text(status.text)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(statusForeground(status.style))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(statusBackground(status.style), in: Capsule())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(
+            maxWidth: .infinity,
+            minHeight: infoAreaHeight,
+            maxHeight: infoAreaHeight,
+            alignment: .top
+        )
+    }
+
+    @ViewBuilder
+    private var titleRow: some View {
+        if isEditing {
+            TextField(editingPlaceholder, text: $editingName)
+                .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
+                .focused($isNameFocused)
+                .submitLabel(.done)
+                .onSubmit(onConfirmEdit)
+                .onChange(of: editingName) { _, value in
+                    if value.count > 80 {
+                        editingName = String(value.prefix(80))
+                    }
+                }
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+                .onAppear {
+                    isNameFocused = true
+                }
+        } else {
+            HStack(alignment: .center, spacing: 8) {
+                Button(action: onOpen) {
+                    Text(name)
+                        .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .disabled(isOpenDisabled)
+
+                if showsActions {
+                    Menu {
+                        Button("Rename", action: onRename)
+                        Button("Delete", role: .destructive, action: onDelete)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Jam actions")
+                }
+            }
+        }
+    }
+
+    private var editingControls: some View {
+        HStack(spacing: 4) {
+            Button(action: onConfirmEdit) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Save Jam name")
+
+            Button(action: onCancelEdit) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel Jam name edit")
+        }
+        .padding(4)
+        .background(.regularMaterial, in: Capsule())
     }
 
     @ViewBuilder
@@ -120,37 +176,6 @@ struct JamCard: View {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .stroke(.white.opacity(0.10), lineWidth: 1)
             }
-    }
-
-    private var cardTitle: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(name)
-                .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            if detailText != nil || status != nil {
-                HStack(alignment: .center, spacing: 8) {
-                    if let detailText {
-                        Text(detailText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    if let status {
-                        Text(status.text)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(statusForeground(status.style))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(statusBackground(status.style), in: Capsule())
-                    }
-                }
-            }
-        }
     }
 
     private func statusForeground(_ style: Status.Style) -> Color {

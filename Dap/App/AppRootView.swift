@@ -187,18 +187,11 @@ struct AppRootView: View {
                         .font(.system(size: 28, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 80, height: 80)
-                        .glassEffect(
-                            .regular
-                                .tint(
-                                    Color(
-                                        red: 26 / 255,
-                                        green: 26 / 255,
-                                        blue: 30 / 255
-                                    )
-                                    .opacity(0.62)
-                                )
-                                .interactive(true),
-                            in: Circle()
+                        .modifier(
+                            DapPrimaryGlassSurface(
+                                shape: .circle,
+                                isEnabled: true
+                            )
                         )
                 }
                 .buttonStyle(.plain)
@@ -262,6 +255,55 @@ private struct NeutralRootLoadingView: View {
                 .foregroundStyle(.primary)
         }
         .accessibilityLabel("Dap")
+    }
+}
+
+struct DapPrimaryGlassButtonStyle: ButtonStyle {
+    enum Shape {
+        case circle
+        case capsule
+    }
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    let shape: Shape
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white.opacity(isEnabled ? 1 : 0.42))
+            .modifier(
+                DapPrimaryGlassSurface(
+                    shape: shape,
+                    isEnabled: isEnabled
+                )
+            )
+    }
+}
+
+private struct DapPrimaryGlassSurface: ViewModifier {
+    let shape: DapPrimaryGlassButtonStyle.Shape
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        switch shape {
+        case .circle:
+            content.glassEffect(
+                .regular
+                    .tint(Color(red: 26 / 255, green: 26 / 255, blue: 30 / 255)
+                        .opacity(isEnabled ? 0.62 : 0.28))
+                    .interactive(isEnabled),
+                in: Circle()
+            )
+        case .capsule:
+            content.glassEffect(
+                .regular
+                    .tint(Color(red: 26 / 255, green: 26 / 255, blue: 30 / 255)
+                        .opacity(isEnabled ? 0.62 : 0.28))
+                    .interactive(isEnabled),
+                in: Capsule()
+            )
+        }
     }
 }
 
