@@ -72,8 +72,14 @@ struct JamLibraryView: View {
         .onChange(of: createJamTrigger) { _, newValue in
             handleCreateJamTrigger(newValue)
         }
-        .task {
-            await state.loadIfNeeded()
+        .task(id: isActive) {
+            guard isActive else { return }
+
+            if state.hasLoaded {
+                await state.reload()
+            } else {
+                await state.loadIfNeeded()
+            }
         }
         .alert("Delete Jam?", isPresented: deleteConfirmationPresented) {
             Button("Delete", role: .destructive) {
