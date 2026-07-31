@@ -10,18 +10,23 @@ struct OnboardingView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var phase: OnboardingPhase = .intro
+    @State private var phase: OnboardingPhase = .welcome
     @State private var controller: CameraController?
-    @State private var capturedImageData: Data?
+    @State private var input: OnboardingInput?
     @State private var centralDisplayImage: UIImage?
-    @State private var savedSoundID: UUID?
-    @State private var isImportingCentral = false
+    @State private var assemblyTask: Task<Void, Never>?
+    @State private var assemblyToken = UUID()
     @State private var captureToken = UUID()
+    @State private var isCapturing = false
+    @State private var isSwitchingCamera = false
+    @State private var isRequestingPermission = false
     @State private var hasAnimatedCluster = false
     @State private var clusterAssembled = false
+    @State private var assemblyMessage = "Lendo as cores da sua foto…"
     @State private var captureFeedback = 0
     @State private var completionFeedback = 0
-    @State private var errorText = "Could not create your first Musical Photo."
+    @State private var permissionIssue: OnboardingPermissionIssue = .denied
+    @State private var failure: OnboardingFailure?
 
     var body: some View {
         ZStack {
@@ -51,8 +56,11 @@ struct OnboardingView: View {
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
-                if phase == .capture, !isImportingCentral {
+                if phase == .capture, !isCapturing {
                     Task { await startCameraIfNeeded() }
+                }
+                if phase == .permissionDenied {
+                    recheckCameraPermission()
                 }
             case .inactive, .background:
                 stopCamera()
@@ -61,6 +69,9 @@ struct OnboardingView: View {
             }
         }
         .onDisappear {
+            assemblyTask?.cancel()
+            assemblyTask = nil
+            library.stopTransientPlayback()
             stopCamera()
         }
         .sensoryFeedback(.selection, trigger: captureFeedback)
@@ -69,95 +80,201 @@ struct OnboardingView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 8) {
-            Text("Dap")
-                .font(.custom("ZTTalk-Bold", size: 28, relativeTo: .title))
-                .foregroundStyle(.white)
-
-            if phase == .intro {
-                Text("Turn a moment into music.")
-                    .font(.custom("ZTTalk-Medium", size: 17, relativeTo: .body))
-                    .foregroundStyle(.white.opacity(0.78))
-                    .multilineTextAlignment(.center)
-                    .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
+        Text("Dap")
+            .font(.custom("ZTTalk-Bold", size: 28, relativeTo: .title))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
     private var mainContent: some View {
         switch phase {
-        case .intro, .permission, .assembling, .ready, .failed:
+        case .welcome:
+            VStack(spacing: 18) {
+                OnboardingMechanismView()
+
+                Text("Toda foto tem uma música escondida nela.")
+                    .font(.custom("ZTTalk-Bold", size: 25, relativeTo: .title2))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+
+                Text("As cores viram notas. A imagem cria o ritmo.")
+                    .font(.custom("ZTTalk-Medium", size: 16, relativeTo: .body))
+                    .foregroundStyle(.white.opacity(0.76))
+                    .multilineTextAlignment(.center)
+            }
+
+        case .permissionPrimer:
+            VStack(spacing: 16) {
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 34, weight: .medium))
+                    .foregroundStyle(.white)
+
+                Text("Precisamos da câmera")
+                    .font(.custom("ZTTalk-Bold", size: 25, relativeTo: .title2))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+
+                Text("Vamos usar sua câmera só para capturar a foto que vira sua primeira música. Nada é enviado para fora do dispositivo durante esse processo.")
+                    .font(.custom("ZTTalk-Medium", size: 16, relativeTo: .body))
+                    .foregroundStyle(.white.opacity(0.76))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 330)
+            }
+
+        case .assembling, .ready:
             OnboardingPhotoClusterView(
                 centerImage: centralDisplayImage,
                 isAssembled: clusterAssembled,
                 reduceMotion: reduceMotion,
                 showsPulse: phase == .ready
             )
-            .overlay {
-                if phase == .permission || isImportingCentral {
-                    ProgressView()
-                        .tint(.white)
-                        .scaleEffect(1.2)
-                        .padding(18)
-                        .background(.black.opacity(0.48), in: Circle())
-                }
-            }
 
         case .capture:
             captureContent
+
+        case .review:
+            reviewContent
+
+        case .permissionDenied:
+            permissionDeniedContent
+
+        case .technicalError:
+            technicalErrorContent
         }
     }
 
     private var captureContent: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.white.opacity(0.10))
-                .aspectRatio(4.0 / 5.0, contentMode: .fit)
+        VStack(spacing: 10) {
+            Text("Enquadre algo com cor e contraste.")
+                .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
+                .foregroundStyle(.white.opacity(0.76))
 
-            if let controller {
-                CameraPreviewView(controller: controller)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(.white.opacity(0.10))
                     .aspectRatio(4.0 / 5.0, contentMode: .fit)
-                    .overlay(alignment: .bottom) {
-                        LinearGradient(
-                            colors: [.clear, .black.opacity(0.42)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(height: 120)
+
+                if let controller {
+                    CameraPreviewView(controller: controller)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .aspectRatio(4.0 / 5.0, contentMode: .fit)
+                        .overlay(alignment: .bottom) {
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.42)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 120)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                } else {
+                    ProgressView()
+                        .tint(.white)
+                        .scaleEffect(1.25)
+                }
+
+                if controller != nil {
+                    Button {
+                        Task { await switchCamera() }
+                    } label: {
+                        Image(systemName: "arrow.trianglehead.2.clockwise")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(.black.opacity(0.38), in: Circle())
                     }
-            } else {
-                ProgressView()
-                    .tint(.white)
-                    .scaleEffect(1.25)
+                    .buttonStyle(.plain)
+                    .disabled(isCapturing || isSwitchingCamera)
+                    .accessibilityLabel("Virar câmera")
+                    .accessibilityHint("Alterna entre a câmera traseira e a frontal.")
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
+            }
+            .frame(maxWidth: 340)
+        }
+        .accessibilityLabel("Pré-visualização da câmera")
+    }
+
+    private var reviewContent: some View {
+        VStack(spacing: 14) {
+            Text("Veja sua foto")
+                .font(.custom("ZTTalk-Bold", size: 25, relativeTo: .title2))
+                .foregroundStyle(.white)
+
+            if let centralDisplayImage {
+                Image(uiImage: centralDisplayImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: 340)
+                    .aspectRatio(4.0 / 5.0, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityLabel("Foto capturada")
             }
         }
-        .frame(maxWidth: 340)
-        .accessibilityLabel("Camera preview")
+    }
+
+    private var permissionDeniedContent: some View {
+        VStack(spacing: 16) {
+            Image(systemName: permissionIssue == .restricted ? "lock.fill" : "camera.fill")
+                .font(.system(size: 34, weight: .medium))
+                .foregroundStyle(.white)
+
+            Text(permissionIssue.title)
+                .font(.custom("ZTTalk-Bold", size: 25, relativeTo: .title2))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+
+            Text(permissionIssue.message)
+                .font(.custom("ZTTalk-Medium", size: 16, relativeTo: .body))
+                .foregroundStyle(.white.opacity(0.76))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 330)
+        }
+    }
+
+    private var technicalErrorContent: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 34, weight: .medium))
+                .foregroundStyle(.white)
+
+            Text("Algo deu errado")
+                .font(.custom("ZTTalk-Bold", size: 25, relativeTo: .title2))
+                .foregroundStyle(.white)
+
+            Text(failure?.message ?? "Não foi possível concluir sua criação.")
+                .font(.custom("ZTTalk-Medium", size: 16, relativeTo: .body))
+                .foregroundStyle(.white.opacity(0.76))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 330)
+        }
     }
 
     @ViewBuilder
     private var footer: some View {
         switch phase {
-        case .intro:
-            VStack(spacing: 12) {
-                primaryButton("Create first sound", systemImage: "camera.fill") {
-                    Task { await beginCameraFlow() }
-                }
-
-                secondaryButton("Use color demo") {
-                    Task { await useFallbackImage() }
+        case .welcome:
+            primaryButton("Criar meu primeiro som", systemImage: "arrow.right") {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    phase = .permissionPrimer
                 }
             }
 
-        case .permission:
-            Text("Preparing camera")
-                .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
-                .foregroundStyle(.white.opacity(0.72))
+        case .permissionPrimer:
+            VStack(spacing: 12) {
+                primaryButton("Permitir câmera", systemImage: "camera.fill") {
+                    Task { await requestCameraAccess() }
+                }
+                .disabled(isRequestingPermission)
+
+                secondaryButton("Usar uma imagem de demonstração") {
+                    beginAssembly(.demo)
+                }
+                .disabled(isRequestingPermission)
+            }
 
         case .capture:
             VStack(spacing: 16) {
@@ -169,7 +286,7 @@ struct OnboardingView: View {
                             .stroke(.white, lineWidth: 4)
                             .frame(width: 88, height: 88)
 
-                        if isImportingCentral {
+                        if isCapturing {
                             ProgressView()
                                 .tint(.white)
                         } else {
@@ -180,42 +297,81 @@ struct OnboardingView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .disabled(controller == nil || isImportingCentral)
-                .accessibilityLabel("Take first photo")
-                .accessibilityHint("Creates your first Musical Photo.")
+                .disabled(controller == nil || isCapturing)
+                .accessibilityLabel("Tirar foto")
+                .accessibilityHint("Captura a foto que será transformada em música.")
 
-                secondaryButton("Use color demo") {
-                    Task { await useFallbackImage() }
+                secondaryButton("Usar uma imagem de demonstração") {
+                    beginAssembly(.demo)
                 }
-                .disabled(isImportingCentral)
+                .disabled(isCapturing)
+            }
+
+        case .review:
+            VStack(spacing: 12) {
+                primaryButton("Usar essa foto", systemImage: "checkmark") {
+                    confirmPhoto()
+                }
+
+                secondaryButton("Tirar outra") {
+                    Task { await retakePhoto() }
+                }
             }
 
         case .assembling:
-            Text(isImportingCentral ? "Creating sound" : "Assembling")
-                .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
-                .foregroundStyle(.white.opacity(0.72))
+            VStack(spacing: 12) {
+                ProgressView()
+                    .tint(.white)
+                Text(assemblyMessage)
+            }
+            .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
+            .foregroundStyle(.white.opacity(0.72))
 
         case .ready:
-            primaryButton("Start playing", systemImage: "play.fill") {
-                onCompleted()
-            }
-            .disabled(isImportingCentral)
-
-        case .failed:
             VStack(spacing: 12) {
-                Text(errorText)
+                Text(input == .demo
+                     ? "Essa é uma música de demonstração criada pelo Dap."
+                     : "Essa é a música da sua foto. Cada nova imagem cria um som diferente.")
                     .font(.custom("ZTTalk-Medium", size: 15, relativeTo: .subheadline))
                     .foregroundStyle(.white.opacity(0.78))
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 300)
+                    .frame(maxWidth: 320)
 
-                primaryButton("Try again", systemImage: "arrow.clockwise") {
-                    Task { await retryCurrentImage() }
-                }
-                .disabled(isImportingCentral)
-
-                secondaryButton("Enter without photo") {
+                primaryButton("Explorar o Dap", systemImage: "arrow.right") {
+                    library.stopTransientPlayback()
                     onCompleted()
+                }
+            }
+
+        case .permissionDenied:
+            VStack(spacing: 12) {
+                if permissionIssue == .denied {
+                    primaryButton("Abrir Ajustes", systemImage: "gear") {
+                        openSettings()
+                    }
+                } else {
+                    primaryButton("Continuar com demonstração", systemImage: "play.fill") {
+                        beginAssembly(.demo)
+                    }
+                }
+
+                secondaryButton(permissionIssue == .denied ? "Continuar com demonstração" : "Verificar novamente") {
+                    if permissionIssue == .denied {
+                        beginAssembly(.demo)
+                    } else {
+                        recheckCameraPermission()
+                    }
+                }
+            }
+
+        case .technicalError:
+            VStack(spacing: 12) {
+                primaryButton("Tentar novamente", systemImage: "arrow.clockwise") {
+                    retryAfterFailure()
+                }
+
+                secondaryButton("Continuar com demonstração") {
+                    beginAssembly(.demo)
                 }
             }
         }
@@ -235,7 +391,7 @@ struct OnboardingView: View {
                 .background(.white, in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityHint(title == "Start playing" ? "Enters Dap." : "Continues onboarding.")
+        .accessibilityHint(title == "Explorar o Dap" ? "Entra no Dap." : "Continua o onboarding.")
     }
 
     private func secondaryButton(
@@ -250,36 +406,36 @@ struct OnboardingView: View {
     }
 
     @MainActor
-    private func beginCameraFlow() async {
-        guard phase == .intro else { return }
-        withAnimation(.easeOut(duration: 0.16)) {
-            phase = .permission
-        }
+    private func requestCameraAccess() async {
+        guard phase == .permissionPrimer, !isRequestingPermission else { return }
+        isRequestingPermission = true
+        defer { isRequestingPermission = false }
 
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             await enterCapturePhase()
         case .notDetermined:
             let granted = await AVCaptureDevice.requestAccess(for: .video)
-            granted ? await enterCapturePhase() : await useFallbackImage()
-        case .denied, .restricted:
-            await useFallbackImage()
+            if granted {
+                await enterCapturePhase()
+            } else {
+                showPermissionDenied(.denied)
+            }
+        case .denied:
+            showPermissionDenied(.denied)
+        case .restricted:
+            showPermissionDenied(.restricted)
         @unknown default:
-            await useFallbackImage()
+            failure = .permissionCheckFailed
+            phase = .technicalError
         }
     }
 
     @MainActor
     private func enterCapturePhase() async {
-        guard savedSoundID == nil, capturedImageData == nil else {
-            await importCentralImageIfNeeded()
-            return
-        }
-
         withAnimation(.easeOut(duration: 0.18)) {
             phase = .capture
         }
-
         await startCameraIfNeeded()
     }
 
@@ -302,7 +458,10 @@ struct OnboardingView: View {
             controller = nextController
             nextController.start()
         } catch {
-            await useFallbackImage()
+            failure = .captureFailed
+            withAnimation(.easeOut(duration: 0.16)) {
+                phase = .technicalError
+            }
         }
     }
 
@@ -310,102 +469,145 @@ struct OnboardingView: View {
     private func capturePhoto() async {
         guard phase == .capture,
               let controller,
-              !isImportingCentral,
-              savedSoundID == nil else {
+              !isCapturing,
+              !isSwitchingCamera else {
             return
         }
 
         let token = UUID()
         captureToken = token
+        isCapturing = true
         captureFeedback += 1
+        defer { isCapturing = false }
+
         do {
             let data = try await controller.capturePhoto(flashMode: .off)
             guard phase == .capture, captureToken == token else { return }
 
             stopCamera(invalidateCapture: false)
-            setCentralImageData(data)
+            input = .captured(data)
+            setPreview(data)
             withAnimation(.easeOut(duration: 0.18)) {
-                phase = .assembling
+                phase = .review
             }
-            await importCentralImageIfNeeded()
         } catch {
             guard captureToken == token else { return }
-            await useFallbackImage()
+            failure = .captureFailed
+            withAnimation(.easeOut(duration: 0.16)) {
+                phase = .technicalError
+            }
         }
     }
 
     @MainActor
-    private func useFallbackImage() async {
-        guard savedSoundID == nil, !isImportingCentral else { return }
-
-        stopCamera()
-        if capturedImageData == nil {
-            setCentralImageData(OnboardingTemporaryArtwork.fallbackImageData())
+    private func switchCamera() async {
+        guard phase == .capture,
+              let controller,
+              !isCapturing,
+              !isSwitchingCamera else {
+            return
         }
+
+        isSwitchingCamera = true
+        defer { isSwitchingCamera = false }
+
+        do {
+            try await controller.switchCamera()
+        } catch {
+            failure = .captureFailed
+            withAnimation(.easeOut(duration: 0.16)) {
+                phase = .technicalError
+            }
+        }
+    }
+
+    @MainActor
+    private func confirmPhoto() {
+        guard phase == .review, case .captured = input, let input else { return }
+        beginAssembly(input)
+    }
+
+    @MainActor
+    private func retakePhoto() async {
+        guard phase == .review else { return }
+
+        assemblyTask?.cancel()
+        input = nil
+        centralDisplayImage = nil
+        clusterAssembled = false
+        hasAnimatedCluster = false
+        withAnimation(.easeOut(duration: 0.18)) {
+            phase = .capture
+        }
+        await startCameraIfNeeded()
+    }
+
+    @MainActor
+    private func beginAssembly(_ input: OnboardingInput) {
+        guard phase != .assembling, phase != .ready else { return }
+
+        assemblyTask?.cancel()
+        let token = UUID()
+        assemblyToken = token
+        self.input = input
+        failure = nil
+        clusterAssembled = false
+        hasAnimatedCluster = false
+        assemblyMessage = "Lendo as cores da sua foto…"
+
+        if case .demo = input {
+            setPreview(OnboardingTemporaryArtwork.fallbackImageData())
+        }
+        stopCamera()
 
         withAnimation(.easeOut(duration: 0.18)) {
             phase = .assembling
         }
-        await importCentralImageIfNeeded()
-    }
 
-    @MainActor
-    private func importCentralImageIfNeeded() async {
-        guard savedSoundID == nil else {
-            await animateClusterToReady()
-            return
-        }
-        guard !isImportingCentral, let capturedImageData else { return }
+        assemblyTask = Task { @MainActor [input, token] in
+            do {
+                try await Task.sleep(nanoseconds: 350_000_000)
+                guard isCurrentAssembly(token) else { return }
+                assemblyMessage = "Transformando em melodia…"
 
-        isImportingCentral = true
-        defer { isImportingCentral = false }
+                let sound: PhotoSound
+                switch input {
+                case .captured(let data):
+                    guard let imported = try await library.importPhotoSoundData(data) else {
+                        throw OnboardingImportError.alreadyImporting
+                    }
+                    sound = imported
+                case .demo:
+                    let processed = try await PhotoMusicPipeline.process(
+                        imageData: OnboardingTemporaryArtwork.fallbackImageData()
+                    )
+                    sound = processed.sound
+                }
 
-        do {
-            guard let sound = try await library.importPhotoSoundData(capturedImageData) else {
-                throw OnboardingImportError.alreadyImporting
+                guard isCurrentAssembly(token) else { return }
+                library.playTransientSequence(sound.sequence)
+                withAnimation(clusterAnimation) {
+                    hasAnimatedCluster = true
+                    clusterAssembled = true
+                }
+                try await Task.sleep(nanoseconds: reduceMotion ? 180_000_000 : 920_000_000)
+                guard isCurrentAssembly(token) else { return }
+
+                completionFeedback += 1
+                withAnimation(.easeOut(duration: 0.16)) {
+                    phase = .ready
+                }
+                assemblyTask = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                guard isCurrentAssembly(token) else { return }
+                failure = input == .demo ? .generationFailed : .importFailed
+                withAnimation(.easeOut(duration: 0.16)) {
+                    phase = .technicalError
+                }
+                assemblyTask = nil
             }
-            savedSoundID = sound.id
-            await animateClusterToReady()
-        } catch {
-            errorText = error.localizedDescription
-            withAnimation(.easeOut(duration: 0.16)) {
-                phase = .failed
-            }
-        }
-    }
-
-    @MainActor
-    private func retryCurrentImage() async {
-        guard !isImportingCentral else { return }
-        guard capturedImageData != nil else {
-            await useFallbackImage()
-            return
-        }
-
-        clusterAssembled = false
-        hasAnimatedCluster = false
-        withAnimation(.easeOut(duration: 0.16)) {
-            phase = .assembling
-        }
-        await importCentralImageIfNeeded()
-    }
-
-    @MainActor
-    private func animateClusterToReady() async {
-        guard phase == .assembling else { return }
-
-        if !hasAnimatedCluster {
-            hasAnimatedCluster = true
-            withAnimation(clusterAnimation) {
-                clusterAssembled = true
-            }
-            try? await Task.sleep(nanoseconds: reduceMotion ? 180_000_000 : 920_000_000)
-        }
-
-        guard phase == .assembling, savedSoundID != nil else { return }
-        completionFeedback += 1
-        withAnimation(.easeOut(duration: 0.16)) {
-            phase = .ready
         }
     }
 
@@ -416,9 +618,66 @@ struct OnboardingView: View {
     }
 
     @MainActor
-    private func setCentralImageData(_ data: Data) {
-        capturedImageData = data
+    private func setPreview(_ data: Data) {
         centralDisplayImage = OnboardingTemporaryArtwork.displayImage(from: data)
+    }
+
+    @MainActor
+    private func showPermissionDenied(_ issue: OnboardingPermissionIssue) {
+        permissionIssue = issue
+        withAnimation(.easeOut(duration: 0.16)) {
+            phase = .permissionDenied
+        }
+    }
+
+    @MainActor
+    private func recheckCameraPermission() {
+        guard phase == .permissionDenied else { return }
+
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            Task { await enterCapturePhase() }
+        case .denied:
+            permissionIssue = .denied
+        case .restricted:
+            permissionIssue = .restricted
+        case .notDetermined:
+            withAnimation(.easeOut(duration: 0.16)) {
+                phase = .permissionPrimer
+            }
+        @unknown default:
+            failure = .permissionCheckFailed
+            phase = .technicalError
+        }
+    }
+
+    @MainActor
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    @MainActor
+    private func retryAfterFailure() {
+        switch failure {
+        case .captureFailed:
+            Task { await enterCapturePhase() }
+        case .importFailed:
+            if let input {
+                beginAssembly(input)
+            } else {
+                phase = .permissionPrimer
+            }
+        case .generationFailed:
+            beginAssembly(.demo)
+        case .permissionCheckFailed, nil:
+            phase = .permissionPrimer
+        }
+    }
+
+    @MainActor
+    private func isCurrentAssembly(_ token: UUID) -> Bool {
+        !Task.isCancelled && phase == .assembling && assemblyToken == token
     }
 
     @MainActor
@@ -432,23 +691,64 @@ struct OnboardingView: View {
 }
 
 private enum OnboardingPhase {
-    case intro
-    case permission
+    case welcome
+    case permissionPrimer
     case capture
+    case review
     case assembling
     case ready
-    case failed
+    case permissionDenied
+    case technicalError
 }
 
-private enum OnboardingImportError: LocalizedError {
-    case alreadyImporting
+private enum OnboardingInput: Equatable {
+    case captured(Data)
+    case demo
+}
 
-    var errorDescription: String? {
+private enum OnboardingPermissionIssue: Equatable {
+    case denied
+    case restricted
+
+    var title: String {
         switch self {
-        case .alreadyImporting:
-            "Another import is already running."
+        case .denied: "Câmera desativada"
+        case .restricted: "Câmera indisponível"
         }
     }
+
+    var message: String {
+        switch self {
+        case .denied:
+            "Você pode ativar o acesso à câmera nos Ajustes do sistema ou continuar com uma demonstração."
+        case .restricted:
+            "O acesso à câmera está bloqueado por uma restrição do sistema. Continue com uma demonstração para conhecer o Dap."
+        }
+    }
+}
+
+private enum OnboardingFailure {
+    case permissionCheckFailed
+    case captureFailed
+    case importFailed
+    case generationFailed
+
+    var message: String {
+        switch self {
+        case .permissionCheckFailed:
+            "Não foi possível verificar o acesso à câmera."
+        case .captureFailed:
+            "Não foi possível capturar a foto. Tente novamente ou use uma demonstração."
+        case .importFailed:
+            "Não foi possível salvar essa foto. Tente novamente ou use uma demonstração."
+        case .generationFailed:
+            "Não foi possível transformar a demonstração em música. Tente novamente."
+        }
+    }
+}
+
+private enum OnboardingImportError: Error {
+    case alreadyImporting
 }
 
 private struct OnboardingBackground: View {
@@ -477,6 +777,70 @@ private struct OnboardingBackground: View {
             Color.black.opacity(0.28)
         }
         .ignoresSafeArea()
+    }
+}
+
+private struct OnboardingMechanismView: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            if let image = OnboardingTemporaryArtwork.demoImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 104, height: 130)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
+            Image(systemName: "arrow.right")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white.opacity(0.65))
+
+            OnboardingColorStrip()
+                .frame(width: 34, height: 130)
+
+            Image(systemName: "arrow.right")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white.opacity(0.65))
+
+            OnboardingSequenceGraphic()
+                .frame(width: 88, height: 130)
+        }
+        .frame(height: 150)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Uma foto se transforma em cores e depois em uma sequência musical")
+    }
+}
+
+private struct OnboardingColorStrip: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(Color(red: 0.94, green: 0.20, blue: 0.32))
+            Rectangle().fill(Color(red: 0.12, green: 0.72, blue: 0.86))
+            Rectangle().fill(Color(red: 0.98, green: 0.72, blue: 0.18))
+            Rectangle().fill(Color(red: 0.44, green: 0.34, blue: 0.96))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct OnboardingSequenceGraphic: View {
+    private let lengths: [CGFloat] = [0.72, 0.42, 0.88, 0.56, 0.78, 0.34, 0.64, 0.48]
+
+    var body: some View {
+        VStack(spacing: 7) {
+            ForEach(Array(lengths.enumerated()), id: \.offset) { index, length in
+                HStack(spacing: 5) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(index.isMultiple(of: 2) ? Color(red: 0.12, green: 0.72, blue: 0.86) : .white.opacity(0.72))
+                        .frame(width: 68 * length, height: 7)
+                    Circle()
+                        .fill(.white.opacity(0.42))
+                        .frame(width: 5, height: 5)
+                }
+            }
+        }
+        .padding(10)
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -524,7 +888,7 @@ private struct OnboardingPhotoClusterView: View {
                 OnboardingClusterCard(
                     color: OnboardingTemporaryArtwork.centerFallbackColor,
                     image: centerImage,
-                    label: "Your first sound"
+                    label: "Sua criação musical"
                 )
                 .frame(width: cardWidth * 1.1, height: cardHeight * 1.1)
                 .scaleEffect(showsPulse && !reduceMotion ? 1.035 : 1)
@@ -536,7 +900,7 @@ private struct OnboardingPhotoClusterView: View {
         }
         .frame(height: 390)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Musical Photo composition")
+        .accessibilityLabel("Composição musical criada a partir da imagem")
     }
 }
 
@@ -599,11 +963,12 @@ private struct OnboardingClusterItem: Identifiable {
 
 private enum OnboardingTemporaryArtwork {
     static let centerFallbackColor = Color(red: 0.94, green: 0.20, blue: 0.32)
+    static let demoImage = displayImage(from: fallbackImageData())
 
     static let clusterItems: [OnboardingClusterItem] = [
         OnboardingClusterItem(
             id: 0,
-            label: "Visual layer one",
+            label: "Camada visual um",
             color: Color(red: 0.12, green: 0.72, blue: 0.86),
             startOffset: CGSize(width: -190, height: -230),
             finalOffset: CGSize(width: -84, height: -96),
@@ -615,7 +980,7 @@ private enum OnboardingTemporaryArtwork {
         ),
         OnboardingClusterItem(
             id: 1,
-            label: "Visual layer two",
+            label: "Camada visual dois",
             color: Color(red: 0.98, green: 0.72, blue: 0.18),
             startOffset: CGSize(width: 196, height: -218),
             finalOffset: CGSize(width: 82, height: -88),
@@ -627,7 +992,7 @@ private enum OnboardingTemporaryArtwork {
         ),
         OnboardingClusterItem(
             id: 2,
-            label: "Visual layer three",
+            label: "Camada visual três",
             color: Color(red: 0.44, green: 0.34, blue: 0.96),
             startOffset: CGSize(width: -202, height: 230),
             finalOffset: CGSize(width: -88, height: 94),
@@ -639,7 +1004,7 @@ private enum OnboardingTemporaryArtwork {
         ),
         OnboardingClusterItem(
             id: 3,
-            label: "Visual layer four",
+            label: "Camada visual quatro",
             color: Color(red: 0.36, green: 0.88, blue: 0.38),
             startOffset: CGSize(width: 204, height: 224),
             finalOffset: CGSize(width: 88, height: 98),

@@ -19,15 +19,72 @@ struct PhotoStoryExportSnapshot: Identifiable, Sendable {
     let palette: ColorPalette
 }
 
+enum PhotoExportFormat: String, CaseIterable, Identifiable, Sendable {
+    case photo
+    case story
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .photo: "Foto"
+        case .story: "Story"
+        }
+    }
+}
+
+struct PhotoExportResult {
+    let image: UIImage
+    let pngData: Data
+    let pixelSize: CGSize
+}
+
+struct PhotoExportRenderer {
+    @MainActor
+    func render(
+        format: PhotoExportFormat,
+        snapshot: PhotoStoryExportSnapshot
+    ) async throws -> PhotoExportResult {
+        switch format {
+        case .photo:
+            return try renderPhoto(snapshot: snapshot)
+        case .story:
+            let result = try await PhotoStoryRenderer().render(snapshot: snapshot)
+            return PhotoExportResult(
+                image: result.image,
+                pngData: result.pngData,
+                pixelSize: result.pixelSize
+            )
+        }
+    }
+
+    private func renderPhoto(snapshot: PhotoStoryExportSnapshot) throws -> PhotoExportResult {
+        guard let image = UIImage(data: snapshot.imageData, scale: 1),
+              let cgImage = image.cgImage else {
+            throw PhotoStoryRenderError.invalidImage
+        }
+
+        return PhotoExportResult(
+            image: image,
+            pngData: snapshot.imageData,
+            pixelSize: CGSize(width: cgImage.width, height: cgImage.height)
+        )
+    }
+}
+
 struct PhotoStoryExportSheet: View {
     let snapshot: PhotoStoryExportSnapshot
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var format: PhotoExportFormat = .photo
     @State private var phase = Phase.preparing
-    @State private var result: PhotoStoryRenderResult?
+    @State private var result: PhotoExportResult?
     @State private var errorMessage: String?
+    @State private var renderTask: Task<Void, Never>?
+    @State private var renderToken = UUID()
 
-    private let renderer = PhotoStoryRenderer()
+    private let renderer = PhotoExportRenderer()
     private let instagramExporter = InstagramStoryExporter()
 
     var body: some View {
@@ -35,12 +92,21 @@ struct PhotoStoryExportSheet: View {
             VStack(spacing: 0) {
                 header
 
+                formatPicker
+
                 content
             }
             .background(StoryExportChromeBackground())
         }
         .task {
-            await prepare()
+            schedulePreparation()
+        }
+        .onChange(of: format) { _, _ in
+            schedulePreparation()
+        }
+        .onDisappear {
+            renderTask?.cancel()
+            renderTask = nil
         }
     }
 
@@ -58,7 +124,7 @@ struct PhotoStoryExportSheet: View {
 
             Spacer(minLength: 0)
 
-            Text("Share Photo")
+            Text("Compartilhar foto")
                 .font(.custom("ZTTalk-Bold", size: 18, relativeTo: .headline))
 
             Spacer(minLength: 0)
@@ -72,13 +138,25 @@ struct PhotoStoryExportSheet: View {
         .padding(.bottom, 10)
     }
 
+    private var formatPicker: some View {
+        Picker("Formato", selection: $format) {
+            ForEach(PhotoExportFormat.allCases) { format in
+                Text(format.title).tag(format)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Formato de exportação")
+        .padding(.horizontal, 20)
+        .padding(.bottom, 14)
+    }
+
     @ViewBuilder
     private var content: some View {
         switch phase {
         case .preparing:
             VStack(spacing: 14) {
                 ProgressView()
-                Text("Preparing story image")
+                Text(format == .photo ? "Preparando foto" : "Preparando story")
                     .font(.custom("ZTTalk-Bold", size: 16, relativeTo: .subheadline))
                     .foregroundStyle(.secondary)
             }
@@ -88,32 +166,53 @@ struct PhotoStoryExportSheet: View {
                 PhotoStoryReadyView(
                     title: snapshot.title,
                     result: result,
+                    format: format,
                     isInstagramAvailable: instagramExporter.isInstagramStoriesAvailable,
-                    onInstagram: { Task { await shareToInstagram(result.image) } }
+                    onInstagram: { Task { await shareToInstagram(result.image) } },
+                    reduceMotion: reduceMotion
                 )
             }
         case .failed:
             StoryExportErrorView(
                 message: errorMessage ?? "Could not prepare this photo story.",
-                onTryAgain: { Task { await prepare() } }
+                onTryAgain: schedulePreparation
             )
         }
     }
 
     @MainActor
-    private func prepare() async {
+    private func schedulePreparation() {
+        renderTask?.cancel()
+        let token = UUID()
+        renderToken = token
         phase = .preparing
+        result = nil
+        errorMessage = nil
+        renderTask = Task { @MainActor [format, token] in
+            await prepare(format: format, token: token)
+        }
+    }
+
+    @MainActor
+    private func prepare(format: PhotoExportFormat, token: UUID) async {
+        phase = .preparing
+        result = nil
         errorMessage = nil
 
         do {
-            let rendered = try await renderer.render(snapshot: snapshot)
-            guard !Task.isCancelled else { return }
+            let rendered = try await renderer.render(format: format, snapshot: snapshot)
+            guard !Task.isCancelled, token == renderToken, format == self.format else { return }
             result = rendered
             phase = .ready
+            renderTask = nil
+        } catch is CancellationError {
+            return
         } catch {
+            guard token == renderToken, format == self.format else { return }
             errorMessage = (error as? LocalizedError)?.errorDescription
-                ?? "Could not prepare this photo story."
+                ?? "Não foi possível preparar esta exportação."
             phase = .failed
+            renderTask = nil
         }
     }
 
@@ -139,36 +238,53 @@ struct PhotoStoryExportSheet: View {
 
 private struct PhotoStoryReadyView: View {
     let title: String
-    let result: PhotoStoryRenderResult
+    let result: PhotoExportResult
+    let format: PhotoExportFormat
     let isInstagramAvailable: Bool
     let onInstagram: () -> Void
+    let reduceMotion: Bool
 
     var body: some View {
         VStack(spacing: 18) {
             Image(uiImage: result.image)
                 .resizable()
                 .scaledToFit()
-                .aspectRatio(9.0 / 16.0, contentMode: .fit)
+                .aspectRatio(format == .story ? 9.0 / 16.0 : nil, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .stroke(.white.opacity(0.16), lineWidth: 1)
                 }
                 .shadow(color: .black.opacity(0.18), radius: 22, y: 12)
+                .accessibilityLabel(format == .story ? "Pré-visualização do Story" : "Pré-visualização da foto")
 
-            StoryShareActions(
-                isInstagramAvailable: isInstagramAvailable,
-                onInstagram: onInstagram
+            ShareLink(
+                item: StoryImageExport(data: result.pngData),
+                preview: SharePreview(title, image: Image(uiImage: result.image))
             ) {
-                ShareLink(
-                    item: StoryImageExport(data: result.pngData),
-                    preview: SharePreview(title, image: Image(uiImage: result.image))
-                ) {
-                    Label("Share...", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity, minHeight: 52)
+                Label("Compartilhar", systemImage: "square.and.arrow.up")
+                    .frame(maxWidth: .infinity, minHeight: 52)
+            }
+            .buttonStyle(StoryPrimaryButtonStyle())
+
+            if format == .story {
+                Button(action: onInstagram) {
+                    Label(
+                        isInstagramAvailable ? "Compartilhar no Instagram" : "Instagram não instalado",
+                        systemImage: "camera"
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 52)
                 }
+                .buttonStyle(StorySecondaryButtonStyle())
+                .disabled(!isInstagramAvailable)
+                .accessibilityHint(
+                    isInstagramAvailable
+                        ? "Abre o Instagram Stories."
+                        : "O Instagram não está instalado."
+                )
             }
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: format)
         .padding(.horizontal, 20)
         .padding(.bottom, 28)
     }
