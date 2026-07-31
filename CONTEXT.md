@@ -1,6 +1,6 @@
 # Dap Product and Code Context
 
-Last synchronized with the supplied repository worktree: 2026-07-26.
+Last synchronized with the supplied repository worktree: 2026-07-29 (commit `e80c79f`).
 
 This document records the current product, domain model, implemented flows, deterministic algorithms, audio runtime, module ownership, and known gaps. It is a state document, not a changelog or roadmap.
 
@@ -8,14 +8,16 @@ When this file conflicts with the code, inspect the code and update this documen
 
 ## Product definition
 
-Dap is an iOS app that transforms a captured or imported Source Image into a **Musical Photo**:
+Dap is a native iOS app that transforms a captured or imported Source Image into a **Musical Photo**:
 
 - a deterministic four-tone pattern-halftone Cover;
 - a deterministic 16-step Musical Sequence;
 - a root pitch class, scale, BPM, gate, octave range, and waveform profile;
 - optional generated name and description.
 
-Musical Photos can be browsed and played individually or combined transiently in **Jam**, where up to three photos are assigned Bass, Harmony, and Melody roles and interpreted through a Vibe XY control, deterministic grooves, selectable drum kits, role-specific voices, and a looping transport.
+Musical Photos can be browsed, shared, deleted, and played individually. They can also be added to a saved **Jam** document, where up to three photos occupy Bass, Harmony, and Melody roles and are interpreted through Vibe, deterministic grooves, role-specific arrangement variations, selectable Drum Kits, global effects, and a looping transport.
+
+Jams are local persisted documents with a name, role assignments, Vibe position, Drum Kit, effect settings, and variation state. Their rendered arrangement and audio buffer remain transient derivatives.
 
 The app is local-first. No account, network service, cloud sync, analytics, multiplayer, or remote generation is required by the current code.
 
@@ -29,10 +31,25 @@ The app is local-first. No account, network service, cloud sync, analytics, mult
 - Gallery/Jam section selection;
 - Gallery UUID navigation path;
 - full-screen Capture presentation;
+- whether a Jam session is currently pushed;
 - the root Gallery/Jam segmented switcher;
-- the centered Capture button shown only at the Gallery root.
+- the centered Capture button shown only at the Gallery root;
+- consumption of deferred `DapPendingActionRequest` values created by App Intents.
 
-Gallery and Jam remain mounted and switch through opacity and hit-testing. Root chrome is hidden while Photo Inspector is pushed.
+Gallery and Jam remain mounted and switch through opacity and hit-testing. Root chrome is hidden while Photo Inspector or a Jam session is presented.
+
+### Typography
+
+ZT Talk is bundled locally in Regular, Medium, SemiBold, and Bold files and registered through `UIAppFonts`. `DapFont.swift` provides `Font.dap` helpers with Dynamic Type-relative sizing. Existing views still contain some direct `.custom(...)` calls; the helper is the canonical reusable entry point for new typography work.
+
+### App Shortcuts
+
+The app exposes two `AppShortcut` actions:
+
+- **Take a Photo** opens Dap directly into Capture;
+- **Create a Jam** switches to the Jam section and starts the inline new-Jam naming flow.
+
+The intents do not mutate SwiftUI state directly. They enqueue one codable request in `UserDefaults`; `AppRootView` consumes and removes it when the scene is active, on defaults changes, and during startup.
 
 ### Gallery
 
@@ -45,23 +62,23 @@ Gallery currently provides:
 - a metadata-refinement progress indicator;
 - a playing indicator for the active Musical Photo;
 - UUID navigation to Photo Inspector;
-- a native zoom transition when Reduce Motion is disabled;
 - top and bottom material fades integrated with root chrome.
 
-Gallery does not currently implement multi-selection, delete, share, manual reordering, Year/Month grouping, or a Gallery-local import tile.
+Gallery does not currently implement multi-selection, manual reordering, Year/Month grouping, or a Gallery-local import tile. Import remains inside Capture.
 
 ### Photo Inspector
 
 Photo Inspector currently provides:
 
-- the selected Cover;
+- the selected Cover in a fixed portrait presentation;
 - a background derived from the final root-note palette;
-- generated name and description when available;
-- root, scale, and BPM information;
-- play/pause through the shared `MusicPlayer`;
-- a Gallery-to-Inspector zoom transition when motion is allowed.
+- a display title, optional generated description, root, scale, and BPM;
+- play/stop through the shared `MusicPlayer`;
+- PNG Cover sharing through `ShareLink` with the Cover as preview;
+- destructive Photo deletion with confirmation and rollback-safe persistence;
+- **Add to Jam**, including saved-Jam availability, capacity status, duplicate status, and inline Jam creation.
 
-`Add Effects`, `Add to Jam`, and the overflow action are visible placeholders and do not currently perform product actions.
+Adding a Photo to a Jam updates only that Jam's persisted slot assignments. It does not navigate into the Jam session.
 
 ### Capture
 
@@ -79,7 +96,8 @@ Current controls and behavior:
 - orientation-aware preview and capture;
 - front-preview mirroring while persisted captures remain unmirrored;
 - live provisional pitch-color sampling;
-- a Metal lava-lamp strip driven by the provisional pitch palette.
+- a Metal lava-lamp strip driven by the provisional pitch palette;
+- black preview chrome in both appearance modes.
 
 Interactive dismissal is disabled while Capture owns a blocking state. The normal exit path is the Gallery thumbnail or the explicit completion action shown after applicable import outcomes.
 
@@ -92,34 +110,48 @@ A successful shutter capture:
 
 Photos import supports up to 20 ordered images. Processing is sequential. Successful items remain saved when another item fails. Batch state reports progress and partial failure.
 
-### Jam Vibe
+### Jam Library
 
-Jam is implemented as a local, transient Vibe experience.
+Jam is entered through a persistent two-column library rather than a transient selector.
+
+The library currently provides:
+
+- load, search, create, open, rename, and delete flows;
+- inline draft naming before a Jam is created;
+- deterministic generated abstract Covers derived from the Jam ID, assigned Photo IDs, and pitch palettes;
+- newest-updated-first ordering;
+- explicit empty, search-empty, loading, and failure states;
+- a bottom **Create a Jam** action hidden while search or inline editing owns focus.
+
+Deleting a Jam removes only its JSON document. Musical Photos and their Covers remain intact.
+
+### Jam Session
+
+A Jam session is a persisted, sequencer-first workspace.
 
 Current behavior:
 
-- select one to three persisted Musical Photos in a sheet;
-- ignore selected photos whose sequences contain no notes;
-- assign deterministic Bass, Harmony, and Melody roles;
-- display selected photos and assigned roles;
-- control density, register bias, and gate with an XY pad;
-- interpolate continuously between Airy, Bright, Deep, and Intense presets;
-- classify the current Vibe into one of four groove regions;
-- select one of three deterministic 16-step grooves per region;
-- choose Drum Kit `Auto`, `Soft`, `Club`, `Break`, or `Metal`;
-- map Auto as Airy→Soft, Bright→Club, Deep→Break, Intense→Metal;
-- render sampled drums with kick, snare, closed hat, open hat, and rim events;
-- render procedural Future Bass, sample-based Harmony, and sample-based Melody;
-- apply kick-driven pumping to Bass and Harmony;
-- generate Melody as a deterministic A/A' motif;
+- load and autosave one `PersistedJam`;
+- select up to three Musical Photos, assigning playable Photos to active roles and retaining non-playable selections in reserve;
+- maintain explicit Bass, Harmony, Melody, and reserve assignments;
+- reconcile missing/deleted Photos against the shared library;
+- display the Jam name and generated Jam Cover in the header;
+- display role tiles, pitch labels, active-step feedback, and a unified 16-step sequencer/status surface;
+- select a role by tapping its Photo tile;
+- swap active roles through drag-and-drop or accessibility actions without recomputing assignment identity;
+- open floating Kits, Vibe, Arrange, and Effects panels from the dock;
+- render a blurred/rasterized session backdrop behind expanded panels while keeping the live sequencer overlay separate;
+- control density, register bias, and gate with the Vibe XY pad;
+- select Drum Kit `Auto`, `Soft`, `Club`, `Break`, or `Metal`;
+- apply contextual deterministic arrangement variations to Bass, Harmony, or Melody;
+- enable and adjust global Reverb, Delay, and LFO/tremolo;
 - play one fixed 16-step loop at 96 BPM;
-- display a local transport step indicator;
-- queue selection, Vibe, and kit changes while playing;
-- schedule the latest rendered replacement for the next loop boundary;
-- export a static 1080×1920 Jam Story image with Instagram Stories handoff and Share Sheet fallback;
-- stop transient playback when Jam disappears or loses root focus.
+- derive visible step and active-photo state from the live `AVAudioPlayerNode` transport;
+- queue latest-wins arrangement replacements for the next loop boundary;
+- persist document state while keeping rendered arrangements and buffers transient;
+- stop playback and flush/cancel session work when the view disappears, loses root focus, closes, or enters relevant lifecycle states.
 
-Jam state is not persisted. Studio does not exist in the current code.
+The large Jam surface is split into focused presentation files (`JamPhotoSection`, `JamSequencerSection`, `JamDockBar`, `JamControlPanels`, and `JamPanelBackdrop`). `JamView` remains the orchestrator for session actions, persistence, and cross-component coordination.
 
 ## Domain glossary
 
@@ -188,6 +220,8 @@ A nil role keeps the legacy procedural photo-playback path.
 
 Optional name and description generated after the essential Musical Photo is persisted.
 
+`PhotoSound.nameSource` distinguishes manual and generated names. Generated refinement preserves an existing manual name while still allowing the description to update. `displayTitle` falls back to the Musical Sequence label and then `Untitled Photo` when no usable name exists.
+
 Metadata is enrichment. It must never determine whether Musical Photo creation succeeds.
 
 ### Playback
@@ -211,6 +245,21 @@ The UI-level selection is `Auto`, `Soft`, `Club`, `Break`, or `Metal`.
 
 `Auto` resolves from the current Jam region. The resulting concrete `MusicDrumKit` is stored in the percussion pattern passed to the renderer.
 
+### Saved Jam
+
+The persisted Jam document represented by `PersistedJam`.
+
+Schema version 1 stores:
+
+- stable UUID, normalized name, creation date, and update date;
+- Bass, Harmony, Melody, and reserve Photo UUID assignments;
+- normalized Vibe position;
+- Drum Kit selection;
+- Reverb, Delay, and LFO settings;
+- Bass, Harmony, and Melody variation state.
+
+A Saved Jam references Musical Photos by UUID. It does not embed Photo sequences, Photo Covers, a rendered arrangement, or audio.
+
 ### Jam Arrangement
 
 A transient `JamArrangement` containing:
@@ -219,7 +268,17 @@ A transient `JamArrangement` containing:
 - active steps by source Musical Photo UUID;
 - one percussion pattern.
 
-It is built in memory and is not persisted.
+It is deterministically rebuilt from the Saved Jam state and current Musical Photo library. It is not persisted.
+
+### Jam Effects
+
+`JamEffectSettings` configures the global Jam effect rack:
+
+- Reverb enable and wet mix;
+- Delay enable and wet mix;
+- LFO/tremolo enable and amount.
+
+Settings are persisted in the Saved Jam, while DSP runtime state remains inside `MusicPlayer`.
 
 ### Vibe
 
@@ -234,7 +293,7 @@ The groove region itself uses quadrant boundaries at `x == 0.5` and `y == 0.5`.
 
 ### Studio
 
-A possible future explicit arrangement mode. It is not implemented and has no authorized architecture in the current repository.
+A possible future explicit arrangement mode. It is not implemented and has no authorized architecture in the current repository. The current contextual Arrange panel is part of Jam and is not Studio.
 
 ## Core workflows
 
@@ -242,7 +301,13 @@ A possible future explicit arrangement mode. It is not implemented and has no au
 
 `DapApp → AppRootView → PhotoLibraryViewModel.loadLibrary() → PhotoStore.load() + coverData(for:)`
 
-The library is loaded once per shared view-model lifetime. Covers are loaded into memory before the views render them.
+The Musical Photo library is loaded once per shared view-model lifetime. Covers are loaded into memory before the views render them. The Jam library loads independently when `JamLibraryView` appears.
+
+### Consume an App Shortcut
+
+`AppIntent → DapPendingActionStore.enqueue → AppRootView.consumePendingActionIfNeeded()`
+
+The root consumes the request only while active, removes it from defaults, resets incompatible presentation state, and opens Capture or the Jam draft-creation flow.
 
 ### Create from camera
 
@@ -262,11 +327,23 @@ Batch processing continues after individual failures unless the task is cancelle
 
 Only one shared playback runtime exists.
 
-### Create and play a Jam
+### Add a Photo to a Jam
 
-`Jam selection → JamArrangementBuilder → JamGrooveLibrary → PhotoLibraryViewModel.playTransientSequence → MusicPlayer loop`
+`Photo Inspector → JamLibraryState/JamStore → JamSlotAssignments.addingPhotoID → PersistedJam save`
 
-The builder receives the concrete Drum Kit already resolved by `JamView`.
+The operation rejects non-playable Photos, duplicates, and Jams already at the three-Photo limit.
+
+### Create, open, and save a Jam
+
+`JamLibraryView → JamLibraryState → JamStore → JamView`
+
+`JamView` loads the document into `JamSessionState`, reconciles Photo UUIDs, rebuilds the transient arrangement, and autosaves document changes after a 500 ms debounce. Closing or backgrounding flushes pending persistence work where applicable.
+
+### Create and play a Jam arrangement
+
+`JamSessionState → JamArrangementBuilder → JamGrooveLibrary → PhotoLibraryViewModel.playTransientSequence/updateTransientLoop → MusicPlayer → JamAudioRenderer`
+
+The builder receives explicit role assignments, deterministic variation state, and the concrete Drum Kit already resolved by `JamView`.
 
 ## Deterministic photo pipeline
 
@@ -361,26 +438,27 @@ After persistence, `PhotoMetadataGenerator`:
 4. uses a new Foundation Models session for each photo;
 5. requests a short English name and one-sentence description;
 6. sanitizes and length-limits generated text;
-7. patches only `name` and `description` in persistence and memory.
+7. patches metadata through `PhotoStore.updateMetadata` with `nameSource == .generated`;
+8. preserves a pre-existing manual name when `preserveManualName` is enabled.
 
-Unavailable models, classification failures, guardrail failures, and generation failures preserve the fallback metadata state.
+Unavailable models, classification failures, guardrail failures, and generation failures preserve the already-persisted Musical Photo and its fallback display title.
 
 ## Audio runtime
 
-`MusicPlayer` is a `@MainActor` concrete runtime with:
+`MusicPlayer` is the single `@MainActor` playback runtime with:
 
 - one `AVAudioEngine`;
-- one `AVAudioPlayerNode`;
+- a Gallery/Inspector player path;
+- a dedicated Jam player path through LFO mixer → Delay → Reverb → main mixer;
 - stereo 44,100 Hz output;
 - lazy audio-session activation and engine startup;
-- cancellable detached offline rendering;
-- generation tokens that reject stale completions;
-- one-shot scheduling;
-- native looping;
-- debounced loop replacement;
+- cancellable detached offline rendering delegated to `JamAudioRenderer`;
+- generation and request tokens that reject obsolete completions;
+- native Jam looping and debounced next-loop replacement;
+- live Jam transport introspection from `AVAudioPlayerNode` render time;
 - audio-interruption handling.
 
-All tonal and percussion content is rendered into arrays before an `AVAudioPCMBuffer` is scheduled.
+All tonal and percussion content is rendered into arrays before an `AVAudioPCMBuffer` is scheduled. SwiftUI views do not render audio.
 
 ### Single-photo procedural playback
 
@@ -399,13 +477,13 @@ This path is intentionally preserved so Jam voice changes do not alter persisted
 
 ### Jam melodic routing
 
-Jam notes are split into semantic stems inside `renderSequence`:
+`JamAudioRenderer` splits role-tagged notes into semantic stems:
 
-- Bass stem;
-- Harmony stem;
-- main output for Melody and nil-role notes.
+- Bass;
+- Harmony;
+- Melody and nil-role main output.
 
-Role-specific fallbacks remain inside their semantic stem so Bass and Harmony still receive pumping when a preferred renderer is unavailable.
+Role-specific fallbacks remain inside their semantic stem so Bass and Harmony still receive pumping when a preferred renderer is unavailable. `MusicPlayer` owns only the engine graph, buffer scheduling, transport, and global effect units.
 
 ### Future Bass
 
@@ -490,30 +568,48 @@ The renderer supports:
 
 The resource bundle also contains additional claps, cymbals, shakers, tambourines, textures, and unused alternates. Their presence does not mean they are currently selected by any kit.
 
+### Global Jam effects
+
+The Jam path is:
+
+`jamPlayerNode → jamLFOMixer → jamDelayUnit → jamReverbUnit → mainMixerNode`
+
+Current behavior:
+
+- Reverb uses `mediumHall` and maps enabled mix to `wetDryMix`;
+- Delay time is dotted-eighth relative to BPM, feedback is 35%, and low-pass cutoff is 12 kHz;
+- LFO is a global tremolo at half-note rate, updated at approximately 30 Hz;
+- disabling an effect bypasses its wet stage or restores LFO mixer gain to 1;
+- defaults are disabled with remembered mixes of Reverb 0.28, Delay 0.22, and LFO amount 0.35.
+
 ### Output and loop scheduling
 
-For looping Jam playback, frame count is exactly one 16-step tonal bar. Sample tails wrap inside that frame count.
+Jam playback uses `playJam` on a dedicated looping node. Frame count is exactly one 16-step tonal bar at 96 BPM; sample tails wrap inside that frame count.
 
-When `play(... loops: true)` is called while a loop is already playing:
+For an update while Jam is running:
 
-1. pending replacement work is cancelled;
-2. a new generation token is created;
-3. rendering is debounced by approximately 135 ms;
-4. only the latest render completion remains valid;
-5. the new buffer is scheduled with `.loops` and `.interruptsAtLoop`;
-6. `onLoopUpdatePrepared` informs Jam that the replacement is queued.
+1. the newest `LoopRenderRequest` supersedes older pending work;
+2. replacement rendering is debounced by approximately 135 ms;
+3. generation/request tokens reject stale completions;
+4. the prepared buffer is scheduled with `.loops` and `.interruptsAtLoop` on the Jam node;
+5. `onLoopUpdatePrepared` informs Jam that the replacement is queued;
+6. `JamPlaybackController` promotes the matching pending arrangement only after a live transport wrap is observed.
 
-The visible Jam transport is a separate `ContinuousClock` task. It clears prepared Drum Kit feedback at step 0 after scheduling confirmation.
+The visible transport is polled from `MusicPlayer.currentJamTransportSnapshot()` at approximately 33 ms. `JamVisualTransportState` stores only the current step and active Photo UUID set, reducing broad SwiftUI observation invalidation.
 
 ## Jam arrangement algorithm
 
-### Selection
+### Selection and slot ownership
 
-Jam accepts up to three Musical Photos. Selector output is sorted by UUID for stable storage. Photos with empty sequences are excluded from arrangement building.
+A Saved Jam accepts up to three Musical Photos. `JamSlotAssignments` is the single source of truth for Bass, Harmony, Melody, and reserve membership.
 
-### Role assignment
+Selector confirmation reconciles the requested UUID order with current assignments and playable IDs. Existing active roles survive when valid; newly added playable Photos fill canonical vacancies; deleted or unplayable active Photos can be demoted or removed; reserve Photos are promoted deterministically when needed.
 
-Photos are sorted by:
+The Jam selector can retain Photos with empty sequences, but they remain in reserve and cannot occupy an active playable role. Photo Inspector blocks adding a non-playable Photo directly to a Saved Jam. Arrangement building ignores unresolved or empty sources.
+
+### Initial role assignment
+
+For a fresh selection, playable Photos are sorted by:
 
 1. average MIDI register;
 2. note count;
@@ -525,6 +621,8 @@ Roles are assigned as:
 - two photos → Bass and Melody;
 - three photos → Bass, Harmony, and Melody.
 
+After initial assignment, role identity is explicit state. Drag-and-drop swaps role UUIDs; it does not rerun the sorting algorithm.
+
 ### Global harmony
 
 All selected notes are counted by pitch class. The builder evaluates every root for major pentatonic and minor pentatonic and selects the candidate with greatest note coverage.
@@ -534,7 +632,7 @@ Ties prefer:
 1. major pentatonic over minor pentatonic;
 2. lower root pitch class within the same scale.
 
-All selected photos influence this root and scale.
+All active assigned Photos influence this root and scale. Reserve Photos do not enter the arrangement builder.
 
 ### Vibe interpolation
 
@@ -576,6 +674,33 @@ Harmony:
 - reduces source velocity;
 - marks notes with `voiceRole == .harmony`.
 
+### Contextual Arrange variations
+
+Arrange operates on the currently selected playable role and persists only compact variation state.
+
+Bass intents:
+
+- Steady;
+- Syncopated;
+- Driving.
+
+Harmony intents:
+
+- Sustained;
+- Rhythmic;
+- Open.
+
+Melody intents:
+
+- Subtle;
+- Energetic;
+- Sparse;
+- Surprise.
+
+Bass and Harmony persist an intent plus generation counter. Melody persists a generation counter; the UI intent guides a deterministic search across rhythm, contour, register, and full variation families. Applying an option increments/searches generation until it finds a sufficiently different valid arrangement or uses the defined fallback path.
+
+Variations remain deterministic for the same Jam document, source Photos, Vibe region, and current algorithm. They do not mutate persisted Musical Photo sequences.
+
 ### Melody source scope
 
 The Melody's primary pitch material comes from only one Musical Photo: the photo assigned the `.melody` role.
@@ -584,7 +709,7 @@ The builder passes only that photo's source notes through:
 
 `source notes → register shift → global-scale snap → transformed Melody pool`
 
-All selected photos still influence:
+All active assigned Photos still influence:
 
 - global root and scale;
 - sorted UUIDs used by the Melody seed;
@@ -653,7 +778,7 @@ Additional rules:
 
 The local FNV-1a 64-bit seed includes:
 
-- selected UUID strings in sorted order;
+- active assigned UUID strings in sorted order;
 - global root pitch class;
 - global scale raw value;
 - Jam region;
@@ -667,7 +792,7 @@ Raw `vibePosition` is not hashed. However, transformed Melody MIDI values depend
 
 The Vibe quadrant selects Airy, Bright, Deep, or Intense.
 
-Each region has three hard-coded 16-step variants. Variant index is derived from FNV-1a hashing of sorted selected UUID strings, so the same selected set and region produce the same pattern.
+Each region has three hard-coded 16-step variants. Variant index is derived from FNV-1a hashing of sorted active assigned UUID strings, so the same active assignment set and region produce the same pattern.
 
 Patterns can contain kick, snare, closed hat, open hat, and rim events with velocity.
 
@@ -686,28 +811,33 @@ Manual kit selection persists while Vibe moves. Changes during playback are rend
 
 ### Playback update contract
 
-Jam playback is one native looping rendered buffer at 96 BPM. The visible transport advances with a local `ContinuousClock` task.
+Jam playback is one native looping rendered buffer at 96 BPM. Visible transport is derived from the live audio node rather than an independent clock.
 
 While playing:
 
-- Vibe movement marks an arrangement change as pending;
-- photo selection changes mark an arrangement change as pending;
-- Drum Kit changes immediately send the latest arrangement to `MusicPlayer`, which owns debouncing and next-loop quantization;
-- only the latest replacement render remains valid;
-- prepared kit feedback clears at the next visible step 0.
+- Vibe, role assignment, Arrange, and Drum Kit changes build the newest candidate arrangement;
+- `MusicPlayer` owns render debouncing, cancellation, and next-loop buffer scheduling;
+- `JamPlaybackController` tracks the pending arrangement, the loop iteration at request time, preparation feedback, and the applied arrangement version;
+- only the latest prepared replacement is eligible to become active;
+- the UI promotes it after transport wrap and then emits success/selection feedback;
+- effect parameter changes apply directly to the effect chain and are not quantized through arrangement rendering.
 
 ## Persistence
 
-`PhotoStore` is an actor and owns all disk state under Application Support:
+Application Support currently contains two independent local stores:
 
 ```text
 Dap/
 ├── library.json
-└── Covers/
-    └── <UUID>.png
+├── Covers/
+│   └── <Photo UUID>.png
+└── Jams/
+    └── <Jam UUID>.json
 ```
 
-### Save contract
+Generated Jam Covers are deterministic derivatives rendered and cached in memory by `JamCoverRenderer`; they are not persisted as separate files.
+
+### Musical Photo save contract
 
 1. create directories;
 2. write Cover PNG;
@@ -716,23 +846,42 @@ Dap/
 5. remove the new Cover if the JSON write fails;
 6. publish memory state only after full persistence success.
 
-### Metadata patch contract
+### Musical Photo metadata patch contract
 
-Metadata updates read, modify, and atomically rewrite the library inside one actor turn. Only name and description change.
+Metadata updates read, modify, and atomically rewrite the library inside one `PhotoStore` actor turn. Name, `nameSource`, and description are the only mutable metadata fields. Generated updates can preserve a manual name.
+
+### Musical Photo delete contract
+
+`PhotoStore.delete` temporarily moves the Cover aside, atomically writes the reduced library, restores the Cover if the JSON write fails, and removes the stashed Cover only after success.
+
+Deleting a Musical Photo does not rewrite every Saved Jam immediately. Open Jam sessions prune invalid UUIDs against the current shared library and autosave the cleaned assignments.
+
+### Saved Jam contract
+
+`JamStore` is an actor. It:
+
+- stores one pretty-printed, sorted-key JSON file per Jam;
+- validates `PersistedJam.currentSchemaVersion == 1`;
+- normalizes names to a non-empty maximum of 80 characters;
+- relies on persisted/runtime conversion helpers to clamp Vibe coordinates and effect values when Jam state is applied or snapshotted;
+- removes duplicate UUID assignments during sanitization;
+- updates `updatedAt` on save;
+- lists documents newest-updated-first;
+- ignores corrupted or unsupported files during listing while logging them.
+
+`JamView` schedules autosave after a 500 ms debounce for document changes and flushes pending state on close/background lifecycle paths. Rendered arrangements, generated backdrop snapshots, transport state, pending loop buffers, and audio DSP phase are never persisted.
 
 ### Current persistence gaps
 
 The app does not persist:
 
 - original Source Images;
-- Jam selection;
-- Vibe position;
-- Drum Kit selection;
-- Jam arrangements;
-- effects;
-- Gallery user ordering;
+- manual Gallery ordering or grouping;
+- rendered Jam arrangements or audio buffers;
+- generated Jam Cover PNG files;
 - export history;
-- algorithm-version metadata or migrations.
+- algorithm-version metadata for Musical Photos;
+- migration logic beyond strict Saved Jam schema-version rejection.
 
 ## Module ownership
 
@@ -742,17 +891,25 @@ Creates `AppRootView`.
 
 ### `AppRootView`
 
-Owns root section, Gallery path, Capture presentation, root chrome, and shared `PhotoLibraryViewModel` lifetime.
+Owns root section, Gallery path, Capture presentation, Jam-session visibility, root chrome, deferred App Intent routing, and shared `PhotoLibraryViewModel` lifetime.
+
+### `DapAppShortcuts` / `DapPendingActionStore`
+
+Own App Shortcut declarations and the one-shot persisted request used to bridge an App Intent into active root presentation state.
+
+### `DapFont`
+
+Owns the reusable ZT Talk weight mapping and Dynamic Type-relative SwiftUI font helpers. Font registration remains in `Info.plist`.
 
 ### `PhotoLibraryViewModel`
 
-Owns in-memory library items, Cover cache, import state, metadata task coordination, shared playback, and transient loop-prepared callback plumbing.
+Owns in-memory Musical Photo items, Cover cache, import state, metadata task coordination, shared playback façade, Jam effect forwarding, transport snapshot access, and loop-prepared callback plumbing.
 
 Despite its name, it is shared by Gallery, Capture, Inspector, and Jam.
 
 ### `PhotoStore`
 
-Owns library JSON, Cover files, serialized saves, metadata patches, and Cover loading.
+Owns Musical Photo JSON, Cover files, serialized saves, metadata patches, rollback-safe deletion, and Cover loading.
 
 ### `PhotoMusicPipeline`
 
@@ -768,7 +925,11 @@ Owns Vision classification, Foundation Models prompting, guided output, sanitiza
 
 ### `MusicPlayer`
 
-Owns the audio graph, offline tonal and percussion rendering, role-based stems, Future Bass, sample playback, pumping, looping, scheduling, cancellation, and interruptions.
+Owns the single audio engine, player nodes, Jam effect chain, scheduling, replacement cancellation, transport introspection, audio-session lifecycle, and interruptions.
+
+### `JamAudioRenderer`
+
+Owns detached offline tonal and percussion rendering, role-based stems, Future Bass, sample playback, pumping, mixing, and procedural fallbacks.
 
 ### `MelodicSampleLibrary`
 
@@ -792,70 +953,112 @@ Owns grid presentation and UUID navigation to Inspector.
 
 ### `PhotoInspectorView`
 
-Owns one-photo presentation and its current playback controls.
+Owns one-Photo presentation, share/delete actions, playback controls, and the Add-to-Jam picker flow.
+
+### `JamLibraryView` / `JamLibraryState`
+
+Own Jam-library presentation and observable library workflow state: loading, filtering, draft creation, selection, rename, delete, and save coordination.
+
+### `JamStore`
+
+Owns Saved Jam JSON schema validation, sanitization, listing, creation, loading, saving, rename, and deletion.
 
 ### `JamView`
 
-Owns transient photo selection, Vibe position, Drum Kit selection, selector presentation, playback state, pending feedback, and visible transport.
+Owns one open Jam session's orchestration: applying persisted state, routing UI actions, arrangement rebuild requests, autosave, lifecycle teardown, panel presentation, and coordination between narrow state owners.
+
+### `JamSessionState`
+
+Owns current document values: Jam identity/name/date, slot assignments, role variations, Vibe, Drum Kit, effects, active arrangement, and play intent.
+
+### `JamPlaybackController`
+
+Owns pending replacement arrangement state, loop-boundary promotion, Drum Kit pending feedback, and applied-arrangement versioning.
+
+### `JamVisualTransportState`
+
+Owns only the visible current step and active Photo UUIDs projected from the live audio transport.
+
+### Jam presentation components
+
+- `JamPhotoSection`: role tiles, drag/drop, selection, and Photo presentation;
+- `JamSequencerSection`: sequencer and transport/status presentation;
+- `JamDockBar`: compact panel launch controls;
+- `JamControlPanels`: Kits, Vibe, Arrange, and Effects panel UI;
+- `JamPanelBackdrop`: rasterizable frozen session backdrop used behind expanded panels;
+- `JamPhotoSelectorSheet`: bounded Photo membership selection.
 
 ### `JamArrangementBuilder`
 
-Owns role assignment, global harmony, Vibe interpolation, Bass and Harmony transformation, Melody Motif Engine, and active-step attribution.
+Owns initial role assignment, global harmony, Vibe interpolation, Bass/Harmony transformation, contextual role variations, Melody Motif Engine, and active-step attribution.
 
 ### `JamGrooveLibrary`
 
 Owns groove-region classification, stable set hashing, and the twelve hard-coded percussion variants.
+
+### `JamCoverRenderer`
+
+Owns deterministic abstract Jam artwork, recipe versioning, detached rendering, in-memory cache, and in-flight request deduplication.
 
 ## Domain invariants
 
 1. Every successfully persisted Musical Photo has one stable UUID.
 2. The essential Musical Photo and Cover persist before shared memory publishes the item.
 3. Metadata is optional and never changes the Cover or Musical Sequence.
-4. The original Source Image is not part of the persisted Musical Photo today.
-5. Gallery reads Covers from the shared in-memory cache, not from disk during view rendering.
-6. The persisted library is newest-first.
-7. One shared `MusicPlayer` arbitrates all playback.
-8. Starting a non-looping playback path stops the previous path.
-9. A running Jam loop receives replacement arrangements through latest-wins next-loop scheduling rather than a second engine.
-10. Capture acquires Source Images but does not own persisted library state.
-11. Inspector presents an existing Musical Photo and does not duplicate it.
-12. The root pitch class is the canonical source for pitch-color identity.
-13. Photo creation and Jam generation are deterministic for stable inputs and current algorithms.
-14. Jam references Musical Photos by stable UUID and does not mutate persisted sequences.
-15. Jam is transient and local in the current product.
-16. Only the photo assigned `.melody` supplies the current primary Melody note pool.
-17. All selected photos contribute to global Jam harmony.
-18. Melody and Harmony samples are role-specific Jam behavior; nil-role photo playback remains procedural.
-19. Drum Kit selection changes instrumentation, not the underlying regional groove pattern.
-20. Melody has no per-note duration or effective microtiming in the current model/runtime.
+4. Generated metadata must not overwrite a manual Photo name when preservation is requested.
+5. The original Source Image is not part of the persisted Musical Photo today.
+6. Gallery reads Covers from the shared in-memory cache, not from disk during view rendering.
+7. The persisted Musical Photo library is newest-first.
+8. One shared `MusicPlayer` arbitrates all playback and global Jam DSP.
+9. Starting a non-looping playback path stops the previous path.
+10. A running Jam loop receives replacement arrangements through latest-wins next-loop scheduling rather than a second engine.
+11. Visible Jam transport is derived from the live Jam player node.
+12. Capture acquires Source Images but does not own persisted library state.
+13. Inspector presents an existing Musical Photo and does not duplicate it.
+14. The root pitch class is the canonical source for pitch-color identity.
+15. Photo creation, Jam arrangement, role variations, grooves, and Jam Covers are deterministic for stable inputs and current algorithms.
+16. A Saved Jam references Musical Photos by stable UUID and never mutates persisted Photo sequences.
+17. `JamSlotAssignments` is the sole membership and role source for an open Jam.
+18. Initial role sorting runs only to establish an assignment; later swaps preserve explicit role state.
+19. Only the Photo assigned `.melody` supplies the current primary Melody note pool.
+20. All active assigned Photos contribute to global Jam harmony.
+21. Melody and Harmony samples are role-specific Jam behavior; nil-role Photo playback remains procedural.
+22. Drum Kit selection changes instrumentation, not the underlying regional groove pattern.
+23. Global Jam effects alter playback DSP and persist as settings; they do not rewrite the arrangement.
+24. Rendered arrangements, buffers, transport projections, panel snapshots, and DSP phase are transient.
+25. Saved Jam schema version is validated before use; unsupported versions are not silently migrated.
+26. The current product limit is three Photos per Jam.
+27. Melody has no per-note duration model; timing offsets are currently used only where explicitly generated, such as Bass variation timing.
 
 ## Current intentional gaps and risks
 
 The following are not implemented and must not be assumed to exist:
 
-- audio effects;
-- persisted per-photo effects;
-- global Jam effects;
+- persisted per-Photo effects;
 - Studio mode;
-- saved Jam documents;
-- export of audio, MIDI, video, or animations;
-- Gallery selection, delete, share, grouping, and reordering;
-- direct Inspector-to-Jam insertion;
+- export of audio, MIDI, video, animations, or Instagram Stories;
+- Gallery multi-selection, grouping, and manual reordering;
+- persisted original Source Images;
 - cloud sync;
 - multiplayer or collaboration;
 - remote services;
 - analytics;
-- a test target.
+- a test target;
+- Saved Jam schema migration beyond rejecting unsupported versions.
 
 Current technical or musical risks:
 
-- the latest Melody Motif Engine requires listening validation across all twelve grooves and varied photo sets;
+- Bass, Harmony, and Melody variation generation still requires broad listening validation across intents, grooves, Vibe regions, and Photo sets;
+- Melody variation search is intentionally complex and can fall back when no candidate meets the requested difference threshold;
 - Melody A/A' identity can change at rounded register-shift thresholds because transformed MIDI values enter the seed;
-- additional selected photos alter Melody context and seed but do not currently contribute equal Melody note material;
+- additional selected Photos alter Melody context and seed but do not contribute equal Melody pitch material;
 - pumping is not circular across the loop boundary;
 - there is no per-note duration model for Melody articulation;
 - final output uses clamping rather than a dedicated limiter/master stage;
-- bundled audio contains assets not currently exercised by product behavior.
+- Saved Jams can retain UUID references to deleted Photos until loaded/reconciled and saved;
+- Jam Cover cache is in-memory only and can rerender after relaunch;
+- the panel backdrop is a rasterized UI snapshot and must remain separated from live sequencer transport to avoid stale animation;
+- the project has no automated regression coverage for persistence, audio scheduling, or complex Jam UI state.
 
 These are possible future tasks, not authorization to prebuild their architecture.
 
@@ -881,20 +1084,20 @@ Existing symbols such as `PhotoSound` and `PhotoLibraryViewModel` may remain. Do
 Do not guess:
 
 - whether Source Images should be persisted;
-- whether future algorithm versions regenerate existing Musical Photos;
-- how algorithm-version migration should work;
-- whether effects belong to a Photo, Jam, or both;
-- whether effects are persisted;
+- whether future Musical Photo algorithm versions regenerate existing content;
+- how Musical Photo or Saved Jam schema migrations should work;
+- whether effects should also belong to individual Photos;
 - whether Jam BPM becomes variable;
 - whether Vibe groove regions retain hard quadrant boundaries;
-- whether Melody should borrow note material from non-Melody photos;
-- whether Jam should support more than three photos and how extra roles behave;
-- whether the bundled Bass samples should replace or complement Future Bass;
-- whether Jam state is saved;
-- how deleted Photos affect future saved Jams;
-- how Gallery selection, grouping, and ordering should work;
-- what export formats and animation system are required;
-- what Studio means as an interaction and data model.
+- whether Melody should borrow equal note material from non-Melody Photos;
+- whether Jam should support more than three Photos and what reserve means beyond current reconciliation;
+- whether bundled Bass samples should replace or complement Future Bass;
+- how deleting a Photo should proactively affect every Saved Jam;
+- whether generated Jam Covers should ever be persisted or exported;
+- how Gallery multi-selection, grouping, and ordering should work;
+- exact export formats, Story integration, audio/video rendering, and animation system;
+- what Studio means as an interaction and data model;
+- whether App Shortcuts should gain parameters, entities, or background-capable actions.
 
 ## Documentation maintenance
 
