@@ -22,6 +22,7 @@ struct JamCard: View {
     let editingPlaceholder: String
     @Binding var editingName: String
     let showsActions: Bool
+    let showsConfirmAction: Bool
     let isOpenDisabled: Bool
     let onOpen: () -> Void
     let onRename: () -> Void
@@ -136,28 +137,41 @@ struct JamCard: View {
         }
     }
 
+    @ViewBuilder
     private var editingControls: some View {
-        HStack(spacing: 4) {
-            Button(action: onConfirmEdit) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 30, height: 30)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Save Jam name")
+        if showsConfirmAction {
+            HStack(spacing: 4) {
+                Button(action: onConfirmEdit) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Save Jam name")
 
-            Button(action: onCancelEdit) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
+                cancelEditButton
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Cancel Jam name edit")
+            .padding(4)
+            .background(.regularMaterial, in: Capsule())
+        } else {
+            cancelEditButton
+                .background(.regularMaterial, in: Circle())
         }
-        .padding(4)
-        .background(.regularMaterial, in: Capsule())
+    }
+
+    private var cancelEditButton: some View {
+        Button {
+            isNameFocused = false
+            onCancelEdit()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(showsConfirmAction ? "Cancel Jam name edit" : "Cancel Jam creation")
     }
 
     @ViewBuilder

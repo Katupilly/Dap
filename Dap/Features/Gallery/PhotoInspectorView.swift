@@ -460,6 +460,7 @@ struct AddToJamSheet: View {
                                 editingPlaceholder: PersistedJam.defaultName,
                                 editingName: $state.editingName,
                                 showsActions: false,
+                                showsConfirmAction: false,
                                 isOpenDisabled: true,
                                 onOpen: {},
                                 onRename: {},
@@ -488,6 +489,7 @@ struct AddToJamSheet: View {
                                 editingPlaceholder: "Jam name",
                                 editingName: .constant(""),
                                 showsActions: false,
+                                showsConfirmAction: true,
                                 isOpenDisabled: !availability.isSelectable,
                                 onOpen: {
                                     Task { await addPhotos(to: jam) }

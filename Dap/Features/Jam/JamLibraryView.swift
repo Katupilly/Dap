@@ -170,6 +170,7 @@ struct JamLibraryView: View {
                                 editingPlaceholder: PersistedJam.defaultName,
                                 editingName: $state.editingName,
                                 showsActions: false,
+                                showsConfirmAction: false,
                                 isOpenDisabled: true,
                                 onOpen: {},
                                 onRename: {},
@@ -197,6 +198,7 @@ struct JamLibraryView: View {
                                 editingPlaceholder: "Jam name",
                                 editingName: $state.editingName,
                                 showsActions: true,
+                                showsConfirmAction: true,
                                 isOpenDisabled: false,
                                 onOpen: {
                                     dismissSearch()
