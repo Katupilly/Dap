@@ -21,6 +21,14 @@ struct CameraView: View {
     @State private var isSwitchingCamera = false
     @State private var previewPitchClass: PitchClass = .c
     @State private var importCompletion: ImportCompletion?
+    @State private var importVisualPhase: ImportVisualPhase = .idle
+    @State private var importAnimationStartDate = Date()
+    @State private var completionStartDate = Date()
+    @State private var completionStartDashLength: CGFloat = 0.16
+    @State private var completionStartRotation = 0.0
+    @State private var visualGeneration = 0
+    @State private var completionDismissTask: Task<Void, Never>?
+    @State private var completionHaptic: UIImpactFeedbackGenerator?
 
     private var latestCoverData: Data? {
         library.items.first.flatMap { library.coverDataByID[$0.id] }
@@ -93,9 +101,15 @@ struct CameraView: View {
             guard !newValue.isEmpty, state == .ready, !library.isImporting else { return }
             Task { await importPickedPhotos(newValue) }
         }
+        .onChange(of: library.isImporting) { _, isImporting in
+            if isImporting {
+                beginImportVisuals()
+            }
+        }
         .onDisappear {
             controller?.onPitchClassSample = nil
             controller?.stop()
+            invalidateVisualCompletion()
         }
         .statusBarHidden(true)
     }
@@ -215,15 +229,22 @@ struct CameraView: View {
             Task { await takePhoto() }
         } label: {
             ZStack {
+                ImportRingView(
+                    phase: library.isImporting ? .importing : importVisualPhase,
+                    animationStartDate: importAnimationStartDate,
+                    completionStartDate: completionStartDate,
+                    completionStartDashLength: completionStartDashLength,
+                    completionStartRotation: completionStartRotation,
+                    reduceMotion: reduceMotion
+                )
                 Circle()
-                    .stroke(.white, lineWidth: 4)
-                    .frame(width: 97, height: 97)
-                Circle()
-                    .fill(.white)
+                    .fill(library.isImporting ? .white.opacity(0.42) : .white)
                     .frame(width: 82, height: 82)
             }
         }
-        .allowsHitTesting(state == .ready)
+        .disabled(state != .ready || library.isImporting || importVisualPhase == .completing)
+        .accessibilityLabel("Take Photo")
+        .accessibilityValue(library.isImporting ? "Import in progress" : "")
     }
 
     private var galleryThumbnail: some View {
@@ -252,14 +273,13 @@ struct CameraView: View {
         .accessibilityLabel("Return to Gallery")
     }
 
+    @ViewBuilder
     private var processingView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .tint(.white)
-                .scaleEffect(1.4)
-            Text(processingStatusText)
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.75))
+        if library.isImporting, library.batchTotalCount > 0 {
+            ImportShimmerText(
+                text: processingStatusText,
+                reduceMotion: reduceMotion
+            )
         }
     }
 
@@ -347,13 +367,16 @@ struct CameraView: View {
             let data = try await controller.capturePhoto(flashMode: flashMode)
             state = .processing
             if try await library.importPhotoData(data) {
+                resetImportVisuals()
                 state = .ready
             } else {
+                resetImportVisuals()
                 controller.stop()
                 errorText = "Another import is already running."
                 state = .failed
             }
         } catch {
+            resetImportVisuals()
             controller.stop()
             errorText = error.localizedDescription
             state = .failed
@@ -386,12 +409,14 @@ struct CameraView: View {
         selectedPhotos = []
 
         if result.importedCount == totalCount {
-            dismiss()
+            completeImportVisually()
         } else if result.importedCount > 0 {
+            resetImportVisuals()
             importCompletion = .partial
             errorText = "Imported \(result.importedCount) of \(totalCount) photos"
             state = .failed
         } else {
+            resetImportVisuals()
             importCompletion = .failed
             errorText = totalCount == 1
                 ? "Could not import the selected photo."
@@ -399,6 +424,63 @@ struct CameraView: View {
             state = .failed
             controller?.start()
         }
+    }
+
+    private func beginImportVisuals() {
+        invalidateVisualCompletion()
+        importVisualPhase = .importing
+        importAnimationStartDate = Date()
+    }
+
+    private func completeImportVisually() {
+        completionDismissTask?.cancel()
+        completionDismissTask = nil
+        completionHaptic = UIImpactFeedbackGenerator(style: .rigid)
+        completionHaptic?.prepare()
+
+        let now = Date()
+        let elapsed = max(0, now.timeIntervalSince(importAnimationStartDate))
+        completionStartDashLength = ImportRingView.activeDashLength(at: elapsed)
+        completionStartRotation = ImportRingView.activeRotation(at: elapsed)
+        completionStartDate = now
+        importVisualPhase = .completing
+        visualGeneration += 1
+
+        let generation = visualGeneration
+        let visualDuration = reduceMotion ? 0.18 : ImportRingView.completionDuration
+        completionDismissTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .seconds(visualDuration))
+            } catch {
+                return
+            }
+
+            guard
+                !Task.isCancelled,
+                generation == visualGeneration,
+                importVisualPhase == .completing
+            else {
+                return
+            }
+
+            completionHaptic?.impactOccurred(intensity: 0.65)
+            completionHaptic = nil
+            completionDismissTask = nil
+            importVisualPhase = .idle
+            dismiss()
+        }
+    }
+
+    private func resetImportVisuals() {
+        invalidateVisualCompletion()
+    }
+
+    private func invalidateVisualCompletion() {
+        completionDismissTask?.cancel()
+        completionDismissTask = nil
+        completionHaptic = nil
+        visualGeneration += 1
+        importVisualPhase = .idle
     }
 
     private func switchCamera() async {
@@ -443,6 +525,148 @@ struct CameraView: View {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(.white.opacity(0.84))
         }
+    }
+}
+
+private enum ImportVisualPhase: Equatable {
+    case idle
+    case importing
+    case completing
+}
+
+private struct ImportRingView: View {
+    static let completionDuration: TimeInterval = 0.42
+
+    let phase: ImportVisualPhase
+    let animationStartDate: Date
+    let completionStartDate: Date
+    let completionStartDashLength: CGFloat
+    let completionStartRotation: Double
+    let reduceMotion: Bool
+
+    var body: some View {
+        Group {
+            switch phase {
+            case .idle:
+                ring(trim: 1, rotation: 0)
+            case .importing:
+                importingRing
+            case .completing:
+                completionRing
+            }
+        }
+        .frame(width: 97, height: 97)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var importingRing: some View {
+        if reduceMotion {
+            ring(trim: Self.activeDashLength(at: 0), rotation: 0)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                let elapsed = max(0, context.date.timeIntervalSince(animationStartDate))
+                ring(
+                    trim: Self.activeDashLength(at: elapsed),
+                    rotation: Self.activeRotation(at: elapsed)
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var completionRing: some View {
+        if reduceMotion {
+            ring(trim: 1, rotation: completionStartRotation)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                let elapsed = max(0, context.date.timeIntervalSince(completionStartDate))
+                let progress = min(elapsed / Self.completionDuration, 1)
+                let easedProgress = progress * progress * (3 - 2 * progress)
+                let trim = completionStartDashLength
+                    + (1 - completionStartDashLength) * CGFloat(easedProgress)
+
+                ring(trim: trim, rotation: completionStartRotation)
+            }
+        }
+    }
+
+    private func ring(trim: CGFloat, rotation: Double) -> some View {
+        Circle()
+            .trim(from: 0, to: min(max(trim, 0.01), 1))
+            .stroke(
+                .white,
+                style: StrokeStyle(lineWidth: 4, lineCap: .round)
+            )
+            .rotationEffect(.degrees(rotation))
+    }
+
+    static func activeDashLength(at time: TimeInterval) -> CGFloat {
+        let cycleDuration = 1.1
+        let cycleProgress = time.truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
+        let easedProgress = 0.5 - 0.5 * cos(cycleProgress * .pi * 2)
+        return 0.16 + 0.27 * CGFloat(easedProgress)
+    }
+
+    static func activeRotation(at time: TimeInterval) -> Double {
+        (time / 1.25 * 360).truncatingRemainder(dividingBy: 360)
+    }
+}
+
+private struct ImportShimmerText: View {
+    let text: String
+    let reduceMotion: Bool
+
+    @State private var animationStartDate = Date()
+
+    var body: some View {
+        if reduceMotion {
+            baseText
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                let cycleDuration = 1.35
+                let phase = context.date
+                    .timeIntervalSince(animationStartDate)
+                    .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
+
+                baseText
+                    .overlay {
+                        shimmerGradient(phase: CGFloat(phase))
+                    }
+            }
+        }
+    }
+
+    private var baseText: some View {
+        Text(text)
+            .font(.subheadline)
+            .foregroundStyle(.white.opacity(0.75))
+            .accessibilityLabel(text)
+    }
+
+    private func shimmerGradient(phase: CGFloat) -> some View {
+        let center = -0.24 + phase * 1.48
+        let halfWidth = 0.16
+        let start = min(max(center - halfWidth, 0), 1)
+        let peak = min(max(center, 0), 1)
+        let end = min(max(center + halfWidth, 0), 1)
+
+        return LinearGradient(
+            gradient: Gradient(stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .clear, location: start),
+                .init(color: .white.opacity(0.72), location: peak),
+                .init(color: .clear, location: end),
+                .init(color: .clear, location: 1),
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .mask {
+            Text(text)
+                .font(.subheadline)
+        }
+        .accessibilityHidden(true)
     }
 }
 
