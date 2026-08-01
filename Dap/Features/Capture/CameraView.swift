@@ -29,6 +29,7 @@ struct CameraView: View {
     @State private var visualGeneration = 0
     @State private var completionDismissTask: Task<Void, Never>?
     @State private var completionHaptic: UIImpactFeedbackGenerator?
+    @State private var isExiting = false
 
     private var latestCoverData: Data? {
         library.items.first.flatMap { library.coverDataByID[$0.id] }
@@ -74,6 +75,7 @@ struct CameraView: View {
 
             overlayContent
         }
+        .opacity(isExiting ? 0 : 1)
         .interactiveDismissDisabled()
         .task {
             await prepareCamera()
@@ -447,7 +449,7 @@ struct CameraView: View {
         visualGeneration += 1
 
         let generation = visualGeneration
-        let visualDuration = reduceMotion ? 0.18 : ImportRingView.completionDuration
+        let visualDuration = reduceMotion ? 0 : ImportRingView.completionDuration
         completionDismissTask = Task { @MainActor in
             do {
                 try await Task.sleep(for: .seconds(visualDuration))
@@ -465,6 +467,33 @@ struct CameraView: View {
 
             completionHaptic?.impactOccurred(intensity: 0.65)
             completionHaptic = nil
+            guard !reduceMotion else {
+                completionDismissTask = nil
+                importVisualPhase = .idle
+                dismiss()
+                return
+            }
+
+            let exitDuration = 0.12
+            withAnimation(.easeOut(duration: exitDuration)) {
+                isExiting = true
+            }
+
+            do {
+                try await Task.sleep(for: .seconds(exitDuration))
+            } catch {
+                return
+            }
+
+            guard
+                !Task.isCancelled,
+                generation == visualGeneration,
+                importVisualPhase == .completing,
+                isExiting
+            else {
+                return
+            }
+
             completionDismissTask = nil
             importVisualPhase = .idle
             dismiss()
@@ -481,6 +510,7 @@ struct CameraView: View {
         completionHaptic = nil
         visualGeneration += 1
         importVisualPhase = .idle
+        isExiting = false
     }
 
     private func switchCamera() async {
