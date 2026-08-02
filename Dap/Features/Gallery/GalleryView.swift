@@ -39,28 +39,35 @@ struct GalleryView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            galleryContent
-                .overlay(alignment: .top) {
-                    if isGallerySelecting && path.isEmpty {
-                        topHeader
-                    }
+            ZStack(alignment: .top) {
+                galleryContent
+
+                edgeBlurOverlays
+
+                if isGallerySelecting && path.isEmpty {
+                    topHeader
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if isGallerySelecting && path.isEmpty {
-                        selectionBottomBar
-                    }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if isGallerySelecting && path.isEmpty {
+                    selectionBottomBar
                 }
-                .background(Color.galleryBackground)
-                .navigationDestination(for: UUID.self) { id in
-                    if let sound = library.items.first(where: { $0.id == id }) {
-                        PhotoInspectorView(
-                            sound: sound,
-                            coverData: library.coverDataByID[id],
-                            library: library
-                        )
-                    }
+            }
+            .background(Color.galleryBackground)
+            .navigationDestination(for: UUID.self) { id in
+                if let sound = library.items.first(where: { $0.id == id }) {
+                    PhotoInspectorView(
+                        sound: sound,
+                        coverData: library.coverDataByID[id],
+                        library: library
+                    )
                 }
+            }
         }
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.18),
+            value: isGallerySelecting
+        )
         .background(Color.galleryBackground)
         .onChange(of: library.items.map(\.id)) { _, newIDs in
             selectedPhotoIDs.formIntersection(Set(newIDs))
@@ -128,6 +135,28 @@ struct GalleryView: View {
         }
     }
 
+    private var edgeBlurOverlays: some View {
+        Group {
+            if isActive && path.isEmpty {
+                DapEdgeBlur(edge: .top)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 200)
+                    .offset(y: -20)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .ignoresSafeArea(edges: .top)
+                    .allowsHitTesting(false)
+
+                DapEdgeBlur(edge: .bottom)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 200)
+                    .offset(y: 20)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .ignoresSafeArea(edges: .bottom)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
     @ViewBuilder
     private var galleryContent: some View {
         if library.items.isEmpty {
@@ -172,34 +201,7 @@ struct GalleryView: View {
                 .padding(.top, 84)
                 .padding(.bottom, 120)
             }
-            .overlay(alignment: .top) {
-                topFade
-            }
         }
-    }
-
-    private var topFade: some View {
-        ZStack {
-            Rectangle()
-                .fill(.regularMaterial)
-
-            Color.black.opacity(0.16)
-        }
-        .mask {
-            LinearGradient(
-                stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black.opacity(0.82), location: 0.38),
-                    .init(color: .black.opacity(0.28), location: 0.76),
-                    .init(color: .clear, location: 1)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
-        .frame(height: 120)
-        .ignoresSafeArea(edges: .top)
-        .allowsHitTesting(false)
     }
 
     private var topHeader: some View {

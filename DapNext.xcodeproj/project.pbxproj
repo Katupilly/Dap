@@ -63,6 +63,7 @@
 		AA0000010000000000000245 /* StoryShareComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000246 /* StoryShareComponents.swift */; };
 		AA0000010000000000000247 /* PhotoStoryExportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000248 /* PhotoStoryExportSheet.swift */; };
 		AA0000010000000000000249 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000024A /* OnboardingView.swift */; };
+		AA0000010000000000000250 /* DapEdgeBlur.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000251 /* DapEdgeBlur.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -124,6 +125,7 @@
 		AA0000010000000000000246 /* StoryShareComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryShareComponents.swift; sourceTree = "<group>"; };
 		AA0000010000000000000248 /* PhotoStoryExportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoStoryExportSheet.swift; sourceTree = "<group>"; };
 		AA000001000000000000024A /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		AA0000010000000000000251 /* DapEdgeBlur.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DapEdgeBlur.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -162,6 +164,7 @@
 			children = (
 				AA0000010000000000000092 /* App */,
 				AA000001000000000000021E /* AppIntents */,
+				AA0000010000000000000252 /* DesignSystem */,
 				AA0000010000000000000093 /* Features */,
 				AA000001000000000000097 /* Models */,
 				AA000001000000000000098 /* Services */,
@@ -179,6 +182,14 @@
 				AA000001000000000000002B /* AppRootView.swift */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		AA0000010000000000000252 /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000010000000000000251 /* DapEdgeBlur.swift */,
+			);
+			path = DesignSystem;
 			sourceTree = "<group>";
 		};
 		AA0000010000000000000093 /* Features */ = {
@@ -394,6 +405,7 @@
 			files = (
 				AA000001000000000000001A /* DapApp.swift in Sources */,
 				AA000001000000000000002A /* AppRootView.swift in Sources */,
+				AA0000010000000000000250 /* DapEdgeBlur.swift in Sources */,
 				AA0000010000000000000216 /* DapPendingAction.swift in Sources */,
 				AA0000010000000000000218 /* TakePhotoIntent.swift in Sources */,
 				AA000001000000000000021A /* CreateJamIntent.swift in Sources */,

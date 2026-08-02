@@ -135,35 +135,6 @@ struct AppRootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if section == .gallery && !isGalleryInspectorPresented && !isGallerySelecting {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-
-                    ZStack {
-                        Rectangle()
-                            .fill(.regularMaterial)
-
-                        Color.black.opacity(0.18)
-                    }
-                    .mask {
-                        LinearGradient(
-                            stops: [
-                                .init(color: .clear, location: 0),
-                                .init(color: .clear, location: 0.30),
-                                .init(color: .black.opacity(0.40), location: 0.60),
-                                .init(color: .black.opacity(0.88), location: 0.86),
-                                .init(color: .black, location: 1)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    }
-                    .frame(height: 80)
-                }
-                .ignoresSafeArea(edges: .bottom)
-                .allowsHitTesting(false)
-            }
-
-            if section == .gallery && !isGalleryInspectorPresented && !isGallerySelecting {
                 Button {
                     isCapturePresented = true
                 } label: {
