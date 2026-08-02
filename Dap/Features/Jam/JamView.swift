@@ -197,10 +197,8 @@ struct JamView: View {
             JamArrangementInputChangesModifier(
                 slotAssignments: session.slotAssignments,
                 drumKitSelection: session.drumKitSelection,
-                vibePosition: session.vibePosition,
                 onSlotAssignmentsChanged: handleSlotAssignmentsChanged,
-                onDrumKitSelectionChanged: handleDrumKitSelectionChanged,
-                onVibePositionChanged: handleVibePositionChanged
+                onDrumKitSelectionChanged: handleDrumKitSelectionChanged
             )
         )
         .modifier(
@@ -827,7 +825,8 @@ struct JamView: View {
             ),
             expandedPanelFill: expandedPanelFill,
             expandedPanelStroke: expandedPanelStroke,
-            onPositionChanged: handleVibeControlPositionChanged
+            onPositionChanged: handleVibeControlPositionChanged,
+            onPositionEnded: handleVibePositionCommitted
         )
     }
 
@@ -1487,9 +1486,9 @@ struct JamView: View {
     /// debounce, render, and prepare the next loop buffer. The arrangement
     /// stays pending inside `JamPlaybackController` until the real audio
     /// boundary promotes it.
-    private func sendPendingArrangementToPlayer() {
+    private func sendPendingArrangementToPlayer(vibePosition: CGPoint? = nil) {
         guard session.isPlaying else { return }
-        guard let arrangement = buildArrangement() else {
+        guard let arrangement = buildArrangement(vibePosition: vibePosition) else {
             // Nothing playable: drop the pending state instead of hanging on it.
             playbackController.clearPendingState()
             return
@@ -1595,13 +1594,14 @@ struct JamView: View {
         visualTransport.update(step: step, activeSoundIDs: activeIDs)
     }
 
-    private func buildArrangement() -> JamArrangement? {
+    private func buildArrangement(vibePosition: CGPoint? = nil) -> JamArrangement? {
         buildArrangement(
             for: session.slotAssignments,
             bassVariation: session.bassVariation,
             harmonyVariation: session.harmonyVariation,
             melodyVariation: session.melodyVariation,
-            buildMode: .standard
+            buildMode: .standard,
+            vibePosition: vibePosition
         )
     }
 
@@ -1610,7 +1610,8 @@ struct JamView: View {
         bassVariation: JamBassVariation,
         harmonyVariation: JamHarmonyVariation,
         melodyVariation: JamMelodyVariation,
-        buildMode: MelodyVariationBuildMode
+        buildMode: MelodyVariationBuildMode,
+        vibePosition: CGPoint? = nil
     ) -> JamArrangement? {
         let roleByID = assignments.assignedRolesByID
         let playableAssignedSounds = library.items.compactMap { sound -> AssignedSound? in
@@ -1624,12 +1625,13 @@ struct JamView: View {
         let orderedAssignedSounds = orderedRoles.compactMap { role in
             playableAssignedSounds.first { $0.role == role }
         }
-        let region = JamGrooveLibrary.region(for: session.vibePosition)
+        let effectiveVibePosition = vibePosition ?? session.vibePosition
+        let region = JamGrooveLibrary.region(for: effectiveVibePosition)
         let drumKit = resolvedDrumKit(selection: session.drumKitSelection, region: region)
 
         return arrangementBuilder.build(
             assignedSounds: orderedAssignedSounds,
-            vibePosition: session.vibePosition,
+            vibePosition: effectiveVibePosition,
             drumKit: drumKit,
             bassVariation: bassVariation,
             harmonyVariation: harmonyVariation,
@@ -1917,10 +1919,21 @@ private extension JamView {
         }
     }
 
-    func handleVibeControlPositionChanged() {
+    func handleVibeControlPositionChanged(_ position: CGPoint) {
+        guard session.isPlaying else { return }
+        sendPendingArrangementToPlayer(vibePosition: position)
+    }
+
+    func handleVibePositionCommitted(_ position: CGPoint) {
+        session.vibePosition = position
+
         if session.isPlaying {
-            sendPendingArrangementToPlayer()
+            sendPendingArrangementToPlayer(vibePosition: position)
+        } else {
+            session.activeArrangement = buildArrangement(vibePosition: position)
         }
+
+        scheduleAutosave()
     }
 }
 
@@ -1952,13 +1965,6 @@ private extension JamView {
     }
 
     func handleDrumKitSelectionChanged() {
-        if !session.isPlaying {
-            session.activeArrangement = buildArrangement()
-        }
-        scheduleAutosave()
-    }
-
-    func handleVibePositionChanged() {
         if !session.isPlaying {
             session.activeArrangement = buildArrangement()
         }
@@ -2071,10 +2077,8 @@ private struct JamEffectsChangeModifier: ViewModifier {
 private struct JamArrangementInputChangesModifier: ViewModifier {
     let slotAssignments: JamSlotAssignments
     let drumKitSelection: MusicDrumKitSelection
-    let vibePosition: CGPoint
     let onSlotAssignmentsChanged: (JamSlotAssignments, JamSlotAssignments) -> Void
     let onDrumKitSelectionChanged: () -> Void
-    let onVibePositionChanged: () -> Void
 
     func body(content: Content) -> some View {
         content
@@ -2083,9 +2087,6 @@ private struct JamArrangementInputChangesModifier: ViewModifier {
             }
             .onChange(of: drumKitSelection) { _, _ in
                 onDrumKitSelectionChanged()
-            }
-            .onChange(of: vibePosition) { _, _ in
-                onVibePositionChanged()
             }
     }
 }

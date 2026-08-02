@@ -433,7 +433,8 @@ struct JamVibePanel: View {
     @Binding var vibePosition: CGPoint
     let expandedPanelFill: Color
     let expandedPanelStroke: Color
-    let onPositionChanged: () -> Void
+    let onPositionChanged: (CGPoint) -> Void
+    let onPositionEnded: (CGPoint) -> Void
 
     var body: some View {
         ZStack {
@@ -443,7 +444,8 @@ struct JamVibePanel: View {
                 .stroke(expandedPanelStroke, lineWidth: 1)
             VibeControl(
                 position: $vibePosition,
-                onPositionChanged: onPositionChanged
+                onPositionChanged: onPositionChanged,
+                onPositionEnded: onPositionEnded
             )
         }
         .frame(width: 254, height: 254)
@@ -683,10 +685,13 @@ private struct VibeControl: View {
     @Environment(\.colorScheme) private var colorScheme
 
     @Binding var position: CGPoint
-    let onPositionChanged: () -> Void
+    let onPositionChanged: (CGPoint) -> Void
+    let onPositionEnded: (CGPoint) -> Void
 
     @State private var feedbackGenerator = UIImpactFeedbackGenerator(style: .light)
     @GestureState private var isDragging = false
+    @GestureState private var dragPosition: CGPoint? = nil
+    @State private var lastMusicalQuadrant: Quadrant?
 
     private var currentQuadrant: Quadrant {
         Quadrant(position: clampedPosition)
@@ -766,13 +771,20 @@ private struct VibeControl: View {
                     .updating($isDragging) { _, state, _ in
                         state = true
                     }
+                    .updating($dragPosition) { value, state, _ in
+                        state = normalizedPosition(for: value.location, in: size)
+                    }
                     .onChanged { value in
                         let newPosition = normalizedPosition(for: value.location, in: size)
-                        position = newPosition
-                        onPositionChanged()
+                        let newQuadrant = Quadrant(position: newPosition)
+                        guard newQuadrant != lastMusicalQuadrant else { return }
+                        lastMusicalQuadrant = newQuadrant
+                        onPositionChanged(newPosition)
                     }
                     .onEnded { value in
-                        position = normalizedPosition(for: value.location, in: size)
+                        let finalPosition = normalizedPosition(for: value.location, in: size)
+                        lastMusicalQuadrant = nil
+                        onPositionEnded(finalPosition)
                     }
             )
             .onAppear {
@@ -804,14 +816,15 @@ private struct VibeControl: View {
     }
 
     private func move(to quadrant: Quadrant) {
-        position = quadrant.canonicalPosition
-        onPositionChanged()
+        let finalPosition = quadrant.canonicalPosition
+        onPositionEnded(finalPosition)
     }
 
     private var clampedPosition: CGPoint {
-        CGPoint(
-            x: min(max(position.x, 0), 1),
-            y: min(max(position.y, 0), 1)
+        let displayedPosition = dragPosition ?? position
+        return CGPoint(
+            x: min(max(displayedPosition.x, 0), 1),
+            y: min(max(displayedPosition.y, 0), 1)
         )
     }
 
