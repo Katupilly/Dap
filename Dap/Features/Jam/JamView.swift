@@ -57,6 +57,7 @@ struct JamView: View {
     private let headerThumbnailSize: CGFloat = 24
     private let headerThumbnailCornerRadius: CGFloat = 5
     private let effectsPanelWidth: CGFloat = 352
+    private let kitsPanelHeight: CGFloat = 320
     private let effectsPanelHeight: CGFloat = 392
     private let effectsPanelCornerRadius: CGFloat = 22
 
@@ -768,7 +769,7 @@ struct JamView: View {
     private func panelSize(for panel: JamControlPanel) -> CGSize {
         switch panel {
         case .kits:
-            return CGSize(width: effectsPanelWidth, height: effectsPanelHeight)
+            return CGSize(width: effectsPanelWidth, height: kitsPanelHeight)
         case .arrange:
             return arrangePanelSize
         case .vibe:

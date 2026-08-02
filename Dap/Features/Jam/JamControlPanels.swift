@@ -30,6 +30,7 @@ struct JamControlPanelHost<Content: View>: View {
             .frame(maxWidth: .infinity)
             .padding(.bottom, bottomPadding)
             .animation(sizeAnimation, value: selectedPanel)
+            .allowsHitTesting(isPanelPresented)
         }
     }
 }
@@ -786,7 +787,25 @@ private struct VibeControl: View {
         .aspectRatio(1, contentMode: .fit)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Vibe control")
+        .accessibilityValue(currentQuadrant.displayName)
         .accessibilityHint("Drag to move between Airy, Bright, Deep, and Intense.")
+        .accessibilityAction(named: "Move to Airy") {
+            move(to: .topLeft)
+        }
+        .accessibilityAction(named: "Move to Bright") {
+            move(to: .topRight)
+        }
+        .accessibilityAction(named: "Move to Deep") {
+            move(to: .bottomLeft)
+        }
+        .accessibilityAction(named: "Move to Intense") {
+            move(to: .bottomRight)
+        }
+    }
+
+    private func move(to quadrant: Quadrant) {
+        position = quadrant.canonicalPosition
+        onPositionChanged()
     }
 
     private var clampedPosition: CGPoint {
@@ -888,6 +907,24 @@ private enum Quadrant: Equatable {
             self = .bottomLeft
         case (true, true):
             self = .bottomRight
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .topLeft: "Airy"
+        case .topRight: "Bright"
+        case .bottomLeft: "Deep"
+        case .bottomRight: "Intense"
+        }
+    }
+
+    var canonicalPosition: CGPoint {
+        switch self {
+        case .topLeft: CGPoint(x: 0, y: 0)
+        case .topRight: CGPoint(x: 1, y: 0)
+        case .bottomLeft: CGPoint(x: 0, y: 1)
+        case .bottomRight: CGPoint(x: 1, y: 1)
         }
     }
 }

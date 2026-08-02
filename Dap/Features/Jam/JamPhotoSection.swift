@@ -73,6 +73,10 @@ private struct JamSelectedPhotoTile: View {
             .accessibilityLabel(accessibilityName)
             .accessibilityValue(accessibilityValue)
             .accessibilityHint(accessibilityHint)
+            .accessibilityAction(.default) {
+                onTap()
+            }
+            .accessibilityAddTraits(.isButton)
             .modifier(JamTileAccessibilityActions(
                 role: role,
                 performSwap: { target in performSwapForAccessibility(target: target) }
