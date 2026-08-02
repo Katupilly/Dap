@@ -28,7 +28,6 @@ struct GalleryView: View {
         GridItem(.flexible(), spacing: 8),
         GridItem(.flexible(), spacing: 8),
     ]
-
     private var orderedSelectedSounds: [PhotoSound] {
         library.items.filter { selectedPhotoIDs.contains($0.id) }
     }
@@ -140,16 +139,16 @@ struct GalleryView: View {
             if isActive && path.isEmpty {
                 DapEdgeBlur(edge: .top)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 200)
-                    .offset(y: -20)
+                    .frame(height: DapEdgeBlur.topHeight)
+                    .offset(y: -DapEdgeBlur.edgeExtension)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .ignoresSafeArea(edges: .top)
                     .allowsHitTesting(false)
 
                 DapEdgeBlur(edge: .bottom)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 200)
-                    .offset(y: 20)
+                    .frame(height: DapEdgeBlur.bottomHeight)
+                    .offset(y: DapEdgeBlur.edgeExtension)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                     .ignoresSafeArea(edges: .bottom)
                     .allowsHitTesting(false)

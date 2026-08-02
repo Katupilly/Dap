@@ -17,9 +17,6 @@ struct JamLibraryView: View {
     private let segmentToSearchSpacing: CGFloat = 22
     private let searchHeight: CGFloat = 46
     private let gridTopSpacing: CGFloat = 20
-    private let topBlurFadeTail: CGFloat = 24
-    private let topBlurHeight: CGFloat = 160
-    private let bottomBlurHeight: CGFloat = 88
     private let gridSpacing: CGFloat = 18
 
     private let columns = [
@@ -110,8 +107,7 @@ struct JamLibraryView: View {
 
             contentBody
 
-            topBlurLayer
-                .frame(maxHeight: .infinity, alignment: .top)
+            edgeBlurOverlays
 
             searchField
                 .padding(.horizontal, horizontalPadding)
@@ -119,9 +115,6 @@ struct JamLibraryView: View {
                 .frame(maxHeight: .infinity, alignment: .top)
 
             if shouldShowCreateChrome {
-                bottomBlurLayer
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-
                 createButton
                     .padding(.horizontal, horizontalPadding)
                     .padding(.bottom, 16)
@@ -130,6 +123,28 @@ struct JamLibraryView: View {
             }
         }
         .animation(.easeInOut(duration: 0.14), value: shouldShowCreateChrome)
+    }
+
+    private var edgeBlurOverlays: some View {
+        Group {
+            if isActive && state.selectedJam == nil {
+                DapEdgeBlur(edge: .top)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: DapEdgeBlur.topHeight)
+                    .offset(y: -DapEdgeBlur.edgeExtension)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .ignoresSafeArea(edges: .top)
+                    .allowsHitTesting(false)
+
+                DapEdgeBlur(edge: .bottom)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: DapEdgeBlur.bottomHeight)
+                    .offset(y: DapEdgeBlur.edgeExtension)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .ignoresSafeArea(edges: .bottom)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     @ViewBuilder
@@ -229,59 +244,6 @@ struct JamLibraryView: View {
                 .scrollIndicators(.hidden)
             }
         }
-    }
-
-    private var topBlurLayer: some View {
-        ZStack {
-            Rectangle()
-                .fill(.regularMaterial)
-
-            Color.black.opacity(0.16)
-        }
-        .mask {
-            LinearGradient(
-                stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black.opacity(0.82), location: 0.38),
-                    .init(color: .black.opacity(0.28), location: 0.76),
-                    .init(color: .clear, location: 1)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
-        .frame(height: max(topBlurHeight, searchTopInset + searchHeight + topBlurFadeTail))
-        .ignoresSafeArea(edges: .top)
-        .allowsHitTesting(false)
-    }
-
-    private var bottomBlurLayer: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-
-            ZStack {
-                Rectangle()
-                    .fill(.regularMaterial)
-
-                Color.black.opacity(0.18)
-            }
-            .mask {
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .clear, location: 0.30),
-                        .init(color: .black.opacity(0.40), location: 0.60),
-                        .init(color: .black.opacity(0.88), location: 0.86),
-                        .init(color: .black, location: 1)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-            .frame(height: bottomBlurHeight)
-        }
-        .ignoresSafeArea(edges: .bottom)
-        .allowsHitTesting(false)
     }
 
     private var searchField: some View {

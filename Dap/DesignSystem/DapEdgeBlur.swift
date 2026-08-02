@@ -9,6 +9,10 @@ public struct DapEdgeBlur: UIViewRepresentable {
 
     public let edge: Edge
 
+    public static let topHeight: CGFloat = 110
+    public static let bottomHeight: CGFloat = 120
+    public static let edgeExtension: CGFloat = 8
+
     public init(edge: Edge) {
         self.edge = edge
     }
@@ -27,7 +31,7 @@ private final class DapEdgeBlurView: UIView {
     private var edge: DapEdgeBlur.Edge
     private let maskLayer = CAGradientLayer()
     private let blurView = UIVisualEffectView(
-        effect: UIBlurEffect(style: .systemMaterial)
+        effect: UIBlurEffect(style: .systemUltraThinMaterial)
     )
 
     init(edge: DapEdgeBlur.Edge) {
@@ -43,6 +47,7 @@ private final class DapEdgeBlurView: UIView {
         blurView.isOpaque = false
         blurView.isUserInteractionEnabled = false
         blurView.clipsToBounds = true
+        blurView.alpha = 1
         blurView.backgroundColor = .clear
         blurView.contentView.isOpaque = false
         blurView.contentView.isUserInteractionEnabled = false
