@@ -1,169 +1,123 @@
-<p align="center">
-  <img src="docs/readme/app-icon.png" width="112" alt="Dap app icon">
-</p>
+# Dap
 
-<h1 align="center">Dap</h1>
+**Turn photos into playable music.**
 
-<p align="center">
-  Turn photos into playable music.
-</p>
+Dap is an iPhone musical toy that transforms photos into notes, rhythms, and playable sequences. It is designed for people who want to create music without needing to understand music theory first.
 
-<p align="center">
-  <em>A musical toy for people who do not need to know music theory to start creating.</em>
-</p>
+A photo is not treated only as something to look at. In Dap, it becomes an instrument connected to a memory.
 
-About
+## The idea
 
-Dap is an iPhone app that transforms photos into musical material.
+Music creation often begins with technical concepts: scales, harmony, rhythm, sequencing, and sound design. For someone who is not a musician, that can become the first barrier.
 
-Capture or import an image and Dap analyzes its colors, contrast, and visual relationships to generate notes, rhythm, and a playable sequence. Each photo becomes more than something to look at: it becomes an instrument connected to a memory.
+Dap starts from a gesture almost everyone already understands: taking a photo.
 
-The project started from a simple question:
+The app analyzes visual information such as color, contrast, and tonal relationships, then translates it into musical material. The system is inspired by relationships between the chromatic circle, the circle of fifths, and color theory.
 
-What if creating music could begin with something everyone already knows how to do — taking a photo?
+## How it works
 
-Dap uses photography as a universal gesture to reduce the cognitive barrier of music theory. Instead of asking people to understand scales, harmony, or sequencing before they can create, the app translates visual information into a musical system and gives immediate feedback through sound, motion, and haptics.
+1. **Capture or import a photo**  
+   Begin with an image from a moment, place, person, object, or texture.
 
-How it works
+2. **Translate color into music**  
+   Dap maps visual relationships into notes and tonal material.
 
-Capture or import a photoStart with an image from a moment, place, person, or texture.
+3. **Generate a sequence**  
+   Each photo creates a repeatable 16-step musical pattern.
 
-Translate color into musicDap maps visual relationships to notes using a system inspired by the chromatic circle and the circle of fifths.
+4. **Play and remix**  
+   Listen to a photo individually or combine multiple photos inside a Jam.
 
-Generate a sequenceThe app creates a deterministic 16-step musical pattern based on the photo.
+## Core features
 
-Play and remixListen to the photo individually or combine multiple images inside a Jam.
+- Capture photos directly in the app
+- Import images from the photo library
+- Generate notes and rhythms from image color and tone
+- Play each photo as an individual instrument
+- Combine multiple photos inside a **Jam**
+- Automatically assign bass, harmony, and melody roles
+- Explore musical moods through the **Vibe** control
+- Add drum kits, reverb, delay, and rhythmic modulation
+- Export and share generated photo covers
+- Use Siri and Shortcuts through App Intents
+- Generate photo names and descriptions with Apple Foundation Models on supported Apple Intelligence devices
 
-Core features
+## Design principles
 
-Capture photos directly from the app
+### Photos before theory
 
-Import images from the photo library
+The experience begins with a familiar visual action instead of a musical abstraction. Users create through images first and discover the musical system through play.
 
-Generate musical sequences from image color and tone
+### Play before configuration
 
-Play each photo as an individual instrument
+Dap is a musical toy rather than a traditional production tool. The first interaction should produce a meaningful result without requiring setup.
 
-Combine multiple photos in a Jam
+### Immediate feedback
 
-Automatically assign musical roles such as bass, harmony, and melody
+Sound, motion, and haptics work together so that every action feels responsive and intentional.
 
-Explore different moods through the Vibe control
+### Memories as instruments
 
-Add drum kits, reverb, delay, and rhythmic modulation
+Photos become active material that can be replayed, combined, and transformed instead of remaining static records.
 
-Export and share generated photo covers
+## Technology
 
-Use Siri and Shortcuts through App Intents
+Dap is built natively for iPhone with:
 
-Generate photo names and descriptions with Apple Foundation Models on compatible Apple Intelligence devices
+- **SwiftUI** for interface and interaction design
+- **AVAudioEngine** for synthesis, sequencing, looping, and real-time effects
+- **Core Image** and custom image analysis for visual processing
+- **Core Haptics** for synchronized tactile feedback
+- **App Intents** and **Shortcuts** for system integrations
+- **Apple Foundation Models** for on-device text generation on supported devices
+- A deterministic procedural composition system that maps photos to repeatable musical results
 
-Design principles
+The audio engine combines image-derived tonal material with procedural grooves, drum kits, musical roles, and live effect controls.
 
-Photos before theory
+## Running the project
 
-The interface begins with a familiar action instead of a musical abstraction. Users create through images first and learn the musical behavior through play.
+### Requirements
 
-Play before configuration
+- Xcode 26 or later
+- An iPhone simulator or physical device
+- An Apple Developer signing team for device builds
 
-Dap is designed as a musical toy, not a traditional production tool. The first interaction should produce a meaningful result without requiring setup.
+Apple Intelligence support is optional and is only required for features powered by Foundation Models. Camera, haptic, audio, and Apple Intelligence behavior should be validated on a physical device.
 
-Immediate positive feedback
+### Setup
 
-Sound, animation, and haptics work together to make each action feel responsive and intentional.
-
-Memories as instruments
-
-A photo is not treated only as media or documentation. Inside Dap, it becomes something active: a sound that can be replayed, combined, and transformed.
-
-Technical highlights
-
-Dap is built natively for iPhone using:
-
-SwiftUI for the interface and interaction system
-
-AVAudioEngine for synthesis, sequencing, looping, and real-time audio effects
-
-Core Image and custom image analysis for visual processing
-
-Core Haptics for synchronized tactile feedback
-
-App Intents and Shortcuts for system integrations
-
-Apple Foundation Models for on-device text generation on supported devices
-
-A deterministic procedural composition system for mapping photos to repeatable musical results
-
-The audio engine renders tonal material from image-derived sequences and combines it with procedural grooves, drum kits, musical roles, and live effect controls.
-
-Screenshots
-
-<p align="center">
-  <img src="docs/readme/gallery.png" width="240" alt="Dap gallery">
-  <img src="docs/readme/photo.png" width="240" alt="Generated photo instrument">
-  <img src="docs/readme/jam.png" width="240" alt="Dap Jam">
-</p>
-
-Add the final App Store screenshots to docs/readme/ using the filenames above.
-
-Requirements
-
-iPhone running iOS 17 or later
-
-Xcode 26 or later
-
-An Apple Developer signing team for device builds
-
-Apple Intelligence support is optional and only required for Foundation Models features
-
-Running locally
-
+```bash
 git clone https://github.com/Katupilly/Dap.git
 cd Dap
 open DapNext.xcodeproj
+```
 
-Then:
+In Xcode:
 
-Select the Dap target.
+1. Select the `Dap` target.
+2. Choose your development team under **Signing & Capabilities**.
+3. Select an iPhone simulator or physical device.
+4. Build and run the project.
 
-Choose your development team under Signing & Capabilities.
-
-Select an iPhone simulator or physical device.
-
-Build and run the project.
-
-Some camera, haptic, audio, and Apple Intelligence behaviors are best tested on a physical device.
-
-Project status
+## Project status
 
 Dap is in active development and is being prepared for its App Store release.
 
-The current work focuses on refining the core photo-to-music experience, audio behavior, accessibility, sharing, and onboarding.
+Current work focuses on refining the photo-to-music experience, audio behavior, accessibility, sharing, onboarding, and App Store presentation.
 
-About the project
+## About the project
 
-Dap is an independent project designed and developed by Pedro Kosciuk.
+Dap is an independent project designed and developed by [Pedro Kosciuk](https://pedrokosciuk.vercel.app).
 
-It explores the intersection of:
+The project explores the intersection of:
 
-Interaction and product design
+- Interaction and product design
+- Generative music systems
+- Photography and memory
+- On-device artificial intelligence
+- Specification-driven and agentic development
+- Game design principles applied to creative tools
 
-Generative music systems
+## Feedback
 
-Photography and memory
-
-On-device artificial intelligence
-
-Agentic coding and specification-driven development
-
-Game design principles applied to creative tools
-
-Portfolio · GitHub
-
-Feedback
-
-Feedback and bug reports are welcome through GitHub Issues.
-
-<p align="center">
-  Designed and built as a solo project.
-</p>
+Feedback and bug reports can be submitted through [GitHub Issues](https://github.com/Katupilly/Dap/issues).
