@@ -431,6 +431,7 @@ struct JamArrangePanel: View {
 
 struct JamVibePanel: View {
     @Binding var vibePosition: CGPoint
+    let onPositionPreviewChanged: (CGPoint?) -> Void
     let expandedPanelFill: Color
     let expandedPanelStroke: Color
     let onPositionChanged: (CGPoint) -> Void
@@ -444,6 +445,7 @@ struct JamVibePanel: View {
                 .stroke(expandedPanelStroke, lineWidth: 1)
             VibeControl(
                 position: $vibePosition,
+                onPositionPreviewChanged: onPositionPreviewChanged,
                 onPositionChanged: onPositionChanged,
                 onPositionEnded: onPositionEnded
             )
@@ -685,6 +687,7 @@ private struct VibeControl: View {
     @Environment(\.colorScheme) private var colorScheme
 
     @Binding var position: CGPoint
+    let onPositionPreviewChanged: (CGPoint?) -> Void
     let onPositionChanged: (CGPoint) -> Void
     let onPositionEnded: (CGPoint) -> Void
 
@@ -776,6 +779,7 @@ private struct VibeControl: View {
                     }
                     .onChanged { value in
                         let newPosition = normalizedPosition(for: value.location, in: size)
+                        onPositionPreviewChanged(newPosition)
                         let newQuadrant = Quadrant(position: newPosition)
                         guard newQuadrant != lastMusicalQuadrant else { return }
                         lastMusicalQuadrant = newQuadrant
@@ -794,6 +798,11 @@ private struct VibeControl: View {
                 guard oldValue != newValue else { return }
                 feedbackGenerator.impactOccurred()
                 feedbackGenerator.prepare()
+            }
+            .onChange(of: dragPosition) { _, newPosition in
+                guard newPosition == nil else { return }
+                lastMusicalQuadrant = nil
+                onPositionPreviewChanged(nil)
             }
         }
         .aspectRatio(1, contentMode: .fit)

@@ -20,6 +20,7 @@ struct JamView: View {
     private let arrangementBuilder = JamArrangementBuilder(bpm: Int(jamBPM))
 
     @State private var session = JamSessionState()
+    @State private var transientVibePosition: CGPoint?
     @State private var visualTransport = JamVisualTransportState()
     @State private var selectedPanel: JamControlPanel = .none
     @State private var isPanelPresented = false
@@ -104,6 +105,10 @@ struct JamView: View {
         session.isPlaying ? .stop : .play
     }
 
+    private var displayedVibePosition: CGPoint {
+        transientVibePosition ?? session.vibePosition
+    }
+
     private var currentDrumKitSubtitle: String {
         return session.drumKitSelection.displayName
     }
@@ -169,7 +174,7 @@ struct JamView: View {
                 JamDockBar(
                     selectedPanel: selectedPanel,
                     isPanelPresented: isPanelPresented,
-                    vibePosition: session.vibePosition,
+                    vibePosition: displayedVibePosition,
                     canOpenArrangePanel: canOpenArrangePanel,
                     arrangeAvailability: arrangeAvailability,
                     onPanelToggle: handlePanelToggle
@@ -454,6 +459,7 @@ struct JamView: View {
         session.jamName = PersistedJam.normalizedName(jam.name)
         session.jamCreatedAt = jam.createdAt
         session.vibePosition = jam.vibePosition.cgPoint
+        transientVibePosition = nil
         session.drumKitSelection = MusicDrumKitSelection(persistedValue: jam.drumKitSelection)
         session.effectSettings = jam.effectSettings.jamEffectSettings
         session.bassVariation = jam.bassVariation
@@ -503,6 +509,7 @@ struct JamView: View {
         Task {
             await flushAutosave()
             clearTransportAndPlayback()
+            transientVibePosition = nil
             selectedJamRole = nil
             selectedPanel = .none
             isPanelPresented = false
@@ -840,6 +847,7 @@ struct JamView: View {
                 get: { session.vibePosition },
                 set: { session.vibePosition = $0 }
             ),
+            onPositionPreviewChanged: handleVibeControlPositionPreviewChanged,
             expandedPanelFill: expandedPanelFill,
             expandedPanelStroke: expandedPanelStroke,
             onPositionChanged: handleVibeControlPositionChanged,
@@ -907,6 +915,7 @@ struct JamView: View {
     }
 
     private func handlePanelToggle(_ target: JamControlPanel) {
+        transientVibePosition = nil
         if target == .arrange, let selectedJamRole {
             syncArrangeDraft(for: selectedJamRole)
         }
@@ -932,6 +941,7 @@ struct JamView: View {
     }
 
     private func closePanel() {
+        transientVibePosition = nil
         cancelPanelBackdropTask()
         withAnimation(panelRevealAnimation) {
             isPanelPresented = false
@@ -1941,7 +1951,12 @@ private extension JamView {
         sendPendingArrangementToPlayer(vibePosition: position)
     }
 
+    func handleVibeControlPositionPreviewChanged(_ position: CGPoint?) {
+        transientVibePosition = position
+    }
+
     func handleVibePositionCommitted(_ position: CGPoint) {
+        transientVibePosition = nil
         session.vibePosition = position
 
         if session.isPlaying {
@@ -2025,6 +2040,7 @@ private extension JamView {
 
     func resetInactiveJamState() {
         clearTransportAndPlayback()
+        transientVibePosition = nil
         selectedJamRole = nil
         selectedPanel = .none
         isPanelPresented = false
@@ -2075,6 +2091,7 @@ private extension JamView {
 
     func handleScenePhaseChanged(_ phase: ScenePhase) {
         guard phase == .background else { return }
+        transientVibePosition = nil
         Task { await flushAutosave() }
     }
 }
