@@ -76,22 +76,6 @@ struct AppRootView: View {
                         .padding(.horizontal, 16)
                     } else {
                         SectionSwitcher(selection: $section)
-
-                        if section == .gallery, !library.items.isEmpty {
-                            HStack {
-                                Spacer()
-
-                                Button {
-                                    isGallerySelecting = true
-                                } label: {
-                                    Image(systemName: "checkmark.app")
-                                        .font(.system(size: 18, weight: .semibold))
-                                }
-                                .buttonStyle(StoryHeaderGlassButtonStyle())
-                                .accessibilityLabel("Select Photos")
-                            }
-                            .padding(.horizontal, 16)
-                        }
                     }
                 }
                 .frame(height: 38)

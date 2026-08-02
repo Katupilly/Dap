@@ -157,6 +157,9 @@ struct GalleryView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(isPreparingShare || isDeleting)
+                        .accessibilityAction(named: "Select photo") {
+                            beginSelection(with: sound.id)
+                        }
                         .highPriorityGesture(
                             LongPressGesture(minimumDuration: 0.5)
                                 .onEnded { _ in
