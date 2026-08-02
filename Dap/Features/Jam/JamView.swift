@@ -60,6 +60,11 @@ struct JamView: View {
     private let kitsPanelHeight: CGFloat = 320
     private let effectsPanelHeight: CGFloat = 392
     private let effectsPanelCornerRadius: CGFloat = 22
+    private let panelBackdropBlurRadius: CGFloat = 2.5
+
+    private var panelBackdropOverscan: CGFloat {
+        ceil(panelBackdropBlurRadius * 2)
+    }
 
     private var photoSwapAnimation: Animation {
         reduceMotion
@@ -619,6 +624,11 @@ struct JamView: View {
             return nil
         }
 
+        let backdropOverscan = panelBackdropOverscan
+        let expandedSize = CGSize(
+            width: jamViewportSize.width,
+            height: jamViewportSize.height + (backdropOverscan * 2)
+        )
         let content = JamPanelBackdropContent(
             displayName: sessionDisplayName,
             jamCoverImage: jamCoverImage,
@@ -635,13 +645,20 @@ struct JamView: View {
             height: jamViewportSize.height,
             alignment: .topLeading
         )
-        .blur(radius: 2.5)
+        .offset(y: backdropOverscan)
+
+        let expandedContent = ZStack(alignment: .topLeading) {
+            Color(uiColor: .systemBackground)
+            content
+        }
+        .frame(width: expandedSize.width, height: expandedSize.height, alignment: .topLeading)
+        .blur(radius: panelBackdropBlurRadius)
         .clipped()
         .environment(\.colorScheme, colorScheme)
         .environment(\.displayScale, displayScale)
 
-        let renderer = ImageRenderer(content: content)
-        renderer.proposedSize = ProposedViewSize(jamViewportSize)
+        let renderer = ImageRenderer(content: expandedContent)
+        renderer.proposedSize = ProposedViewSize(expandedSize)
         renderer.scale = displayScale
         renderer.isOpaque = true
         return renderer.uiImage
@@ -710,7 +727,7 @@ struct JamView: View {
         ZStack(alignment: .topLeading) {
             if let panelBackdropImage {
                 Image(uiImage: panelBackdropImage)
-                    .resizable()
+                    .offset(y: -panelBackdropOverscan)
                     .frame(
                         width: jamViewportSize.width,
                         height: jamViewportSize.height,
