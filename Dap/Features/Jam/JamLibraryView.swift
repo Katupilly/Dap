@@ -52,6 +52,7 @@ struct JamLibraryView: View {
                 }
         }
         .onChange(of: state.selectedJam?.id) { oldValue, newValue in
+            dismissSearch()
             onSessionPresentationChange(newValue != nil)
             // Covers the interactive swipe-back gesture, which clears
             // `selectedJam` directly through the binding without going
@@ -59,11 +60,16 @@ struct JamLibraryView: View {
             guard oldValue != nil, newValue == nil else { return }
             Task { await state.reload() }
         }
+        .onChange(of: isActive) { _, isActive in
+            guard !isActive else { return }
+            dismissSearch()
+        }
         .onAppear {
             onSessionPresentationChange(state.selectedJam != nil)
             handleCreateJamTrigger(createJamTrigger)
         }
         .onDisappear {
+            dismissSearch()
             onSessionPresentationChange(false)
         }
         .onChange(of: createJamTrigger) { _, newValue in
@@ -242,6 +248,11 @@ struct JamLibraryView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .scrollIndicators(.hidden)
+                .background {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: dismissSearch)
+                }
             }
         }
     }
@@ -255,6 +266,19 @@ struct JamLibraryView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .focused($isSearchFocused)
+
+            if !state.searchText.isEmpty {
+                Button {
+                    state.searchText = ""
+                    dismissSearch()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
         }
         .font(.subheadline)
         .padding(.horizontal, 14)
