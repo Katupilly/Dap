@@ -3,6 +3,7 @@ import UIKit
 enum InstagramStoryExportError: Error, Equatable, LocalizedError {
     case instagramNotInstalled
     case invalidURL
+    case jpegEncodingFailed
     case pngEncodingFailed
     case videoReadFailed
     case renderFailed
@@ -14,6 +15,8 @@ enum InstagramStoryExportError: Error, Equatable, LocalizedError {
             "Instagram is not installed on this device."
         case .invalidURL:
             "Could not create the Instagram Stories link."
+        case .jpegEncodingFailed:
+            "Could not prepare the image for Instagram Stories."
         case .pngEncodingFailed:
             "Could not prepare the Jam image for Instagram."
         case .videoReadFailed:
@@ -26,23 +29,28 @@ enum InstagramStoryExportError: Error, Equatable, LocalizedError {
     }
 }
 
-struct InstagramStoryExporter {
+struct InstagramStoryShareService {
     private let baseStoriesScheme = "instagram-stories://share"
 
     @MainActor
     var isInstagramStoriesAvailable: Bool {
-        guard let url = URL(string: baseStoriesScheme) else { return false }
-        return UIApplication.shared.canOpenURL(url)
+        guard let storiesShareURL else { return false }
+        return UIApplication.shared.canOpenURL(storiesShareURL)
+    }
+
+    @MainActor
+    func share(image: UIImage) async throws {
+        guard let jpegData = image.jpegData(compressionQuality: 1) else {
+            throw InstagramStoryExportError.jpegEncodingFailed
+        }
+        try await export(
+            pasteboardItem: ["com.instagram.sharedSticker.backgroundImage": jpegData]
+        )
     }
 
     @MainActor
     func export(backgroundImage image: UIImage) async throws {
-        guard let pngData = image.pngData() else {
-            throw InstagramStoryExportError.pngEncodingFailed
-        }
-        try await export(
-            pasteboardItem: ["com.instagram.sharedSticker.backgroundImage": pngData]
-        )
+        try await share(image: image)
     }
 
     @MainActor
@@ -81,10 +89,8 @@ struct InstagramStoryExporter {
     }
 
     private var storiesShareURL: URL? {
-        guard let appID = Bundle.main.object(forInfoDictionaryKey: "FacebookAppID") as? String,
-              !appID.isEmpty else {
-            return nil
-        }
-        return URL(string: "\(baseStoriesScheme)?source_application=\(appID)")
+        URL(string: baseStoriesScheme)
     }
 }
+
+typealias InstagramStoryExporter = InstagramStoryShareService
