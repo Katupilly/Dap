@@ -142,6 +142,8 @@ struct PhotoExportRenderer {
     }
 }
 
+private let photoStoryExportHeaderHeight: CGFloat = 72
+
 struct PhotoStoryExportSheet: View {
     let snapshot: PhotoStoryExportSnapshot
 
@@ -160,28 +162,26 @@ struct PhotoStoryExportSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                ScrollView {
-                    formatPicker
-                    content
+            ZStack(alignment: .top) {
+                StoryExportChromeBackground()
+
+                VStack(spacing: 0) {
+                    ScrollView {
+                        formatPicker
+                        content
+                    }
+                    .safeAreaInset(edge: .top, spacing: 24) {
+                        Color.clear
+                            .frame(height: photoStoryExportHeaderHeight)
+                    }
+
+                    footer
                 }
 
-                footer
-            }
-            .background(StoryExportChromeBackground())
-            .navigationTitle("Compartilhar foto")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(StoryHeaderGlassButtonStyle())
-                    .accessibilityLabel("Close")
+                StoryExportTopBlurFade(height: 112)
+
+                PhotoStoryExportHeader {
+                    dismiss()
                 }
             }
         }
@@ -201,10 +201,35 @@ struct PhotoStoryExportSheet: View {
                     payload: payload
                 )
             }
-        }
     }
+}
 
-    private var formatPicker: some View {
+private struct PhotoStoryExportHeader: View {
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Text("Compartilhar foto")
+                .font(.custom("ZTTalk-Bold", size: 18, relativeTo: .headline))
+                .lineLimit(1)
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(StoryHeaderGlassButtonStyle())
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .accessibilityLabel("Close")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 20)
+        .padding(.bottom, 8)
+        .frame(height: photoStoryExportHeaderHeight, alignment: .top)
+}
+}
+
+private var formatPicker: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Formato")
                 .font(.custom("ZTTalk-Bold", size: 14, relativeTo: .subheadline))
