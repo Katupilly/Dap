@@ -206,47 +206,47 @@ struct PhotoInspectorView: View {
     }
 
     private var bottomControls: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Button {
-                    library.toggle(sound: sound)
-                } label: {
-                    Label(
-                        isPlaying ? "Stop" : "Play",
-                        systemImage: isPlaying ? "stop.fill" : "play.fill"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(
-                    InspectorButtonStyle(
-                        background: .white.opacity(0.9),
-                        foreground: .black
-                    )
+        HStack(spacing: 8) {
+            Button {
+                library.toggle(sound: sound)
+            } label: {
+                Label(
+                    isPlaying ? "Stop" : "Play",
+                    systemImage: isPlaying ? "stop.fill" : "play.fill"
                 )
-                .accessibilityLabel(isPlaying ? "Stop" : "Play")
-
-                Button {
-                    isShowingJamPicker = true
-                } label: {
-                    Label(
-                        didAddToJam ? "Added to Jam" : "Add to Jam",
-                        systemImage: didAddToJam ? "checkmark" : "dot.radiowaves.left.and.right"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(
-                    InspectorButtonStyle(
-                        background: .white.opacity(0.9),
-                        foreground: .black
-                    )
-                )
-                .accessibilityLabel(didAddToJam ? "Added to Jam" : "Add to Jam")
+                .frame(maxWidth: .infinity)
             }
+            .buttonStyle(
+                InspectorButtonStyle(
+                    background: Color(red: 242 / 255, green: 242 / 255, blue: 242 / 255),
+                    foreground: .black,
+                    horizontalPadding: 24
+                )
+            )
+            .accessibilityLabel(isPlaying ? "Stop" : "Play")
+
+            Button {
+                isShowingJamPicker = true
+            } label: {
+                Label(
+                    didAddToJam ? "Added to Jam" : "Add to jam",
+                    systemImage: didAddToJam ? "checkmark" : "waveform"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(
+                InspectorButtonStyle(
+                    background: .black,
+                    foreground: Color(red: 245 / 255, green: 245 / 255, blue: 247 / 255),
+                    horizontalPadding: 48
+                )
+            )
+            .accessibilityLabel(didAddToJam ? "Added to Jam" : "Add to Jam")
         }
         .font(.footnote.weight(.semibold))
-        .padding(.horizontal, 48.5)
+        .padding(.horizontal, 10)
         .padding(.top, 10)
-        .padding(.bottom, 18)
+        .padding(.bottom, 10)
         .disabled(isDeleting)
     }
 
@@ -652,11 +652,12 @@ private struct JamAvailability {
 private struct InspectorButtonStyle: ButtonStyle {
     let background: Color
     let foreground: Color
+    let horizontalPadding: CGFloat
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .padding(.vertical, 12)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, horizontalPadding)
             .foregroundStyle(foreground)
             .background(
                 background.opacity(configuration.isPressed ? 0.78 : 1),
