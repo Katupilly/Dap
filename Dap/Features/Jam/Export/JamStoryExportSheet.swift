@@ -30,12 +30,13 @@ struct JamStoryExportSheet: View {
                     title: title,
                     showsConfirmButton: coordinator.phase == .customize,
                     confirmEnabled: coordinator.canStartExport,
+                    closeEnabled: !coordinator.isSharingToInstagram,
                     onClose: handleClose,
                     onConfirm: coordinator.startExport
                 )
             }
         }
-        .interactiveDismissDisabled(coordinator.isExporting)
+        .interactiveDismissDisabled(coordinator.isExporting || coordinator.isSharingToInstagram)
         .onDisappear {
             coordinator.cleanupForDismissal()
         }
@@ -82,7 +83,9 @@ struct JamStoryExportSheet: View {
     }
 
     private func handleClose() {
-        if coordinator.isExporting {
+        if coordinator.isSharingToInstagram {
+            return
+        } else if coordinator.isExporting {
             coordinator.cancelExport()
         } else {
             coordinator.cleanupForDismissal()
@@ -95,6 +98,7 @@ private struct JamStoryExportHeader: View {
     let title: String
     let showsConfirmButton: Bool
     let confirmEnabled: Bool
+    let closeEnabled: Bool
     let onClose: () -> Void
     let onConfirm: () -> Void
 
@@ -111,6 +115,7 @@ private struct JamStoryExportHeader: View {
             }
             .buttonStyle(StoryHeaderGlassButtonStyle())
             .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(!closeEnabled)
             .accessibilityLabel("Close")
 
             if showsConfirmButton {

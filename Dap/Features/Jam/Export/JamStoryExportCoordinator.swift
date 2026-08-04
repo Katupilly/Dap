@@ -26,11 +26,13 @@ final class JamStoryExportCoordinator {
     private(set) var player: AVPlayer?
     private(set) var isVideoPlaying = false
     private(set) var shareURL: URL?
+    private(set) var isSharingToInstagram = false
 
     @ObservationIgnored private let imageRenderer = JamStoryRenderer()
     @ObservationIgnored private let videoRenderer = JamStoryVideoRenderer()
     @ObservationIgnored private let instagramExporter = InstagramStoryExporter()
     @ObservationIgnored private var exportTask: Task<Void, Never>?
+    @ObservationIgnored private var cleanupRequested = false
 
     init(snapshot: JamStoryExportSnapshot) {
         self.snapshot = snapshot
@@ -129,6 +131,11 @@ final class JamStoryExportCoordinator {
 
     func cleanupForDismissal() {
         cancelExport()
+        guard !isSharingToInstagram else {
+            cleanupRequested = true
+            exportTask = nil
+            return
+        }
         cleanupResult()
         exportTask = nil
     }
@@ -145,14 +152,25 @@ final class JamStoryExportCoordinator {
     }
 
     func shareReadyResultToInstagram() async {
-        guard let result else { return }
+        guard !isSharingToInstagram,
+              let result,
+              let shareURL else { return }
+
+        isSharingToInstagram = true
+        defer {
+            isSharingToInstagram = false
+            if cleanupRequested {
+                cleanupRequested = false
+                cleanupResult()
+            }
+        }
 
         do {
             switch result {
             case .image(let imageResult):
                 try await instagramExporter.export(backgroundImage: imageResult.image)
-            case .video(let videoResult):
-                try await instagramExporter.export(backgroundVideoAt: videoResult.fileURL)
+            case .video:
+                try await instagramExporter.export(backgroundVideoAt: shareURL)
             }
         } catch let error as InstagramStoryExportError {
             errorMessage = error.localizedDescription
