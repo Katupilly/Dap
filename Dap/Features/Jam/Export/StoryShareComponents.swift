@@ -1,44 +1,327 @@
 import Foundation
 import ImageIO
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
-struct StoryShareActions<ShareContent: View>: View {
+enum StoryShareTemplate: String, CaseIterable, Hashable, Identifiable, Sendable {
+    case plain
+    case dap
+
+    var id: Self { self }
+}
+
+struct StorySharePreview: Identifiable {
+    let template: StoryShareTemplate
+    let image: UIImage?
+    let isLoading: Bool
+
+    var id: StoryShareTemplate { template }
+}
+
+/// Shared visual surface for the Photo and Jam Share covers. Export work stays
+/// in the owning feature; this view only renders previews and forwards intent.
+struct StoryShareSurface: View {
+    let previews: [StorySharePreview]
+    let selection: StoryShareTemplate
     let isInstagramAvailable: Bool
-    let onInstagram: () -> Void
-    let shareContent: ShareContent
+    let isStoriesLoading: Bool
+    let isShareLoading: Bool
+    let isStoriesEnabled: Bool
+    let isShareEnabled: Bool
+    let onSelect: (StoryShareTemplate) -> Void
+    let onStories: () -> Void
+    let onShare: () -> Void
+
+    @State private var scrollTarget: StoryShareTemplate?
+
+    var body: some View {
+        GeometryReader { proxy in
+            let aspectRatio: CGFloat = 317.4 / 541.2
+            let cardSpacing: CGFloat = 17.2
+            let leadingPadding: CGFloat = 20
+            let peek = min(48, max(32, proxy.size.width * 0.098))
+            let widthAllowedByScreen = max(0, proxy.size.width - leadingPadding - cardSpacing - peek)
+            let cardTopGap: CGFloat = 24
+            let dotsSize: CGFloat = 8
+            let dotsGap: CGFloat = 22
+            let actionsGap: CGFloat = 40
+            let actionsHeight: CGFloat = 74
+            let bottomSafeArea = proxy.safeAreaInsets.bottom
+            let availableCardHeight = max(
+                0,
+                proxy.size.height
+                    - cardTopGap
+                    - dotsGap
+                    - dotsSize
+                    - actionsGap
+                    - actionsHeight
+                    - bottomSafeArea
+            )
+            let widthAllowedByHeight = availableCardHeight * aspectRatio
+            let cardWidth = min(widthAllowedByScreen, widthAllowedByHeight)
+            let cardSize = CGSize(width: cardWidth, height: cardWidth / aspectRatio)
+
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(height: cardTopGap)
+                    .accessibilityHidden(true)
+
+                ScrollView(.horizontal) {
+                    HStack(spacing: cardSpacing) {
+                        ForEach(StoryShareTemplate.allCases) { template in
+                            StorySharePreviewCard(
+                                preview: previews.first(where: { $0.template == template })
+                                    ?? StorySharePreview(template: template, image: nil, isLoading: true),
+                                isSelected: selection == template,
+                                size: cardSize,
+                                onSelect: { onSelect(template) }
+                            )
+                            .id(template)
+                        }
+                    }
+                    .padding(.leading, leadingPadding)
+                    .padding(.trailing, leadingPadding)
+                    .scrollTargetLayout()
+                }
+                .scrollIndicators(.hidden)
+                .scrollClipDisabled()
+                .frame(height: cardSize.height)
+                .scrollTargetBehavior(.viewAligned)
+                .scrollPosition(id: $scrollTarget)
+                .onAppear { scrollTarget = selection }
+                .onChange(of: selection) { _, value in
+                    guard scrollTarget != value else { return }
+                    scrollTarget = value
+                }
+                .onChange(of: scrollTarget) { _, value in
+                    guard let value, value != selection else { return }
+                    onSelect(value)
+                }
+
+                HStack(spacing: 6) {
+                    ForEach(StoryShareTemplate.allCases) { template in
+                        Circle()
+                            .fill(selection == template ? Color.primary : Color.secondary.opacity(0.28))
+                            .frame(width: 8, height: 8)
+                    }
+                }
+                .padding(.top, dotsGap)
+                .accessibilityHidden(true)
+
+                HStack(spacing: 18) {
+                    StoryShareActionButton(
+                        title: "Stories",
+                        systemImage: nil,
+                        imageAsset: "InstagramStories",
+                        isLoading: isStoriesLoading,
+                        isEnabled: isInstagramAvailable && isStoriesEnabled,
+                        accessibilityLabel: "Share to Instagram Stories",
+                        buttonSize: CGSize(width: 100, height: actionsHeight),
+                        labelFont: .system(size: 17, weight: .semibold),
+                        action: onStories
+                    )
+
+                    StoryShareActionButton(
+                        title: "Share",
+                        systemImage: "square.and.arrow.up",
+                        imageAsset: nil,
+                        isLoading: isShareLoading,
+                        isEnabled: isShareEnabled,
+                        accessibilityLabel: "Share",
+                        buttonSize: CGSize(width: 100, height: actionsHeight),
+                        labelFont: .system(size: 17, weight: .semibold),
+                        action: onShare
+                    )
+                }
+                .padding(.top, actionsGap)
+                .padding(.bottom, bottomSafeArea)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+struct StoryShareActions: View {
+    let isInstagramAvailable: Bool
+    let isStoriesLoading: Bool
+    let isShareLoading: Bool
+    let isStoriesEnabled: Bool
+    let isShareEnabled: Bool
+    let onStories: () -> Void
+    let onShare: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            StoryShareActionButton(
+                title: "Stories",
+                systemImage: nil,
+                imageAsset: "InstagramStories",
+                isLoading: isStoriesLoading,
+                isEnabled: isInstagramAvailable && isStoriesEnabled,
+                accessibilityLabel: "Share to Instagram Stories",
+                action: onStories
+            )
+
+            StoryShareActionButton(
+                title: "Share",
+                systemImage: "square.and.arrow.up",
+                imageAsset: nil,
+                isLoading: isShareLoading,
+                isEnabled: isShareEnabled,
+                accessibilityLabel: "Share",
+                action: onShare
+            )
+        }
+    }
+}
+
+private struct StorySharePreviewCard: View {
+    let preview: StorySharePreview
+    let isSelected: Bool
+    let size: CGSize
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 19.4, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+
+                if let image = preview.image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: size.width, height: size.height)
+                        .clipShape(RoundedRectangle(cornerRadius: 19.4, style: .continuous))
+                } else if preview.isLoading {
+                    ProgressView()
+                        .controlSize(.large)
+                        .accessibilityLabel("Loading")
+                } else {
+                    RoundedRectangle(cornerRadius: 19.4, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .clipShape(RoundedRectangle(cornerRadius: 19.4, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 19.4, style: .continuous)
+                    .stroke(
+                        isSelected ? Color.primary : Color.primary.opacity(0.08),
+                        lineWidth: isSelected ? 3.2 : 1
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(preview.template == .plain ? "Photo only" : "Dap template")
+        .accessibilityValue(preview.isLoading ? "Loading" : (isSelected ? "Selected" : "Not selected"))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct StoryShareActionButton: View {
+    let title: String
+    let systemImage: String?
+    let imageAsset: String?
+    let isLoading: Bool
+    let isEnabled: Bool
+    let accessibilityLabel: String
+    let buttonSize: CGSize
+    let labelFont: Font
+    let action: () -> Void
 
     init(
-        isInstagramAvailable: Bool,
-        onInstagram: @escaping () -> Void,
-        @ViewBuilder shareContent: () -> ShareContent
+        title: String,
+        systemImage: String?,
+        imageAsset: String?,
+        isLoading: Bool,
+        isEnabled: Bool,
+        accessibilityLabel: String,
+        buttonSize: CGSize = CGSize(width: 100, height: 70),
+        labelFont: Font = .system(size: 13, weight: .semibold),
+        action: @escaping () -> Void
     ) {
-        self.isInstagramAvailable = isInstagramAvailable
-        self.onInstagram = onInstagram
-        self.shareContent = shareContent()
+        self.title = title
+        self.systemImage = systemImage
+        self.imageAsset = imageAsset
+        self.isLoading = isLoading
+        self.isEnabled = isEnabled
+        self.accessibilityLabel = accessibilityLabel
+        self.buttonSize = buttonSize
+        self.labelFont = labelFont
+        self.action = action
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            Button(action: onInstagram) {
-                Label(
-                    isInstagramAvailable ? "Share to Instagram" : "Instagram Not Installed",
-                    systemImage: "camera"
-                )
-                .frame(maxWidth: .infinity, minHeight: 52)
-            }
-            .buttonStyle(StoryPrimaryButtonStyle())
-            .opacity(isInstagramAvailable ? 1 : 0.58)
-            .accessibilityHint(
-                isInstagramAvailable
-                    ? "Opens Instagram Stories."
-                    : "Shows an Instagram availability message."
-            )
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Group {
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else if let imageAsset {
+                        Image(imageAsset)
+                            .renderingMode(.template)
+                            .resizable()
+                            .scaledToFit()
+                    } else if let systemImage {
+                        Image(systemName: systemImage)
+                            .font(.system(size: 20, weight: .medium))
+                    }
+                }
+                .frame(width: 20, height: 20)
 
-            shareContent
-                .buttonStyle(StorySecondaryButtonStyle())
+                Text(title)
+                    .font(labelFont)
+                    .lineLimit(1)
+            }
+            .frame(width: buttonSize.width, height: buttonSize.height)
+            .foregroundStyle(.primary)
+            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled || isLoading)
+        .opacity(isEnabled ? 1 : 0.45)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(isLoading ? "Loading" : "")
     }
+}
+
+struct StoryShareHeader: View {
+    let title: String
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Text(title)
+                .font(.system(size: 17, weight: .semibold))
+                .lineLimit(1)
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(StoryHeaderGlassButtonStyle(size: 48))
+            .frame(width: 48, height: 48)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Close")
+        }
+        .padding(.horizontal, 20)
+        .frame(height: 62, alignment: .center)
+    }
+}
+
+struct NativeImageShareViewController: UIViewControllerRepresentable {
+    let image: UIImage
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [image], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 enum DapExportFileHelper {
@@ -245,11 +528,16 @@ struct StoryExportTopBlurFade: View {
 
 struct StoryHeaderGlassButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    let size: CGFloat
+
+    init(size: CGFloat = 44) {
+        self.size = size
+    }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(.primary.opacity(isEnabled ? 1 : 0.36))
-            .frame(width: 44, height: 44)
+            .frame(width: size, height: size)
             .opacity(isEnabled ? 1 : 0.62)
             .glassEffect(
                 .regular

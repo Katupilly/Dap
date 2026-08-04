@@ -139,7 +139,7 @@ struct PhotoInspectorView: View {
                 handleJamAdded()
             }
         }
-        .sheet(item: $photoStoryExportSnapshot) { snapshot in
+        .fullScreenCover(item: $photoStoryExportSnapshot) { snapshot in
             PhotoStoryExportSheet(snapshot: snapshot)
         }
     }

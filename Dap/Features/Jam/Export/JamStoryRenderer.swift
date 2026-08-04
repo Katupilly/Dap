@@ -18,7 +18,10 @@ struct JamStoryRenderer {
     static let outputPixelSize = CGSize(width: 1080, height: 1920)
 
     @MainActor
-    func render(snapshot: JamStoryExportSnapshot) async throws -> JamStoryRenderResult {
+    func render(
+        snapshot: JamStoryExportSnapshot,
+        template: StoryShareTemplate = .dap
+    ) async throws -> JamStoryRenderResult {
         let coverData = await JamCoverRenderer.shared.data(
             for: snapshot.coverDescriptor,
             size: CGSize(width: 720, height: 720),
@@ -27,6 +30,31 @@ struct JamStoryRenderer {
         guard let coverImage = UIImage(data: coverData, scale: 1) else {
             throw JamStoryRenderError.jamCoverRenderFailed
         }
+
+        if template == .plain {
+            let content = JamPlainStoryExportView(coverImage: coverImage)
+                .frame(width: Self.outputPixelSize.width, height: Self.outputPixelSize.height)
+                .environment(\.colorScheme, .dark)
+                .environment(\.displayScale, 1)
+            let renderer = ImageRenderer(content: content)
+            renderer.proposedSize = ProposedViewSize(Self.outputPixelSize)
+            renderer.scale = 1
+            renderer.isOpaque = true
+
+            guard let image = renderer.uiImage,
+                  let cgImage = image.cgImage else {
+                throw JamStoryRenderError.renderFailed
+            }
+            guard let pngData = image.pngData() else {
+                throw JamStoryRenderError.pngEncodingFailed
+            }
+            return JamStoryRenderResult(
+                image: image,
+                pngData: pngData,
+                pixelSize: CGSize(width: cgImage.width, height: cgImage.height)
+            )
+        }
+
         let photoImagesByID = Dictionary(
             uniqueKeysWithValues: snapshot.photos.compactMap { photo in
                 photo.imageData.flatMap { UIImage(data: $0, scale: 1) }.map { (photo.id, $0) }
@@ -66,5 +94,17 @@ struct JamStoryRenderer {
             pngData: pngData,
             pixelSize: CGSize(width: cgImage.width, height: cgImage.height)
         )
+    }
+}
+
+private struct JamPlainStoryExportView: View {
+    let coverImage: UIImage
+
+    var body: some View {
+        Image(uiImage: coverImage)
+            .resizable()
+            .scaledToFill()
+            .frame(width: JamStoryRenderer.outputPixelSize.width, height: JamStoryRenderer.outputPixelSize.height)
+            .clipped()
     }
 }

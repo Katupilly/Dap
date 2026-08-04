@@ -1,45 +1,14 @@
 import Foundation
 
-enum JamStoryExportFormat: String, CaseIterable, Identifiable {
-    case image
-    case video
-
-    var id: Self { self }
-
-    var displayName: String {
-        rawValue.capitalized
-    }
-}
-
-enum JamStoryTemplate: String, CaseIterable, Identifiable, Sendable {
-    case editorial
-
-    var id: Self { self }
-
-    var displayName: String {
-        switch self {
-        case .editorial: "Editorial"
-        }
-    }
-}
-
 struct JamStoryExportConfiguration: Equatable, Sendable {
-    static let videoLoopOptions = [2, 4]
-
-    var format = JamStoryExportFormat.image
-    var template = JamStoryTemplate.editorial
-    var videoLoopCount = 4
+    var template = StoryShareTemplate.plain
+    var videoLoopCount = JamStoryVideoRenderer.defaultLoopCount
 
     func isValid(for snapshot: JamStoryExportSnapshot) -> Bool {
-        switch format {
-        case .image:
-            return true
-        case .video:
-            return videoLoopCount > 0
-                && snapshot.bpm > 0
-                && snapshot.arrangement.sequence.harmony.bpm == snapshot.bpm
-                && !snapshot.arrangement.sequence.notes.isEmpty
-        }
+        videoLoopCount > 0
+            && snapshot.bpm > 0
+            && snapshot.arrangement.sequence.harmony.bpm == snapshot.bpm
+            && !snapshot.arrangement.sequence.notes.isEmpty
     }
 }
 

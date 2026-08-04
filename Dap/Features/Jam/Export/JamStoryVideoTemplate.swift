@@ -5,6 +5,7 @@ import Foundation
 struct JamStoryVideoTemplate: Sendable {
     let snapshot: JamStoryExportSnapshot
     let baseImage: CGImage
+    let template: StoryShareTemplate
 
     func render(
         into pixelBuffer: CVPixelBuffer,
@@ -91,8 +92,10 @@ struct JamStoryVideoTemplate: Sendable {
         context.translateBy(x: 0, y: size.height)
         context.scaleBy(x: 1, y: -1)
         context.draw(baseImage, in: CGRect(origin: .zero, size: size))
-        drawPlayhead(step: currentStep, pulse: pulse, in: context)
-        drawActiveRolePulses(step: currentStep, pulse: pulse, in: context)
+        if template == .dap {
+            drawPlayhead(step: currentStep, pulse: pulse, in: context)
+            drawActiveRolePulses(step: currentStep, pulse: pulse, in: context)
+        }
         return context.makeImage()
     }
 

@@ -85,7 +85,10 @@ struct JamStoryVideoRenderer {
             )
         )
 
-        let baseImageResult = try await imageRenderer.render(snapshot: snapshot)
+        let baseImageResult = try await imageRenderer.render(
+            snapshot: snapshot,
+            template: configuration.template
+        )
         guard let baseImage = baseImageResult.image.cgImage else {
             throw JamStoryVideoExportError.frameRenderingFailed
         }
@@ -129,6 +132,7 @@ struct JamStoryVideoRenderer {
             let videoDuration = try await renderSilentVideo(
                 snapshot: snapshot,
                 baseImage: baseImage,
+                template: configuration.template,
                 duration: audioDuration,
                 to: silentVideoURL,
                 startedAt: startedAt,
@@ -200,6 +204,7 @@ struct JamStoryVideoRenderer {
     private func renderSilentVideo(
         snapshot: JamStoryExportSnapshot,
         baseImage: CGImage,
+        template: StoryShareTemplate,
         duration: CMTime,
         to destinationURL: URL,
         startedAt: Date,
@@ -209,6 +214,7 @@ struct JamStoryVideoRenderer {
             try await Self.writeSilentVideo(
                 snapshot: snapshot,
                 baseImage: baseImage,
+                template: template,
                 duration: duration,
                 destinationURL: destinationURL,
                 startedAt: startedAt,
@@ -226,6 +232,7 @@ struct JamStoryVideoRenderer {
     private nonisolated static func writeSilentVideo(
         snapshot: JamStoryExportSnapshot,
         baseImage: CGImage,
+        template: StoryShareTemplate,
         duration: CMTime,
         destinationURL: URL,
         startedAt: Date,
@@ -305,7 +312,11 @@ struct JamStoryVideoRenderer {
 
         let frameCount = Int((durationSeconds * Double(framesPerSecond)).rounded())
         let stepDuration = 60 / Double(snapshot.bpm) / 4
-        let template = JamStoryVideoTemplate(snapshot: snapshot, baseImage: baseImage)
+        let videoTemplate = JamStoryVideoTemplate(
+            snapshot: snapshot,
+            baseImage: baseImage,
+            template: template
+        )
         let progressStride = max(1, framesPerSecond / 10)
 
         do {
@@ -333,7 +344,7 @@ struct JamStoryVideoRenderer {
 
                     do {
                         let time = Double(frameIndex) / Double(framesPerSecond)
-                        try template.render(
+                        try videoTemplate.render(
                             into: pixelBuffer,
                             time: time,
                             stepDuration: stepDuration

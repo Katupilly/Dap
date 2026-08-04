@@ -333,7 +333,7 @@ struct GalleryView: View {
                     }
 
                     let result = try await renderer.render(
-                        format: .photo,
+                        template: .plain,
                         snapshot: snapshot
                     )
                     imageData.append(result.pngData)

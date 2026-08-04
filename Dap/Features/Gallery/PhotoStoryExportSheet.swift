@@ -49,39 +49,9 @@ struct PhotoStoryExportSnapshot: Identifiable, Sendable {
             root: pitch.symbol,
             scale: sound.sequence.harmony.scale.displayName,
             bpm: sound.sequence.harmony.bpm,
-            notes: sound.sequence.notes.map {
-                Note(step: $0.step, row: $0.row)
-            },
+            notes: sound.sequence.notes.map { Note(step: $0.step, row: $0.row) },
             palette: RetroCoverRenderer.tonalPalette(for: pitch)
         )
-    }
-}
-
-enum PhotoShareFormat: String, CaseIterable, Identifiable, Sendable {
-    case dapCard
-    case photoOnly
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .dapCard: "Dap Card"
-        case .photoOnly: "Photo Only"
-        }
-    }
-}
-
-enum PhotoExportFormat: String, CaseIterable, Identifiable, Sendable {
-    case photo
-    case story
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .photo: "Foto"
-        case .story: "Story"
-        }
     }
 }
 
@@ -94,13 +64,21 @@ struct PhotoExportPayload {
 struct PhotoExportRenderer {
     @MainActor
     func render(
-        format: PhotoShareFormat,
+        template: StoryShareTemplate,
         snapshot: PhotoStoryExportSnapshot
     ) async throws -> PhotoExportPayload {
-        switch format {
-        case .photoOnly:
-            return try renderPhoto(snapshot: snapshot)
-        case .dapCard:
+        switch template {
+        case .plain:
+            guard let image = UIImage(data: snapshot.imageData, scale: 1),
+                  let cgImage = image.cgImage else {
+                throw PhotoStoryRenderError.invalidImage
+            }
+            return PhotoExportPayload(
+                image: image,
+                pngData: image.pngData() ?? snapshot.imageData,
+                pixelSize: CGSize(width: cgImage.width, height: cgImage.height)
+            )
+        case .dap:
             let result = try await PhotoStoryRenderer().render(snapshot: snapshot)
             return PhotoExportPayload(
                 image: result.image,
@@ -108,49 +86,16 @@ struct PhotoExportRenderer {
                 pixelSize: result.pixelSize
             )
         }
-    }
-
-    @MainActor
-    func render(
-        format: PhotoExportFormat,
-        snapshot: PhotoStoryExportSnapshot
-    ) async throws -> PhotoExportPayload {
-        switch format {
-        case .photo:
-            return try renderPhoto(snapshot: snapshot)
-        case .story:
-            let result = try await PhotoStoryRenderer().render(snapshot: snapshot)
-            return PhotoExportPayload(
-                image: result.image,
-                pngData: result.pngData,
-                pixelSize: result.pixelSize
-            )
-        }
-    }
-
-    private func renderPhoto(snapshot: PhotoStoryExportSnapshot) throws -> PhotoExportPayload {
-        guard let image = UIImage(data: snapshot.imageData, scale: 1),
-              let cgImage = image.cgImage else {
-            throw PhotoStoryRenderError.invalidImage
-        }
-
-        return PhotoExportPayload(
-            image: image,
-            pngData: snapshot.imageData,
-            pixelSize: CGSize(width: cgImage.width, height: cgImage.height)
-        )
     }
 }
-
-private let photoStoryExportHeaderHeight: CGFloat = 72
 
 struct PhotoStoryExportSheet: View {
     let snapshot: PhotoStoryExportSnapshot
 
     @Environment(\.dismiss) private var dismiss
-    @State private var format: PhotoShareFormat = .dapCard
-    @State private var phase = Phase.preparing
-    @State private var payload: PhotoExportPayload?
+    @State private var selection: StoryShareTemplate = .plain
+    @State private var payloads: [StoryShareTemplate: PhotoExportPayload] = [:]
+    @State private var failedTemplates: Set<StoryShareTemplate> = []
     @State private var isShowingShareSheet = false
     @State private var instagramShareState = InstagramStoryShareState.idle
     @State private var errorMessage: String?
@@ -161,227 +106,50 @@ struct PhotoStoryExportSheet: View {
     private let instagramService = InstagramStoryShareService()
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .top) {
-                StoryExportChromeBackground()
+        ZStack(alignment: .top) {
+            StoryExportChromeBackground()
 
-                VStack(spacing: 0) {
-                    ScrollView {
-                        formatPicker
-                        content
-                    }
-                    .safeAreaInset(edge: .top, spacing: 24) {
-                        Color.clear
-                            .frame(height: photoStoryExportHeaderHeight)
-                    }
+            StoryShareSurface(
+                previews: StoryShareTemplate.allCases.map { template in
+                    StorySharePreview(
+                        template: template,
+                        image: payloads[template]?.image,
+                        isLoading: payloads[template] == nil && !failedTemplates.contains(template)
+                    )
+                },
+                selection: selection,
+                isInstagramAvailable: instagramService.isInstagramStoriesAvailable,
+                isStoriesLoading: instagramShareState == .opening,
+                isShareLoading: false,
+                isStoriesEnabled: payloads[selection] != nil,
+                isShareEnabled: payloads[selection] != nil,
+                onSelect: { selection = $0 },
+                onStories: shareToInstagram,
+                onShare: { isShowingShareSheet = true }
+            )
+            .padding(.top, 62)
 
-                    footer
-                }
-
-                StoryExportTopBlurFade(height: 112)
-
-                PhotoStoryExportHeader {
-                    dismiss()
-                }
+            StoryShareHeader(title: "Share") {
+                dismiss()
             }
         }
-        .task {
-            schedulePreparation()
-        }
-        .onChange(of: format) { _, _ in
-            schedulePreparation()
-        }
+        .task { schedulePreparation() }
         .onDisappear {
             renderTask?.cancel()
             renderTask = nil
         }
         .sheet(isPresented: $isShowingShareSheet) {
-            if let payload {
-                PhotoShareActivityViewController(
-                    payload: payload
-                )
-            }
-    }
-}
-
-private struct PhotoStoryExportHeader: View {
-    let onClose: () -> Void
-
-    var body: some View {
-        ZStack {
-            Text("Compartilhar foto")
-                .font(.custom("ZTTalk-Bold", size: 18, relativeTo: .headline))
-                .lineLimit(1)
-
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(StoryHeaderGlassButtonStyle())
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .accessibilityLabel("Close")
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 20)
-        .padding(.bottom, 8)
-        .frame(height: photoStoryExportHeaderHeight, alignment: .top)
-}
-}
-
-private var formatPicker: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Formato")
-                .font(.custom("ZTTalk-Bold", size: 14, relativeTo: .subheadline))
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 12) {
-                formatButton(.dapCard)
-                formatButton(.photoOnly)
+            if let payload = payloads[selection] {
+                NativeImageShareViewController(image: payload.image)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        switch phase {
-        case .preparing:
-            VStack(spacing: 14) {
-                ProgressView()
-                Text("Preparing \(format.title)")
-                    .font(.custom("ZTTalk-Bold", size: 16, relativeTo: .subheadline))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.vertical, 120)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Preparing export")
-            .accessibilityValue(format.title)
-        case .ready:
-            if let payload {
-                Image(uiImage: payload.image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
-                    .frame(maxHeight: 460)
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .stroke(.white.opacity(0.16), lineWidth: 1)
-                    }
-                    .shadow(color: .black.opacity(0.18), radius: 22, y: 12)
-                    .accessibilityLabel("Export preview \(format.title)")
-                    .padding(.horizontal, 20)
-                    .padding(.top, 24)
-                    .padding(.bottom, 28)
-            }
-        case .failed:
-            StoryExportErrorView(
-                message: errorMessage ?? "Could not prepare this export.",
-                onTryAgain: schedulePreparation
-            )
-            .padding(.top, 40)
-        }
-    }
-
-    private var footer: some View {
-        VStack(spacing: 10) {
-            if phase == .ready, let payload {
-                if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
-                }
-
-                Button {
-                    isShowingShareSheet = true
-                } label: {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                }
-                .buttonStyle(StoryPrimaryButtonStyle())
-                .accessibilityHint("Opens the system share sheet for the selected format.")
-
-                let isInstagramAvailable = instagramService.isInstagramStoriesAvailable
-                Button {
-                    shareToInstagram(payload)
-                } label: {
-                    Label(instagramButtonTitle(isAvailable: isInstagramAvailable), systemImage: "camera")
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                }
-                .buttonStyle(StorySecondaryButtonStyle())
-                .disabled(instagramShareState == .opening)
-                .accessibilityHint(
-                    isInstagramAvailable
-                        ? "Opens Instagram Stories."
-                        : "Shows an Instagram availability message."
-                )
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 24)
-    }
-
-    private func formatButton(_ candidate: PhotoShareFormat) -> some View {
-        Button {
-            guard phase != .preparing else { return }
-            format = candidate
-        } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                formatThumbnail(candidate)
-
-                HStack(spacing: 6) {
-                    Text(candidate.title)
-                        .font(.custom("ZTTalk-Bold", size: 15, relativeTo: .subheadline))
-
-                    if format == candidate {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.footnote.weight(.semibold))
-                    }
-                }
-                .foregroundStyle(.primary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(
-                        format == candidate ? Color.primary.opacity(0.72) : Color.primary.opacity(0.14),
-                        lineWidth: format == candidate ? 2 : 1
-                    )
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(phase == .preparing)
-        .accessibilityLabel(candidate.title)
-        .accessibilityValue(format == candidate ? "Selected" : "Not selected")
-        .accessibilityAddTraits(format == candidate ? .isSelected : [])
-    }
-
-    @ViewBuilder
-    private func formatThumbnail(_ candidate: PhotoShareFormat) -> some View {
-        if candidate == format, let image = payload?.image {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-                .frame(height: 86)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.primary.opacity(0.08))
-                .frame(height: 86)
-                .overlay {
-                    Image(systemName: candidate == .dapCard ? "rectangle.portrait" : "photo")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                }
+        .alert("Couldn't Share to Instagram", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
         }
     }
 
@@ -390,131 +158,59 @@ private var formatPicker: some View {
         renderTask?.cancel()
         let token = UUID()
         renderToken = token
-        phase = .preparing
-        payload = nil
+        payloads = [:]
+        failedTemplates = []
         isShowingShareSheet = false
         instagramShareState = .idle
         errorMessage = nil
-        renderTask = Task { @MainActor [format, token] in
-            await prepare(format: format, token: token)
+        renderTask = Task { @MainActor [snapshot, token] in
+            await prepare(snapshot: snapshot, token: token)
         }
     }
 
     @MainActor
-    private func prepare(format: PhotoShareFormat, token: UUID) async {
-        phase = .preparing
-        payload = nil
-        errorMessage = nil
-
-        do {
-            let rendered = try await renderer.render(format: format, snapshot: snapshot)
-            guard !Task.isCancelled, token == renderToken, format == self.format else { return }
-            try Task.checkCancellation()
-            guard token == renderToken, format == self.format else { return }
-            payload = rendered
-            phase = .ready
-            renderTask = nil
-        } catch is CancellationError {
-            return
-        } catch {
-            guard token == renderToken, format == self.format else { return }
-            errorMessage = (error as? LocalizedError)?.errorDescription
-                ?? "Não foi possível preparar esta exportação."
-            phase = .failed
-            renderTask = nil
-        }
-    }
-
-    private func shareToInstagram(_ payload: PhotoExportPayload) {
-        guard instagramShareState != .opening else { return }
-
-        let selectedFormat = format
-        instagramShareState = .opening
-        errorMessage = nil
-        Task { @MainActor [payload, selectedFormat] in
+    private func prepare(snapshot: PhotoStoryExportSnapshot, token: UUID) async {
+        for template in StoryShareTemplate.allCases {
             do {
-                try await instagramService.share(image: payload.image)
-                guard selectedFormat == format else { return }
-                instagramShareState = .idle
+                let payload = try await renderer.render(template: template, snapshot: snapshot)
+                guard !Task.isCancelled, token == renderToken else { return }
+                payloads[template] = payload
+            } catch is CancellationError {
+                return
             } catch {
-                guard selectedFormat == format else { return }
-                let message = (error as? LocalizedError)?.errorDescription
-                    ?? "Could not open Instagram Stories."
-                instagramShareState = .failed(message)
-                errorMessage = message
+                guard token == renderToken else { return }
+                failedTemplates.insert(template)
+                if template == selection {
+                    errorMessage = (error as? LocalizedError)?.errorDescription
+                }
             }
         }
+        renderTask = nil
     }
 
-    private func instagramButtonTitle(isAvailable: Bool) -> String {
-        guard isAvailable else { return "Instagram Not Installed" }
+    private func shareToInstagram() {
+        guard instagramShareState != .opening,
+              let payload = payloads[selection] else { return }
 
-        switch instagramShareState {
-        case .idle:
-            return "Share to Instagram"
-        case .opening:
-            return "Opening Instagram…"
-        case .failed:
-            return "Try Instagram Again"
+        instagramShareState = .opening
+        errorMessage = nil
+        Task { @MainActor [payload] in
+            do {
+                try await instagramService.share(image: payload.image)
+                instagramShareState = .idle
+            } catch {
+                instagramShareState = .failed
+                errorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? "Could not open Instagram Stories."
+            }
         }
-    }
-
-    private enum Phase {
-        case preparing
-        case ready
-        case failed
     }
 }
 
 private enum InstagramStoryShareState: Equatable {
     case idle
     case opening
-    case failed(String)
-}
-
-private struct PhotoShareActivityViewController: UIViewControllerRepresentable {
-    let payload: PhotoExportPayload
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(
-            activityItems: [payload.image],
-            applicationActivities: nil
-        )
-    }
-
-    func updateUIViewController(
-        _ uiViewController: UIActivityViewController,
-        context: Context
-    ) {}
-}
-
-struct StoryExportErrorView: View {
-    let message: String
-    let onTryAgain: () -> Void
-
-    var body: some View {
-        VStack(spacing: 18) {
-            Spacer(minLength: 0)
-
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 42, weight: .semibold))
-                .foregroundStyle(.secondary)
-
-            Text(message)
-                .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .headline))
-                .multilineTextAlignment(.center)
-
-            Button(action: onTryAgain) {
-                Text("Try Again")
-                    .frame(maxWidth: .infinity, minHeight: 52)
-            }
-            .buttonStyle(StoryPrimaryButtonStyle())
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 28)
-        .padding(.bottom, 28)
-    }
+    case failed
 }
 
 struct PhotoStoryRenderResult {
@@ -599,11 +295,8 @@ private struct PhotoStoryExportView: View {
                     .frame(maxWidth: .infinity)
 
                 facts
-
                 sequencer
-
                 Spacer(minLength: 0)
-
                 signature
             }
             .padding(.top, 180)
