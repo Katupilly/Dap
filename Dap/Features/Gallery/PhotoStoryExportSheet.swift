@@ -67,11 +67,17 @@ struct PhotoExportRenderer {
         template: StoryShareTemplate,
         snapshot: PhotoStoryExportSnapshot
     ) async throws -> PhotoExportPayload {
+        guard let baseImage = UIImage(data: snapshot.imageData, scale: 1),
+              baseImage.cgImage != nil else {
+            throw PhotoStoryRenderError.invalidImage
+        }
+
+        let image = PhotoPaperExportRenderer().render(image: baseImage) ?? baseImage
+
         switch template {
         case .plain:
-            guard let image = UIImage(data: snapshot.imageData, scale: 1),
-                  let cgImage = image.cgImage else {
-                throw PhotoStoryRenderError.invalidImage
+            guard let cgImage = image.cgImage else {
+                throw PhotoStoryRenderError.renderFailed
             }
             return PhotoExportPayload(
                 image: image,
@@ -79,7 +85,10 @@ struct PhotoExportRenderer {
                 pixelSize: CGSize(width: cgImage.width, height: cgImage.height)
             )
         case .dap:
-            let result = try await PhotoStoryRenderer().render(snapshot: snapshot)
+            let result = try await PhotoStoryRenderer().render(
+                snapshot: snapshot,
+                image: image
+            )
             return PhotoExportPayload(
                 image: result.image,
                 pngData: result.pngData,
@@ -244,6 +253,15 @@ struct PhotoStoryRenderer {
         guard let image = UIImage(data: snapshot.imageData, scale: 1) else {
             throw PhotoStoryRenderError.invalidImage
         }
+
+        return try await render(snapshot: snapshot, image: image)
+    }
+
+    @MainActor
+    func render(
+        snapshot: PhotoStoryExportSnapshot,
+        image: UIImage
+    ) async throws -> PhotoStoryRenderResult {
 
         let content = PhotoStoryExportView(snapshot: snapshot, image: image)
             .frame(width: Self.outputPixelSize.width, height: Self.outputPixelSize.height)

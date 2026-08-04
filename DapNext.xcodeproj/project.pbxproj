@@ -66,6 +66,7 @@
 		AA0000010000000000000250 /* DapEdgeBlur.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000251 /* DapEdgeBlur.swift */; };
 		AA0000010000000000000253 /* PhotoPaperOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000254 /* PhotoPaperOverlay.swift */; };
 		AA0000010000000000000255 /* PhotoPaperMotionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000256 /* PhotoPaperMotionProvider.swift */; };
+		AA000001000000000000025E /* PhotoPaperExportRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000025F /* PhotoPaperExportRenderer.swift */; };
 		AA0000010000000000000258 /* PaperShaders in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000010000000000000259 /* PaperShaders */; };
 		AA000001000000000000025B /* PaperShaders-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000025C /* PaperShaders-LICENSE.txt */; };
 /* End PBXBuildFile section */
@@ -132,6 +133,7 @@
 		AA0000010000000000000251 /* DapEdgeBlur.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DapEdgeBlur.swift; sourceTree = "<group>"; };
 		AA0000010000000000000254 /* PhotoPaperOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPaperOverlay.swift; sourceTree = "<group>"; };
 		AA0000010000000000000256 /* PhotoPaperMotionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPaperMotionProvider.swift; sourceTree = "<group>"; };
+		AA000001000000000000025F /* PhotoPaperExportRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPaperExportRenderer.swift; sourceTree = "<group>"; };
 		AA000001000000000000025C /* PaperShaders-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "PaperShaders-LICENSE.txt"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -226,6 +228,7 @@
 				AA000001000000000000003D /* PhotoInspectorView.swift */,
 				AA0000010000000000000254 /* PhotoPaperOverlay.swift */,
 				AA0000010000000000000256 /* PhotoPaperMotionProvider.swift */,
+				AA000001000000000000025F /* PhotoPaperExportRenderer.swift */,
 				AA0000010000000000000248 /* PhotoStoryExportSheet.swift */,
 				AA000001000000000000015B /* PhotoLibraryViewModel.swift */,
 			);
@@ -448,6 +451,7 @@
 				AA000001000000000000003C /* PhotoInspectorView.swift in Sources */,
 				AA0000010000000000000253 /* PhotoPaperOverlay.swift in Sources */,
 				AA0000010000000000000255 /* PhotoPaperMotionProvider.swift in Sources */,
+				AA000001000000000000025E /* PhotoPaperExportRenderer.swift in Sources */,
 				AA0000010000000000000196 /* JamAssignments.swift in Sources */,
 				AA000001000000000000004C /* JamArrangementBuilder.swift in Sources */,
 				AA000001000000000000017A /* JamGrooveLibrary.swift in Sources */,

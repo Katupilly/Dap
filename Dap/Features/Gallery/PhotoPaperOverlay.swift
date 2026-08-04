@@ -1,14 +1,8 @@
 import PaperShaders
 import SwiftUI
 
-struct PhotoPaperOverlay: ViewModifier {
-    let isMotionEnabled: Bool
-
-    @State private var motionProvider = PhotoPaperMotionProvider()
-
-    private var metrics: PaperEffectMetrics.Values {
-        PaperEffectMetrics.active
-    }
+struct PhotoPaperTextureModifier: ViewModifier {
+    private let metrics = PaperEffectMetrics.active
 
     func body(content: Content) -> some View {
         content
@@ -21,6 +15,21 @@ struct PhotoPaperOverlay: ViewModifier {
                 gain: metrics.grainGain,
                 octaves: metrics.grainOctaves
             )
+    }
+}
+
+struct PhotoPaperOverlay: ViewModifier {
+    let isMotionEnabled: Bool
+
+    @State private var motionProvider = PhotoPaperMotionProvider()
+
+    private var metrics: PaperEffectMetrics.Values {
+        PaperEffectMetrics.active
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(PhotoPaperTextureModifier())
             .overlay {
                 GeometryReader { proxy in
                     if isMotionEnabled {
