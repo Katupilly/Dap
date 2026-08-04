@@ -1,0 +1,15 @@
+{
+  "originHash" : "8d2383cd6f82dc75de090bdf646e6dba1d2084dab49a44978bdaa1b63ec88e1a",
+  "pins" : [
+    {
+      "identity" : "papershaders",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/rafael-b-g/PaperShaders.git",
+      "state" : {
+        "revision" : "5eed627181aa4c3ca4e17e7e263bc507addbf15b",
+        "version" : "1.0.2"
+      }
+    }
+  ],
+  "version" : 3
+}

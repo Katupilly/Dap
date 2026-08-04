@@ -26,6 +26,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Dap uses the camera to turn your photos into music.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Dap uses motion to let light move softly across the paper texture.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>ZTTalk-Bold.otf</string>

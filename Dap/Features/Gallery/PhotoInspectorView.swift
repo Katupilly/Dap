@@ -170,7 +170,8 @@ struct PhotoInspectorView: View {
             .aspectRatio(Self.coverAspectRatio, contentMode: .fit)
             .overlay {
                 coverImage
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .modifier(PhotoPaperOverlay(isMotionEnabled: !reduceMotion))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .clipped()
             .clipShape(.rect(cornerRadius: 6, style: .continuous))

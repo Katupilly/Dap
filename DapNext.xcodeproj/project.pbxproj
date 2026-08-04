@@ -64,6 +64,10 @@
 		AA0000010000000000000247 /* PhotoStoryExportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000248 /* PhotoStoryExportSheet.swift */; };
 		AA0000010000000000000249 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000024A /* OnboardingView.swift */; };
 		AA0000010000000000000250 /* DapEdgeBlur.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000251 /* DapEdgeBlur.swift */; };
+		AA0000010000000000000253 /* PhotoPaperOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000254 /* PhotoPaperOverlay.swift */; };
+		AA0000010000000000000255 /* PhotoPaperMotionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000256 /* PhotoPaperMotionProvider.swift */; };
+		AA0000010000000000000258 /* PaperShaders in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000010000000000000259 /* PaperShaders */; };
+		AA000001000000000000025B /* PaperShaders-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000025C /* PaperShaders-LICENSE.txt */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -126,6 +130,9 @@
 		AA0000010000000000000248 /* PhotoStoryExportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoStoryExportSheet.swift; sourceTree = "<group>"; };
 		AA000001000000000000024A /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		AA0000010000000000000251 /* DapEdgeBlur.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DapEdgeBlur.swift; sourceTree = "<group>"; };
+		AA0000010000000000000254 /* PhotoPaperOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPaperOverlay.swift; sourceTree = "<group>"; };
+		AA0000010000000000000256 /* PhotoPaperMotionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPaperMotionProvider.swift; sourceTree = "<group>"; };
+		AA000001000000000000025C /* PaperShaders-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "PaperShaders-LICENSE.txt"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -137,10 +144,19 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA0000010000000000000258 /* PaperShaders in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA0000010000000000000259 /* PaperShaders */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA000001000000000000025A /* XCRemoteSwiftPackageReference "PaperShaders" */;
+			productName = PaperShaders;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXGroup section */
 		AA0000010000000000000080 /* Products */ = {
@@ -208,6 +224,8 @@
 			children = (
 				AA000001000000000000003B /* GalleryView.swift */,
 				AA000001000000000000003D /* PhotoInspectorView.swift */,
+				AA0000010000000000000254 /* PhotoPaperOverlay.swift */,
+				AA0000010000000000000256 /* PhotoPaperMotionProvider.swift */,
 				AA0000010000000000000248 /* PhotoStoryExportSheet.swift */,
 				AA000001000000000000015B /* PhotoLibraryViewModel.swift */,
 			);
@@ -254,6 +272,7 @@
 			children = (
 				9FB8E9BF30198DFC008959F1 /* Fonts */,
 				AA000001000000000000018F /* Audio */,
+				AA000001000000000000025D /* ThirdPartyLicenses */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -265,6 +284,14 @@
 				AA000001000000000000018B /* Drums */,
 			);
 			path = Audio;
+			sourceTree = "<group>";
+		};
+		AA000001000000000000025D /* ThirdPartyLicenses */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001000000000000025C /* PaperShaders-LICENSE.txt */,
+			);
+			path = ThirdPartyLicenses;
 			sourceTree = "<group>";
 		};
 		AA000001000000000000021E /* AppIntents */ = {
@@ -344,6 +371,9 @@
 			);
 			dependencies = (
 			);
+			packageProductDependencies = (
+				AA0000010000000000000259 /* PaperShaders */,
+			);
 			fileSystemSynchronizedGroups = (
 				9FB8E9BF30198DFC008959F1 /* Fonts */,
 			);
@@ -377,6 +407,9 @@
 			);
 			mainGroup = AA0000010000000000000090;
 			productRefGroup = AA0000010000000000000080 /* Products */;
+			packageReferences = (
+				AA000001000000000000025A /* XCRemoteSwiftPackageReference "PaperShaders" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -393,6 +426,7 @@
 				AA000001000000000000006A /* Assets.xcassets in Resources */,
 				AA0000010000000000000192 /* DapAnalogFamily in Resources */,
 				AA000001000000000000018A /* Drums in Resources */,
+				AA000001000000000000025B /* PaperShaders-LICENSE.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -412,6 +446,8 @@
 				AA000001000000000000021C /* DapAppShortcuts.swift in Sources */,
 				AA000001000000000000003A /* GalleryView.swift in Sources */,
 				AA000001000000000000003C /* PhotoInspectorView.swift in Sources */,
+				AA0000010000000000000253 /* PhotoPaperOverlay.swift in Sources */,
+				AA0000010000000000000255 /* PhotoPaperMotionProvider.swift in Sources */,
 				AA0000010000000000000196 /* JamAssignments.swift in Sources */,
 				AA000001000000000000004C /* JamArrangementBuilder.swift in Sources */,
 				AA000001000000000000017A /* JamGrooveLibrary.swift in Sources */,
@@ -673,6 +709,17 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AA000001000000000000025A /* XCRemoteSwiftPackageReference "PaperShaders" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/rafael-b-g/PaperShaders.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 	};
 	rootObject = AA0000010000000000000001 /* Project object */;
 }
