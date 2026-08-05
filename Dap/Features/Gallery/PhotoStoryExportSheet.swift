@@ -106,6 +106,7 @@ struct PhotoStoryExportSheet: View {
     @State private var payloads: [StoryShareTemplate: PhotoExportPayload] = [:]
     @State private var failedTemplates: Set<StoryShareTemplate> = []
     @State private var isShowingShareSheet = false
+    @State private var photoSaveToastEvent: PhotoSaveToastEvent?
     @State private var instagramShareState = InstagramStoryShareState.idle
     @State private var errorMessage: String?
     @State private var renderTask: Task<Void, Never>?
@@ -149,7 +150,13 @@ struct PhotoStoryExportSheet: View {
         }
         .sheet(isPresented: $isShowingShareSheet) {
             if let payload = payloads[selection] {
-                NativeImageShareViewController(image: payload.image)
+                NativeImageShareViewController(
+                    image: payload.image,
+                    onSaveResult: { result in
+                        photoSaveToastEvent = PhotoSaveToastEvent.make(for: result)
+                    },
+                    onDismiss: { isShowingShareSheet = false }
+                )
             }
         }
         .alert("Couldn't Share to Instagram", isPresented: Binding(
@@ -160,6 +167,7 @@ struct PhotoStoryExportSheet: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .photoSaveToast($photoSaveToastEvent)
     }
 
     @MainActor

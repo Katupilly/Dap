@@ -1,5 +1,6 @@
 import Foundation
 import ImageIO
+import Photos
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -314,11 +315,251 @@ struct StoryShareHeader: View {
     }
 }
 
+enum PhotoSaveResult: Equatable, Sendable {
+    case success
+    case failure
+}
+
+struct PhotoSaveToastEvent: Equatable, Identifiable, Sendable {
+    let id = UUID()
+    let result: PhotoSaveResult
+
+    @MainActor
+    static func make(for result: PhotoSaveResult) -> Self {
+        let event = Self(result: result)
+        let feedback = UINotificationFeedbackGenerator()
+        feedback.prepare()
+        switch result {
+        case .success:
+            feedback.notificationOccurred(.success)
+        case .failure:
+            feedback.notificationOccurred(.error)
+        }
+        return event
+    }
+}
+
+private struct PhotoSaveToast: View {
+    let result: PhotoSaveResult
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var icon: String {
+        switch result {
+        case .success: "checkmark.circle.fill"
+        case .failure: "exclamationmark.circle.fill"
+        }
+    }
+
+    private var message: String {
+        switch result {
+        case .success: "Saved to Photos"
+        case .failure: "Couldn’t save photo"
+        }
+    }
+
+    private var contentColor: Color {
+        colorScheme == .dark
+            ? .white
+            : Color(red: 26 / 255, green: 26 / 255, blue: 30 / 255)
+    }
+
+    var body: some View {
+        Label(message, systemImage: icon)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(contentColor)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.regularMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(contentColor.opacity(0.18), lineWidth: 0.75)
+            }
+            .shadow(
+                color: .black.opacity(colorScheme == .dark ? 0.28 : 0.14),
+                radius: 12,
+                y: 4
+            )
+            .accessibilityElement(children: .combine)
+    }
+}
+
+private struct PhotoSaveToastMotion: ViewModifier {
+    let y: CGFloat
+    let scale: CGFloat
+    let opacity: Double
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: y)
+            .scaleEffect(scale)
+            .opacity(opacity)
+    }
+}
+
+private extension AnyTransition {
+    static var photoSaveToast: AnyTransition {
+        .asymmetric(
+            insertion: .modifier(
+                active: PhotoSaveToastMotion(y: -10, scale: 0.94, opacity: 0),
+                identity: PhotoSaveToastMotion(y: 0, scale: 1, opacity: 1)
+            ),
+            removal: .modifier(
+                active: PhotoSaveToastMotion(y: -10, scale: 0.94, opacity: 0),
+                identity: PhotoSaveToastMotion(y: 0, scale: 1, opacity: 1)
+            )
+        )
+    }
+}
+
+private struct PhotoSaveToastModifier: ViewModifier {
+    @Binding var event: PhotoSaveToastEvent?
+    @State private var visibleEvent: PhotoSaveToastEvent?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var toastAnimation: Animation {
+        reduceMotion
+            ? .easeInOut(duration: 0.18)
+            : .spring(response: 0.34, dampingFraction: 0.82, blendDuration: 0.05)
+    }
+
+    private var toastTransition: AnyTransition {
+        reduceMotion ? .opacity : .photoSaveToast
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                GeometryReader { proxy in
+                    if let visibleEvent {
+                        PhotoSaveToast(result: visibleEvent.result)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, max(proxy.safeAreaInsets.top + 8, 68))
+                            .transition(toastTransition)
+                            .zIndex(1)
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+            .onChange(of: event) { _, newEvent in
+                guard let newEvent else { return }
+                withAnimation(toastAnimation) {
+                    visibleEvent = newEvent
+                }
+            }
+            .task(id: event?.id) {
+                guard let event else { return }
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, self.event?.id == event.id else { return }
+                withAnimation(toastAnimation) {
+                    visibleEvent = nil
+                    self.event = nil
+                }
+            }
+    }
+}
+
+extension View {
+    func photoSaveToast(_ event: Binding<PhotoSaveToastEvent?>) -> some View {
+        modifier(PhotoSaveToastModifier(event: event))
+    }
+}
+
+// UIKit invokes the activity on main; the lock also protects the asynchronous PhotoKit completion.
+final class SavePhotoActivity: UIActivity, @unchecked Sendable {
+    static let activityType = UIActivity.ActivityType("com.pedrolima.DapNext.savePhoto")
+
+    private let onResult: (PhotoSaveResult) -> Void
+    private let stateLock = NSLock()
+    private var image: UIImage?
+    private var didFinish = false
+
+    init(onResult: @escaping (PhotoSaveResult) -> Void) {
+        self.onResult = onResult
+        super.init()
+    }
+
+    override var activityType: UIActivity.ActivityType? { Self.activityType }
+    override var activityTitle: String? { "Save to Photos" }
+    override var activityImage: UIImage? { UIImage(systemName: "square.and.arrow.down") }
+    override class var activityCategory: UIActivity.Category { .action }
+
+    override func canPerform(withActivityItems activityItems: [Any]) -> Bool {
+        activityItems.contains { $0 is UIImage }
+    }
+
+    override func prepare(withActivityItems activityItems: [Any]) {
+        stateLock.lock()
+        image = activityItems.compactMap { $0 as? UIImage }.first
+        stateLock.unlock()
+    }
+
+    override func perform() {
+        stateLock.lock()
+        let image = image
+        stateLock.unlock()
+        guard let image else {
+            finish(.failure)
+            return
+        }
+
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self, image] status in
+            guard let self else { return }
+            guard status == .authorized || status == .limited else {
+                finish(.failure)
+                return
+            }
+
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }) { [weak self] success, _ in
+                self?.finish(success ? .success : .failure)
+            }
+        }
+    }
+
+    private func finish(_ result: PhotoSaveResult) {
+        stateLock.lock()
+        guard !didFinish else {
+            stateLock.unlock()
+            return
+        }
+        didFinish = true
+        stateLock.unlock()
+        let callback = onResult
+        DispatchQueue.main.async { [weak self] in
+            self?.activityDidFinish(result == .success)
+            callback(result)
+        }
+    }
+}
+
 struct NativeImageShareViewController: UIViewControllerRepresentable {
     let image: UIImage
+    let onSaveResult: (PhotoSaveResult) -> Void
+    let onDismiss: () -> Void
+
+    init(
+        image: UIImage,
+        onSaveResult: @escaping (PhotoSaveResult) -> Void,
+        onDismiss: @escaping () -> Void = {}
+    ) {
+        self.image = image
+        self.onSaveResult = onSaveResult
+        self.onDismiss = onDismiss
+    }
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [image], applicationActivities: nil)
+        let controller = UIActivityViewController(
+            activityItems: [image],
+            applicationActivities: [SavePhotoActivity(onResult: onSaveResult)]
+        )
+        controller.excludedActivityTypes = [.saveToCameraRoll]
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            Task { @MainActor in
+                onDismiss()
+            }
+        }
+        return controller
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}

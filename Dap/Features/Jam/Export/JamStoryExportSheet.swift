@@ -8,6 +8,7 @@ struct JamStoryExportSheet: View {
 
     @State private var coordinator: JamStoryExportCoordinator
     @State private var isShowingShareSheet = false
+    @State private var photoSaveToastEvent: PhotoSaveToastEvent?
 
     init(snapshot: JamStoryExportSnapshot, isPresented: Binding<Bool>) {
         self.snapshot = snapshot
@@ -32,9 +33,16 @@ struct JamStoryExportSheet: View {
         .onDisappear { coordinator.cleanupForDismissal() }
         .sheet(isPresented: $isShowingShareSheet) {
             if let image = coordinator.selectedPreviewImage {
-                NativeImageShareViewController(image: image)
+                NativeImageShareViewController(
+                    image: image,
+                    onSaveResult: { result in
+                        photoSaveToastEvent = PhotoSaveToastEvent.make(for: result)
+                    },
+                    onDismiss: { isShowingShareSheet = false }
+                )
             }
         }
+        .photoSaveToast($photoSaveToastEvent)
     }
 
     @ViewBuilder
