@@ -1,6 +1,6 @@
 # Dap Product and Code Context
 
-Last synchronized with the supplied repository worktree: 2026-07-29 (commit `e80c79f`).
+Last synchronized with the supplied repository worktree: 2026-08-05 (commit `5a5ef87`).
 
 This document records the current product, domain model, implemented flows, deterministic algorithms, audio runtime, module ownership, and known gaps. It is a state document, not a changelog or roadmap.
 
@@ -21,6 +21,8 @@ Jams are local persisted documents with a name, role assignments, Vibe position,
 
 The app is local-first. No account, network service, cloud sync, analytics, multiplayer, or remote generation is required by the current code.
 
+The project currently includes the remote Swift Package dependency `PaperShaders` version 1.0.2 for the Photo paper texture. Its license is bundled under `Dap/Resources/ThirdPartyLicenses`. The app does not use that dependency for runtime networking.
+
 ## Implemented product surface
 
 ### Root
@@ -31,12 +33,28 @@ The app is local-first. No account, network service, cloud sync, analytics, mult
 - Gallery/Jam section selection;
 - Gallery UUID navigation path;
 - full-screen Capture presentation;
+- first-run loading, onboarding, and main-app root states;
+- `hasCompletedOnboarding` in `UserDefaults` through `@AppStorage`;
 - whether a Jam session is currently pushed;
+- Gallery selection-mode state;
 - the root Gallery/Jam segmented switcher;
 - the centered Capture button shown only at the Gallery root;
 - consumption of deferred `DapPendingActionRequest` values created by App Intents.
 
-Gallery and Jam remain mounted and switch through opacity and hit-testing. Root chrome is hidden while Photo Inspector or a Jam session is presented.
+Gallery and Jam remain mounted and switch through opacity and hit-testing. Root chrome is hidden while Photo Inspector or a Jam session is presented. Onboarding is shown only when the completion flag is false and the loaded library is empty; an existing non-empty library marks onboarding complete automatically.
+
+### Onboarding
+
+First-run onboarding provides:
+
+- animated splash and photo-to-music introduction;
+- camera permission explanation with Settings, retry, and demo paths;
+- camera capture, single-photo library import, or a bundled demo image;
+- preparation/review before a captured or imported Photo is persisted;
+- assembly animation with transient sequence playback and a completion accent;
+- a final Explore Dap action that enters the main app.
+
+Real captured/imported Photos are persisted only after confirmation. Demo input is processed and played transiently without creating a library item. The flow stops camera, playback, and haptic work on lifecycle changes and respects Reduce Motion.
 
 ### Typography
 
@@ -62,19 +80,24 @@ Gallery currently provides:
 - a metadata-refinement progress indicator;
 - a playing indicator for the active Musical Photo;
 - UUID navigation to Photo Inspector;
-- top and bottom material fades integrated with root chrome.
+- long-press and accessibility entry into multi-selection;
+- batch share, batch delete with partial-failure reporting, and batch Add to Jam;
+- a bounded chooser when more than three selected Photos are being added to a Jam;
+- top and bottom progressive edge blur overlays.
 
-Gallery does not currently implement multi-selection, manual reordering, Year/Month grouping, or a Gallery-local import tile. Import remains inside Capture.
+Gallery does not currently implement manual reordering, Year/Month grouping, or a Gallery-local import tile. Import remains inside Capture.
 
 ### Photo Inspector
 
 Photo Inspector currently provides:
 
 - the selected Cover in a fixed portrait presentation;
+- a static paper texture and optional device-motion lighting overlay, disabled when Reduce Motion is enabled;
 - a background derived from the final root-note palette;
 - a display title, optional generated description, root, scale, and BPM;
 - play/stop through the shared `MusicPlayer`;
-- PNG Cover sharing through `ShareLink` with the Cover as preview;
+- a full-screen Share flow with `plain` and `dap` story templates;
+- native image sharing, Save to Photos feedback, and Instagram Stories image sharing when available;
 - destructive Photo deletion with confirmation and rollback-safe persistence;
 - **Add to Jam**, including saved-Jam availability, capacity status, duplicate status, and inline Jam creation.
 
@@ -93,6 +116,7 @@ Current controls and behavior:
 - ordered multi-photo import through PhotosUI;
 - latest-Cover thumbnail that returns to Gallery;
 - permission, configuration, ready, processing, completion, and failure states;
+- animated import progress/completion feedback with haptics and Reduce Motion handling;
 - orientation-aware preview and capture;
 - front-preview mirroring while persisted captures remain unmirrored;
 - live provisional pitch-color sampling;
@@ -121,6 +145,7 @@ The library currently provides:
 - deterministic generated abstract Covers derived from the Jam ID, assigned Photo IDs, and pitch palettes;
 - newest-updated-first ordering;
 - explicit empty, search-empty, loading, and failure states;
+- progressive top and bottom edge blur overlays;
 - a bottom **Create a Jam** action hidden while search or inline editing owns focus.
 
 Deleting a Jam removes only its JSON document. Musical Photos and their Covers remain intact.
@@ -146,12 +171,13 @@ Current behavior:
 - apply contextual deterministic arrangement variations to Bass, Harmony, or Melody;
 - enable and adjust global Reverb, Delay, and LFO/tremolo;
 - play one fixed 16-step loop at 96 BPM;
+- open a Jam Share flow from the session header;
 - derive visible step and active-photo state from the live `AVAudioPlayerNode` transport;
 - queue latest-wins arrangement replacements for the next loop boundary;
 - persist document state while keeping rendered arrangements and buffers transient;
 - stop playback and flush/cancel session work when the view disappears, loses root focus, closes, or enters relevant lifecycle states.
 
-The large Jam surface is split into focused presentation files (`JamPhotoSection`, `JamSequencerSection`, `JamDockBar`, `JamControlPanels`, and `JamPanelBackdrop`). `JamView` remains the orchestrator for session actions, persistence, and cross-component coordination.
+The large Jam surface is split into focused presentation files (`JamPhotoSection`, `JamSequencerSection`, `JamDockBar`, `JamControlPanels`, and `JamPanelBackdrop`). `JamView` remains the orchestrator for session actions, persistence, export snapshot creation, and cross-component coordination.
 
 ## Domain glossary
 
@@ -189,6 +215,8 @@ The deterministic playable value represented by `MusicSequence`:
 - `SoundProfile`.
 
 The grid is fixed at 16 steps by 8 rows.
+
+`MusicSequence.stepDuration` and `nominalDuration` expose timing for rendering. `completionAccentMIDINote` resolves a tonal completion note for optional single-sequence playback feedback.
 
 Persisted photo notes normally have no `voiceRole`. Jam arrangements create transient notes with `.bass`, `.harmony`, or `.melody` roles.
 
@@ -280,6 +308,10 @@ It is deterministically rebuilt from the Saved Jam state and current Musical Pho
 
 Settings are persisted in the Saved Jam, while DSP runtime state remains inside `MusicPlayer`.
 
+### Story Export
+
+`StoryShareTemplate` currently has `plain` and `dap` variants. Dap Photo stories and all Jam stories render portrait 1080×1920 images; the plain Photo template preserves the Cover's pixel dimensions. Jam Stories can additionally render a 30 fps MP4 with four default 16-step loops, Jam audio, progress reporting, preview playback, and Instagram Stories handoff. Native Share shares the selected image preview; Instagram Stories uses the rendered video for Jam exports and the rendered image for Photo exports.
+
 ### Vibe
 
 The current Jam interaction mode. A normalized `CGPoint` bilinearly interpolates four corner presets:
@@ -301,7 +333,13 @@ A possible future explicit arrangement mode. It is not implemented and has no au
 
 `DapApp → AppRootView → PhotoLibraryViewModel.loadLibrary() → PhotoStore.load() + coverData(for:)`
 
-The Musical Photo library is loaded once per shared view-model lifetime. Covers are loaded into memory before the views render them. The Jam library loads independently when `JamLibraryView` appears.
+The Musical Photo library is loaded once per shared view-model lifetime. Covers are loaded into memory before the views render them. The root resolves onboarding only after the library load. The Jam library loads independently when `JamLibraryView` appears.
+
+### First-run onboarding
+
+`AppRootView → OnboardingView → PhotoMusicPipeline.prepare → review/assembly → PhotoLibraryViewModel.importPreparedPhoto → PhotoStore.save`
+
+The demo branch runs the same deterministic processing and transient playback but does not call the persistence path. Onboarding completion is stored in `UserDefaults`.
 
 ### Consume an App Shortcut
 
@@ -311,13 +349,13 @@ The root consumes the request only while active, removes it from defaults, reset
 
 ### Create from camera
 
-`CameraController → Source Image Data → PhotoMusicPipeline → PhotoStore.save → PhotoLibraryViewModel memory update → metadata refinement`
+`CameraController → Source Image Data → PhotoMusicPipeline.prepare/process → PhotoStore.save → PhotoLibraryViewModel memory update → metadata refinement`
 
 Capture remains presented after a successful shutter creation.
 
 ### Create from Photos
 
-`PhotosPickerItem → Data → PhotoMusicPipeline → PhotoStore.save → batched memory publication → sequential metadata refinement`
+`PhotosPickerItem → Data → PhotoMusicPipeline.prepare/process → PhotoStore.save → batched memory publication → sequential metadata refinement`
 
 Batch processing continues after individual failures unless the task is cancelled.
 
@@ -345,13 +383,17 @@ The operation rejects non-playable Photos, duplicates, and Jams already at the t
 
 The builder receives explicit role assignments, deterministic variation state, and the concrete Drum Kit already resolved by `JamView`.
 
+### Share Photos and Jams
+
+Gallery selection renders selected Photos as temporary plain PNG files for native batch sharing. Photo Inspector renders plain or Dap story previews. Jam export snapshots capture the active arrangement, role colors, Cover descriptor, and export metadata before the export sheet renders images or video.
+
 ## Deterministic photo pipeline
 
-`PhotoMusicPipeline.process(imageData:)` runs heavy work in a detached user-initiated task and returns Sendable values.
+`PhotoMusicPipeline.prepare(imageData:)` and `process(prepared:)` split visual preparation from musical sequence construction. Both run heavy work in cancellable detached user-initiated tasks and return Sendable values. `process(imageData:)` remains the combined convenience entry point.
 
 ### 1. Decode and normalize
 
-The Source Image is decoded with `UIImage` and redrawn into a new `CGImage` so orientation is applied before analysis and rendering.
+The Source Image is decoded with `UIImage` and redrawn into a new `CGImage` so orientation is applied before analysis and rendering. The normalized image is capped at `RetroCoverRenderer.coverMaximumDimension` (1024 px on its longest side). Preparation retains the original input data, normalized analysis input, color profile, and rendered Cover preview in `PreparedPhotoInput`.
 
 ### 2. Color analysis
 
@@ -372,11 +414,11 @@ Current color-pipeline algorithm constant: `2`.
 
 ### 3. Tone analysis
 
-A four-tone Floyd-Steinberg image is generated at target width 160 pixels. This legacy dithered image is used only for tone analysis, not as the persisted Cover.
+Tone analysis reads direct normalized-source luminance. Significant tone count is measured from a version capped at 256 px on its longest side, and note generation uses a separate 16×8 tone grid. The active pipeline does not use the retained `RetroCoverRenderer.floydSteinberg` helper for this stage.
 
 Tone analysis derives:
 
-- significant tone count from the full dithered image;
+- significant tone count from the downsampled normalized source;
 - a 16×8 tone grid for note generation.
 
 ### 4. Sequence construction
@@ -396,7 +438,7 @@ Current mappings:
   - remaining hues → triangle;
 - notes: nonzero levels from the 16×8 tone grid.
 
-If the tone grid is empty or tonal analysis fails after color preparation, the pipeline preserves the available tonal profile and emits a deterministic five-note pentatonic motif at steps 0, 3, 6, 10, and 14. Motif degrees, register, and root fallback are derived from the stable image seed and remain inside the safe MIDI range.
+If the tone grid is empty, tone analysis fails, or the color profile is invalid, the pipeline preserves the available finite profile where possible and emits a deterministic five-note motif at steps 0, 3, 6, 10, and 14. Three pentatonic motif variants, fallback root selection, register, gate, and velocity are derived from the stable image seed and remain inside the safe MIDI range.
 
 ### 5. Cover rendering
 
@@ -426,7 +468,7 @@ This is the canonical pitch-to-color path. The persisted Cover and Inspector use
 
 ### 7. Essential persistence
 
-The pipeline creates a new UUID, a `PhotoSound` with nil metadata, and PNG Cover data. The essential result is persisted before it appears in shared state.
+The pipeline creates a new UUID, a `PhotoSound` with nil metadata, and PNG Cover data. The essential result is persisted before it appears in shared state. Visual preparation may run before the user confirms a Photo, but only the confirmed result enters persistence.
 
 ### 8. Progressive metadata
 
@@ -597,6 +639,12 @@ For an update while Jam is running:
 6. `JamPlaybackController` promotes the matching pending arrangement only after a live transport wrap is observed.
 
 The visible transport is polled from `MusicPlayer.currentJamTransportSnapshot()` at approximately 33 ms. `JamVisualTransportState` stores only the current step and active Photo UUID set, reducing broad SwiftUI observation invalidation.
+
+### Story export runtime
+
+Photo and Jam export work is detached from persisted library/Jam state. Photo rendering uses `ImageRenderer` for plain and Dap 1080×1920 images. Jam video rendering builds silent H.264 frames, renders arrangement audio through `JamAudioRenderer`, composes the tracks into an MP4, and validates dimensions, frame rate, codecs, tracks, and duration before exposing the result.
+
+The live Jam effect rack is not currently applied to the exported Jam audio: `JamStoryExportSnapshot` carries `effectSettings`, but `JamStoryAudioRenderer` passes only sequence and percussion to `JamAudioRenderer`.
 
 ## Jam arrangement algorithm
 
@@ -838,6 +886,8 @@ Dap/
 
 Generated Jam Covers are deterministic derivatives rendered and cached in memory by `JamCoverRenderer`; they are not persisted as separate files.
 
+`UserDefaults` stores the one-shot App Intent request and the `hasCompletedOnboarding` root-flow flag. Neither is part of the Musical Photo or Saved Jam JSON schema.
+
 ### Musical Photo save contract
 
 1. create directories;
@@ -884,6 +934,8 @@ The app does not persist:
 - algorithm-version metadata for Musical Photos;
 - migration logic beyond strict Saved Jam schema-version rejection.
 
+Story export files are transient. `DapExportFileHelper` prepares files under the temporary directory for native sharing, while Jam video rendering uses a separate temporary working directory. Export coordinators remove those files on cancellation, dismissal, or after the share lifecycle completes. No export history is written to Application Support.
+
 ## Module ownership
 
 ### `DapApp`
@@ -892,7 +944,11 @@ Creates `AppRootView`.
 
 ### `AppRootView`
 
-Owns root section, Gallery path, Capture presentation, Jam-session visibility, root chrome, deferred App Intent routing, and shared `PhotoLibraryViewModel` lifetime.
+Owns root loading/onboarding/main-app state, `hasCompletedOnboarding`, root section, Gallery path and selection mode, Capture presentation, Jam-session visibility, root chrome, deferred App Intent routing, and shared `PhotoLibraryViewModel` lifetime.
+
+### `OnboardingView`
+
+Owns the first-run introduction, permission/camera/import/demo flow, Photo preparation/review, transient onboarding playback, assembly presentation, completion feedback, and cleanup of camera/playback/haptic tasks.
 
 ### `DapAppShortcuts` / `DapPendingActionStore`
 
@@ -904,7 +960,7 @@ Owns the reusable ZT Talk weight mapping and Dynamic Type-relative SwiftUI font 
 
 ### `PhotoLibraryViewModel`
 
-Owns in-memory Musical Photo items, Cover cache, import state, metadata task coordination, shared playback façade, Jam effect forwarding, transport snapshot access, and loop-prepared callback plumbing.
+Owns in-memory Musical Photo items, Cover cache, import state, batch deletion results, metadata task coordination, shared playback façade, completion-accent forwarding, Jam effect forwarding, transport snapshot access, and loop-prepared callback plumbing.
 
 Despite its name, it is shared by Gallery, Capture, Inspector, and Jam.
 
@@ -914,11 +970,11 @@ Owns Musical Photo JSON, Cover files, serialized saves, metadata patches, rollba
 
 ### `PhotoMusicPipeline`
 
-Owns deterministic image analysis, base Musical Sequence construction, Musical Identity, and Cover generation.
+Owns cancellable visual preparation, deterministic image/color/tone analysis, base Musical Sequence construction, fallback motifs, Musical Identity, and Cover generation.
 
 ### `RetroCoverRenderer`
 
-Owns canonical pitch colors, tonal palettes, pattern halftone, Floyd-Steinberg analysis rendering, and pixel-level helpers.
+Owns canonical pitch colors, tonal palettes, pattern halftone, retained legacy Floyd-Steinberg/recolor helpers, and pixel-level rendering helpers. The active `PhotoMusicPipeline` tone-analysis path uses direct normalized-source luminance instead.
 
 ### `PhotoMetadataGenerator`
 
@@ -930,7 +986,7 @@ Owns the single audio engine, player nodes, sequence-derived completion accent, 
 
 ### `JamAudioRenderer`
 
-Owns detached offline tonal and percussion rendering, role-based stems, Future Bass, sample playback, pumping, mixing, and procedural fallbacks.
+Owns detached offline tonal/percussion rendering, completion-accent synthesis, role-based stems, Future Bass, sample playback, pumping, mixing, and procedural fallbacks.
 
 ### `MelodicSampleLibrary`
 
@@ -942,7 +998,7 @@ Owns drum sample loading, concrete kit mappings, and kit trims.
 
 ### `CameraView`
 
-Owns Capture UI state and the user-facing creation/import flow.
+Owns Capture UI state, the user-facing creation/import flow, import progress/completion visuals, and import feedback cleanup.
 
 ### `CameraController`
 
@@ -950,11 +1006,17 @@ Owns AVCaptureSession, device input, outputs, preview attachment, orientation, m
 
 ### `GalleryView`
 
-Owns grid presentation and UUID navigation to Inspector.
+Owns grid presentation, UUID navigation to Inspector, multi-selection, batch sharing/deletion, and batch Add-to-Jam routing.
 
 ### `PhotoInspectorView`
 
-Owns one-Photo presentation, share/delete actions, playback controls, and the Add-to-Jam picker flow.
+Owns one-Photo presentation, paper overlay integration, story-share presentation, delete actions, playback controls, and the Add-to-Jam picker flow.
+
+### Photo paper and edge presentation
+
+- `PhotoPaperOverlay` and `PhotoPaperMotionProvider` own the Inspector's static texture and optional CoreMotion lighting.
+- `PhotoPaperExportRenderer` applies the static texture to Photo export images.
+- `DapEdgeBlur` owns the UIKit material edge masks used by Gallery and Jam Library.
 
 ### `JamLibraryView` / `JamLibraryState`
 
@@ -966,7 +1028,7 @@ Owns Saved Jam JSON schema validation, sanitization, listing, creation, loading,
 
 ### `JamView`
 
-Owns one open Jam session's orchestration: applying persisted state, routing UI actions, arrangement rebuild requests, autosave, lifecycle teardown, panel presentation, and coordination between narrow state owners.
+Owns one open Jam session's orchestration: applying persisted state, routing UI actions, arrangement rebuild requests, export snapshot creation, autosave, lifecycle teardown, panel presentation, and coordination between narrow state owners.
 
 ### `JamSessionState`
 
@@ -1001,6 +1063,10 @@ Owns groove-region classification, stable set hashing, and the twelve hard-coded
 
 Owns deterministic abstract Jam artwork, recipe versioning, detached rendering, in-memory cache, and in-flight request deduplication.
 
+### Story export components
+
+`StoryShareComponents` owns shared template selection, preview/action surfaces, native image sharing, Save to Photos activity/toast feedback, and temporary export-file helpers. Photo and Jam export owners retain their own renderers, snapshots, coordinators, and Instagram handoff.
+
 ## Domain invariants
 
 1. Every successfully persisted Musical Photo has one stable UUID.
@@ -1008,28 +1074,29 @@ Owns deterministic abstract Jam artwork, recipe versioning, detached rendering, 
 3. Metadata is optional and never changes the Cover or Musical Sequence.
 4. Generated metadata must not overwrite a manual Photo name when preservation is requested.
 5. The original Source Image is not part of the persisted Musical Photo today.
-6. Gallery reads Covers from the shared in-memory cache, not from disk during view rendering.
-7. The persisted Musical Photo library is newest-first.
-8. One shared `MusicPlayer` arbitrates all playback and global Jam DSP.
-9. Starting a non-looping playback path stops the previous path.
-10. A running Jam loop receives replacement arrangements through latest-wins next-loop scheduling rather than a second engine.
-11. Visible Jam transport is derived from the live Jam player node.
-12. Capture acquires Source Images but does not own persisted library state.
-13. Inspector presents an existing Musical Photo and does not duplicate it.
-14. The root pitch class is the canonical source for pitch-color identity.
-15. Photo creation, Jam arrangement, role variations, grooves, and Jam Covers are deterministic for stable inputs and current algorithms.
-16. A Saved Jam references Musical Photos by stable UUID and never mutates persisted Photo sequences.
-17. `JamSlotAssignments` is the sole membership and role source for an open Jam.
-18. Initial role sorting runs only to establish an assignment; later swaps preserve explicit role state.
-19. Only the Photo assigned `.melody` supplies the current primary Melody note pool.
-20. All active assigned Photos contribute to global Jam harmony.
-21. Melody and Harmony samples are role-specific Jam behavior; nil-role Photo playback remains procedural.
-22. Drum Kit selection changes instrumentation, not the underlying regional groove pattern.
-23. Global Jam effects alter playback DSP and persist as settings; they do not rewrite the arrangement.
-24. Rendered arrangements, buffers, transport projections, panel snapshots, and DSP phase are transient.
-25. Saved Jam schema version is validated before use; unsupported versions are not silently migrated.
-26. The current product limit is three Photos per Jam.
-27. Melody has no per-note duration model; timing offsets are currently used only where explicitly generated, such as Bass variation timing.
+6. A real onboarding capture/import is persisted only after confirmation; demo onboarding playback is transient.
+7. Gallery reads Covers from the shared in-memory cache, not from disk during view rendering.
+8. The persisted Musical Photo library is newest-first.
+9. One shared `MusicPlayer` arbitrates all playback and global Jam DSP.
+10. Starting a non-looping playback path stops the previous path.
+11. A running Jam loop receives replacement arrangements through latest-wins next-loop scheduling rather than a second engine.
+12. Visible Jam transport is derived from the live Jam player node.
+13. Capture acquires Source Images but does not own persisted library state.
+14. Inspector presents an existing Musical Photo and does not duplicate it.
+15. The root pitch class is the canonical source for pitch-color identity.
+16. Photo creation, Jam arrangement, role variations, grooves, and Jam Covers are deterministic for stable inputs and current algorithms.
+17. A Saved Jam references Musical Photos by stable UUID and never mutates persisted Photo sequences.
+18. `JamSlotAssignments` is the sole membership and role source for an open Jam.
+19. Initial role sorting runs only to establish an assignment; later swaps preserve explicit role state.
+20. Only the Photo assigned `.melody` supplies the current primary Melody note pool.
+21. All active assigned Photos contribute to global Jam harmony.
+22. Melody and Harmony samples are role-specific Jam behavior; nil-role Photo playback remains procedural.
+23. Drum Kit selection changes instrumentation, not the underlying regional groove pattern.
+24. Global Jam effects alter live playback DSP and persist as settings; they do not rewrite the arrangement.
+25. Rendered arrangements, buffers, transport projections, panel snapshots, DSP phase, and Story export files are transient.
+26. Saved Jam schema version is validated before use; unsupported versions are not silently migrated.
+27. The current product limit is three Photos per Jam.
+28. Melody has no per-note duration model; timing offsets are currently used only where explicitly generated, such as Bass variation timing.
 
 ## Current intentional gaps and risks
 
@@ -1037,8 +1104,9 @@ The following are not implemented and must not be assumed to exist:
 
 - persisted per-Photo effects;
 - Studio mode;
-- export of audio, MIDI, video, animations, or Instagram Stories;
-- Gallery multi-selection, grouping, and manual reordering;
+- standalone audio or MIDI export;
+- general-purpose video, animation, or export-history features beyond the implemented Story flows;
+- Gallery grouping and manual reordering;
 - persisted original Source Images;
 - cloud sync;
 - multiplayer or collaboration;
@@ -1059,7 +1127,10 @@ Current technical or musical risks:
 - Saved Jams can retain UUID references to deleted Photos until loaded/reconciled and saved;
 - Jam Cover cache is in-memory only and can rerender after relaunch;
 - the panel backdrop is a rasterized UI snapshot and must remain separated from live sequencer transport to avoid stale animation;
-- the project has no automated regression coverage for persistence, audio scheduling, or complex Jam UI state.
+- Jam Story export currently does not apply the live Jam effect rack to exported audio;
+- Instagram Stories depends on the Instagram app, `FacebookAppID`, `LSApplicationQueriesSchemes`, and pasteboard handoff;
+- paper lighting depends on CoreMotion availability and the device motion permission;
+- the project has no automated regression coverage for persistence, audio scheduling, onboarding, export, or complex Jam UI state.
 
 These are possible future tasks, not authorization to prebuild their architecture.
 
@@ -1076,6 +1147,9 @@ Use these product terms in new documentation and copy:
 - **Vibe**: the current XY Jam mode;
 - **Drum Kit**: the concrete Jam percussion sound set;
 - **Photo Inspector**: the detail screen;
+- **Story export**: a portrait Photo or Jam share artifact rendered by Dap;
+- **Plain template**: a story containing the Cover/artwork without Dap metadata UI;
+- **Dap template**: a story containing Dap identity, musical facts, and sequence/Jam state;
 - **Studio**: a deferred explicit arrangement mode.
 
 Existing symbols such as `PhotoSound` and `PhotoLibraryViewModel` may remain. Do not perform broad renames without an explicit task.
@@ -1095,8 +1169,9 @@ Do not guess:
 - whether bundled Bass samples should replace or complement Future Bass;
 - how deleting a Photo should proactively affect every Saved Jam;
 - whether generated Jam Covers should ever be persisted or exported;
-- how Gallery multi-selection, grouping, and ordering should work;
-- exact export formats, Story integration, audio/video rendering, and animation system;
+- whether Gallery grouping and manual ordering should be added;
+- whether Story export should include global Jam effects and whether standalone audio/MIDI export is needed;
+- exact future export formats and a general animation system beyond the current Story flows;
 - what Studio means as an interaction and data model;
 - whether App Shortcuts should gain parameters, entities, or background-capable actions.
 
