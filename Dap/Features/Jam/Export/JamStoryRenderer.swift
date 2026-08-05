@@ -15,7 +15,7 @@ enum JamStoryRenderError: Error, Equatable {
 }
 
 struct JamStoryRenderer {
-    static let outputPixelSize = CGSize(width: 1080, height: 1920)
+    static let outputPixelSize = JamStoryExportLayout.canvasSize
 
     @MainActor
     func render(
@@ -104,7 +104,7 @@ private struct JamPlainStoryExportView: View {
         Image(uiImage: coverImage)
             .resizable()
             .scaledToFill()
-            .frame(width: JamStoryRenderer.outputPixelSize.width, height: JamStoryRenderer.outputPixelSize.height)
+            .frame(width: JamStoryExportLayout.canvasSize.width, height: JamStoryExportLayout.canvasSize.height)
             .clipped()
     }
 }

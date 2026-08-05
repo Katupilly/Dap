@@ -1,20 +1,106 @@
 import SwiftUI
 import UIKit
 
+/// Logical export geometry. Rects use a top-left origin; the video renderer
+/// owns the one Core Graphics conversion needed for animated overlays.
+struct JamStoryExportLayout: Sendable {
+    static let canvasSize = CGSize(width: 1080, height: 1920)
+
+    static let safeTop: CGFloat = 180
+    static let safeBottom: CGFloat = 190
+    static let horizontalInset: CGFloat = 82
+    static let sectionSpacing: CGFloat = 34
+
+    static let coverSize: CGFloat = 668
+    static let coverTopPadding: CGFloat = 6
+
+    static let photoWidth: CGFloat = 210
+    static let photoHeight: CGFloat = 252
+    static let photoSpacing: CGFloat = 18
+    static let photoRowY: CGFloat = 1041
+
+    static let sequencerPadding: CGFloat = 26
+    static let sequencerLabelWidth: CGFloat = 104
+    static let sequencerLabelSpacing: CGFloat = 10
+    static let sequencerStepSpacing: CGFloat = 5
+    static let sequencerStepHeight: CGFloat = 18
+    static let sequencerRowSpacing: CGFloat = 12
+    static let sequencerGridY: CGFloat = 1453
+
+    let canvasSize: CGSize
+
+    init(canvasSize: CGSize = Self.canvasSize) {
+        self.canvasSize = canvasSize
+    }
+
+    var contentWidth: CGFloat {
+        canvasSize.width - 2 * Self.horizontalInset
+    }
+
+    var sequencerGridX: CGFloat {
+        Self.horizontalInset
+            + Self.sequencerPadding
+            + Self.sequencerLabelWidth
+            + Self.sequencerLabelSpacing
+    }
+
+    var sequencerGridWidth: CGFloat {
+        contentWidth
+            - 2 * Self.sequencerPadding
+            - Self.sequencerLabelWidth
+            - Self.sequencerLabelSpacing
+    }
+
+    var sequencerGridHeight: CGFloat {
+        3 * Self.sequencerStepHeight + 2 * Self.sequencerRowSpacing
+    }
+
+    func photoRect(at index: Int, count: Int) -> CGRect {
+        let visibleCount = CGFloat(max(1, min(3, count)))
+        let totalWidth = visibleCount * Self.photoWidth
+            + max(0, visibleCount - 1) * Self.photoSpacing
+        let startX = (canvasSize.width - totalWidth) / 2
+        return CGRect(
+            x: startX + CGFloat(index) * (Self.photoWidth + Self.photoSpacing),
+            y: Self.photoRowY,
+            width: Self.photoWidth,
+            height: Self.photoHeight
+        )
+    }
+
+    var sequencerGridRect: CGRect {
+        CGRect(
+            x: sequencerGridX,
+            y: Self.sequencerGridY,
+            width: sequencerGridWidth,
+            height: sequencerGridHeight
+        )
+    }
+
+    var sequencerRect: CGRect {
+        sequencerGridRect
+    }
+
+    var heroImageRect: CGRect {
+        CGRect(
+            x: (canvasSize.width - Self.coverSize) / 2,
+            y: Self.photoRowY - Self.sectionSpacing - Self.coverSize,
+            width: Self.coverSize,
+            height: Self.coverSize
+        )
+    }
+}
+
 struct JamStoryExportView: View {
     let snapshot: JamStoryExportSnapshot
     let coverImage: UIImage
     let photoImagesByID: [UUID: UIImage]
 
-    private let safeTop: CGFloat = 180
-    private let safeBottom: CGFloat = 190
-    private let horizontalInset: CGFloat = 82
-
     var body: some View {
         ZStack {
             storyBackground
 
-            VStack(alignment: .leading, spacing: 34) {
+            VStack(alignment: .leading, spacing: JamStoryExportLayout.sectionSpacing) {
                 titleBlock
 
                 coverBlock
@@ -28,11 +114,11 @@ struct JamStoryExportView: View {
 
                 signature
             }
-            .padding(.top, safeTop)
-            .padding(.bottom, safeBottom)
-            .padding(.horizontal, horizontalInset)
+            .padding(.top, JamStoryExportLayout.safeTop)
+            .padding(.bottom, JamStoryExportLayout.safeBottom)
+            .padding(.horizontal, JamStoryExportLayout.horizontalInset)
         }
-        .frame(width: JamStoryRenderer.outputPixelSize.width, height: JamStoryRenderer.outputPixelSize.height)
+        .frame(width: JamStoryExportLayout.canvasSize.width, height: JamStoryExportLayout.canvasSize.height)
         .environment(\.colorScheme, .dark)
     }
 
@@ -87,7 +173,7 @@ struct JamStoryExportView: View {
         Image(uiImage: coverImage)
             .resizable()
             .scaledToFill()
-            .frame(width: 668, height: 668)
+            .frame(width: JamStoryExportLayout.coverSize, height: JamStoryExportLayout.coverSize)
             .clipShape(RoundedRectangle(cornerRadius: 42, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 42, style: .continuous)
@@ -95,11 +181,11 @@ struct JamStoryExportView: View {
             }
             .shadow(color: .black.opacity(0.34), radius: 48, y: 30)
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 6)
+            .padding(.top, JamStoryExportLayout.coverTopPadding)
     }
 
     private var photoTiles: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: JamStoryExportLayout.photoSpacing) {
             ForEach(snapshot.photos) { photo in
                 JamStoryPhotoTile(
                     photo: photo,
@@ -132,7 +218,7 @@ struct JamStoryExportView: View {
                 roleColors: snapshot.roleColors
             )
         }
-        .padding(26)
+        .padding(JamStoryExportLayout.sequencerPadding)
         .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 30, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 30, style: .continuous)
@@ -215,7 +301,10 @@ private struct JamStoryPhotoTile: View {
                         .scaledToFill()
                 }
             }
-            .frame(width: 210, height: 252)
+            .frame(
+                width: JamStoryExportLayout.photoWidth,
+                height: JamStoryExportLayout.photoHeight
+            )
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(alignment: .topLeading) {
                 if let role = photo.role {
@@ -247,7 +336,7 @@ private struct JamStoryPhotoTile: View {
                 .font(.custom("ZTTalk-Bold", size: 20, relativeTo: .caption))
                 .foregroundStyle(.white.opacity(0.74))
                 .lineLimit(1)
-                .frame(width: 210, alignment: .leading)
+                .frame(width: JamStoryExportLayout.photoWidth, alignment: .leading)
         }
     }
 
@@ -287,19 +376,19 @@ private struct JamStorySequencerGrid: View {
         let activeSteps = snapshot.steps(for: role)
         let color = Color(jamRGB: roleColors[role] ?? JamStoryExportSnapshot.fallbackAccent)
 
-        return HStack(spacing: 10) {
+        return HStack(spacing: JamStoryExportLayout.sequencerLabelSpacing) {
             Text(role.displayName.uppercased())
                 .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .caption))
                 .tracking(0.8)
                 .foregroundStyle(.white.opacity(0.56))
-                .frame(width: 104, alignment: .leading)
+                .frame(width: JamStoryExportLayout.sequencerLabelWidth, alignment: .leading)
 
-            HStack(spacing: 5) {
+            HStack(spacing: JamStoryExportLayout.sequencerStepSpacing) {
                 ForEach(0..<MusicSequence.steps, id: \.self) { step in
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(activeSteps.contains(step) ? color.opacity(0.86) : color.opacity(0.18))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 18)
+                        .frame(height: JamStoryExportLayout.sequencerStepHeight)
                 }
             }
         }

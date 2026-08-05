@@ -49,7 +49,7 @@ enum JamStoryVideoExportError: Error, LocalizedError {
 }
 
 struct JamStoryVideoRenderer {
-    static let outputPixelSize = CGSize(width: 1080, height: 1920)
+    static let outputPixelSize = JamStoryExportLayout.canvasSize
     static let framesPerSecond = 30
     static let defaultLoopCount = 4
 
@@ -297,7 +297,7 @@ struct JamStoryVideoRenderer {
             throw JamStoryVideoExportError.pixelBufferCreationFailed
         }
         do {
-            try JamStoryVideoTemplate.validateDiagnosticFrameCopy(into: diagnosticBuffer)
+            try JamStoryVideoTemplate.validateDiagnosticFrame(into: diagnosticBuffer)
         } catch {
             writer.cancelWriting()
             throw error
