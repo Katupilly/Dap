@@ -89,9 +89,16 @@ struct JamStoryVideoRenderer {
             snapshot: snapshot,
             template: configuration.template
         )
-        guard let baseImage = baseImageResult.image.cgImage else {
-            throw JamStoryVideoExportError.frameRenderingFailed
-        }
+        let coverImageData = await JamCoverRenderer.shared.data(
+            for: snapshot.coverDescriptor,
+            size: CGSize(width: 720, height: 720),
+            scale: 1
+        )
+        let photoImageDataByID = Dictionary(
+            uniqueKeysWithValues: snapshot.photos.compactMap { photo in
+                photo.imageData.map { (photo.id, $0) }
+            }
+        )
 
         let exportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("dap-jam-story-\(UUID().uuidString)", isDirectory: true)
@@ -131,7 +138,8 @@ struct JamStoryVideoRenderer {
 
             let videoDuration = try await renderSilentVideo(
                 snapshot: snapshot,
-                baseImage: baseImage,
+                coverImageData: coverImageData,
+                photoImageDataByID: photoImageDataByID,
                 template: configuration.template,
                 duration: audioDuration,
                 to: silentVideoURL,
@@ -203,35 +211,31 @@ struct JamStoryVideoRenderer {
 
     private func renderSilentVideo(
         snapshot: JamStoryExportSnapshot,
-        baseImage: CGImage,
+        coverImageData: Data,
+        photoImageDataByID: [UUID: Data],
         template: StoryShareTemplate,
         duration: CMTime,
         to destinationURL: URL,
         startedAt: Date,
         progressHandler: (@MainActor @Sendable (JamStoryExportProgress) -> Void)?
     ) async throws -> CMTime {
-        let renderTask = Task.detached(priority: .userInitiated) {
-            try await Self.writeSilentVideo(
-                snapshot: snapshot,
-                baseImage: baseImage,
-                template: template,
-                duration: duration,
-                destinationURL: destinationURL,
-                startedAt: startedAt,
-                progressHandler: progressHandler
-            )
-        }
-
-        return try await withTaskCancellationHandler {
-            try await renderTask.value
-        } onCancel: {
-            renderTask.cancel()
-        }
+        try await Self.writeSilentVideo(
+            snapshot: snapshot,
+            coverImageData: coverImageData,
+            photoImageDataByID: photoImageDataByID,
+            template: template,
+            duration: duration,
+            destinationURL: destinationURL,
+            startedAt: startedAt,
+            progressHandler: progressHandler
+        )
     }
 
-    private nonisolated static func writeSilentVideo(
+    @MainActor
+    private static func writeSilentVideo(
         snapshot: JamStoryExportSnapshot,
-        baseImage: CGImage,
+        coverImageData: Data,
+        photoImageDataByID: [UUID: Data],
         template: StoryShareTemplate,
         duration: CMTime,
         destinationURL: URL,
@@ -286,24 +290,6 @@ struct JamStoryVideoRenderer {
             throw JamStoryVideoExportError.pixelBufferCreationFailed
         }
 
-#if DEBUG
-        var diagnosticBuffer: CVPixelBuffer?
-        guard CVPixelBufferPoolCreatePixelBuffer(
-            nil,
-            pool,
-            &diagnosticBuffer
-        ) == kCVReturnSuccess, let diagnosticBuffer else {
-            writer.cancelWriting()
-            throw JamStoryVideoExportError.pixelBufferCreationFailed
-        }
-        do {
-            try JamStoryVideoTemplate.validateDiagnosticFrame(into: diagnosticBuffer)
-        } catch {
-            writer.cancelWriting()
-            throw error
-        }
-#endif
-
         let durationSeconds = CMTimeGetSeconds(duration)
         guard durationSeconds.isFinite, durationSeconds > 0 else {
             writer.cancelWriting()
@@ -314,7 +300,8 @@ struct JamStoryVideoRenderer {
         let stepDuration = 60 / Double(snapshot.bpm) / 4
         let videoTemplate = JamStoryVideoTemplate(
             snapshot: snapshot,
-            baseImage: baseImage,
+            coverImageData: coverImageData,
+            photoImageDataByID: photoImageDataByID,
             template: template
         )
         let progressStride = max(1, framesPerSecond / 10)
@@ -330,40 +317,29 @@ struct JamStoryVideoRenderer {
                     try await Task.sleep(for: .milliseconds(2))
                 }
 
-                var frameError: Error?
-                autoreleasepool {
-                    var pixelBuffer: CVPixelBuffer?
-                    guard CVPixelBufferPoolCreatePixelBuffer(
-                        nil,
-                        pool,
-                        &pixelBuffer
-                    ) == kCVReturnSuccess, let pixelBuffer else {
-                        frameError = JamStoryVideoExportError.pixelBufferCreationFailed
-                        return
-                    }
-
-                    do {
-                        let time = Double(frameIndex) / Double(framesPerSecond)
-                        try videoTemplate.render(
-                            into: pixelBuffer,
-                            time: time,
-                            stepDuration: stepDuration
-                        )
-                        let presentationTime = CMTime(
-                            value: Int64(frameIndex),
-                            timescale: CMTimeScale(framesPerSecond)
-                        )
-                        guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
-                            frameError = JamStoryVideoExportError.frameRenderingFailed
-                            return
-                        }
-                    } catch {
-                        frameError = error
-                    }
+                var pixelBuffer: CVPixelBuffer?
+                guard CVPixelBufferPoolCreatePixelBuffer(
+                    nil,
+                    pool,
+                    &pixelBuffer
+                ) == kCVReturnSuccess, let pixelBuffer else {
+                    throw JamStoryVideoExportError.pixelBufferCreationFailed
                 }
 
-                if let frameError {
-                    throw frameError
+                let time = Double(frameIndex) / Double(framesPerSecond)
+                try autoreleasepool {
+                    try videoTemplate.render(
+                        into: pixelBuffer,
+                        time: time,
+                        stepDuration: stepDuration
+                    )
+                }
+                let presentationTime = CMTime(
+                    value: Int64(frameIndex),
+                    timescale: CMTimeScale(framesPerSecond)
+                )
+                guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
+                    throw JamStoryVideoExportError.frameRenderingFailed
                 }
 
                 if frameIndex % progressStride == 0 || frameIndex == frameCount - 1 {

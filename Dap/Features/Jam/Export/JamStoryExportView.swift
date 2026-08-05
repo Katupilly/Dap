@@ -1,128 +1,203 @@
 import SwiftUI
 import UIKit
 
-/// Logical export geometry. Rects use a top-left origin; the video renderer
-/// owns the one Core Graphics conversion needed for animated overlays.
 struct JamStoryExportLayout: Sendable {
     static let canvasSize = CGSize(width: 1080, height: 1920)
-
-    static let safeTop: CGFloat = 180
-    static let safeBottom: CGFloat = 190
-    static let horizontalInset: CGFloat = 82
-    static let sectionSpacing: CGFloat = 34
-
-    static let coverSize: CGFloat = 668
-    static let coverTopPadding: CGFloat = 6
-
-    static let photoWidth: CGFloat = 210
-    static let photoHeight: CGFloat = 252
-    static let photoSpacing: CGFloat = 18
-    static let photoRowY: CGFloat = 1041
-
-    static let sequencerPadding: CGFloat = 26
-    static let sequencerLabelWidth: CGFloat = 104
-    static let sequencerLabelSpacing: CGFloat = 10
-    static let sequencerStepSpacing: CGFloat = 5
-    static let sequencerStepHeight: CGFloat = 18
-    static let sequencerRowSpacing: CGFloat = 12
-    static let sequencerGridY: CGFloat = 1453
-
-    let canvasSize: CGSize
-
-    init(canvasSize: CGSize = Self.canvasSize) {
-        self.canvasSize = canvasSize
-    }
-
-    var contentWidth: CGFloat {
-        canvasSize.width - 2 * Self.horizontalInset
-    }
-
-    var sequencerGridX: CGFloat {
-        Self.horizontalInset
-            + Self.sequencerPadding
-            + Self.sequencerLabelWidth
-            + Self.sequencerLabelSpacing
-    }
-
-    var sequencerGridWidth: CGFloat {
-        contentWidth
-            - 2 * Self.sequencerPadding
-            - Self.sequencerLabelWidth
-            - Self.sequencerLabelSpacing
-    }
-
-    var sequencerGridHeight: CGFloat {
-        3 * Self.sequencerStepHeight + 2 * Self.sequencerRowSpacing
-    }
-
-    func photoRect(at index: Int, count: Int) -> CGRect {
-        let visibleCount = CGFloat(max(1, min(3, count)))
-        let totalWidth = visibleCount * Self.photoWidth
-            + max(0, visibleCount - 1) * Self.photoSpacing
-        let startX = (canvasSize.width - totalWidth) / 2
-        return CGRect(
-            x: startX + CGFloat(index) * (Self.photoWidth + Self.photoSpacing),
-            y: Self.photoRowY,
-            width: Self.photoWidth,
-            height: Self.photoHeight
-        )
-    }
-
-    var sequencerGridRect: CGRect {
-        CGRect(
-            x: sequencerGridX,
-            y: Self.sequencerGridY,
-            width: sequencerGridWidth,
-            height: sequencerGridHeight
-        )
-    }
-
-    var sequencerRect: CGRect {
-        sequencerGridRect
-    }
-
-    var heroImageRect: CGRect {
-        CGRect(
-            x: (canvasSize.width - Self.coverSize) / 2,
-            y: Self.photoRowY - Self.sectionSpacing - Self.coverSize,
-            width: Self.coverSize,
-            height: Self.coverSize
-        )
-    }
 }
 
-struct JamStoryExportView: View {
+struct JamSnippetExportView: View {
     let snapshot: JamStoryExportSnapshot
     let coverImage: UIImage
     let photoImagesByID: [UUID: UIImage]
+    let currentStep: Int?
+    let pulse: CGFloat
 
     var body: some View {
         ZStack {
-            storyBackground
+            jamBackground
 
-            VStack(alignment: .leading, spacing: JamStoryExportLayout.sectionSpacing) {
-                titleBlock
+            VStack(alignment: .leading, spacing: 0) {
+                header
 
-                coverBlock
+                Spacer(minLength: 54)
 
-                photoTiles
+                artworkCard
 
-                sequencerBlock
+                Spacer(minLength: 56)
 
+                sequencer
 
                 Spacer(minLength: 0)
 
-                signature
+                Text("MADE WITH DAP")
+                    .font(.custom("ZTTalk-Bold", size: 22, relativeTo: .footnote))
+                    .tracking(2.2)
+                    .foregroundStyle(.white.opacity(0.54))
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
-            .padding(.top, JamStoryExportLayout.safeTop)
-            .padding(.bottom, JamStoryExportLayout.safeBottom)
-            .padding(.horizontal, JamStoryExportLayout.horizontalInset)
+            .padding(.horizontal, 88)
+            .padding(.top, 132)
+            .padding(.bottom, 128)
         }
         .frame(width: JamStoryExportLayout.canvasSize.width, height: JamStoryExportLayout.canvasSize.height)
+        .clipped()
         .environment(\.colorScheme, .dark)
     }
 
-    private var storyBackground: some View {
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("DAP JAM")
+                .font(.custom("ZTTalk-Bold", size: 28, relativeTo: .caption))
+                .tracking(4.2)
+                .foregroundStyle(.white.opacity(0.56))
+
+            Text(snapshot.jamName)
+                .font(.custom("ZTTalk-Bold", size: 86, relativeTo: .largeTitle))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.68)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 14) {
+                Text(regionDisplayName(snapshot.region).uppercased())
+                    .font(.custom("ZTTalk-Bold", size: 24, relativeTo: .headline))
+                    .tracking(1.6)
+
+                Circle()
+                    .fill(.white.opacity(0.42))
+                    .frame(width: 7, height: 7)
+
+                Text("\(snapshot.bpm) BPM")
+                    .font(.custom("ZTTalk-Medium", size: 24, relativeTo: .headline))
+            }
+            .foregroundStyle(.white.opacity(0.74))
+        }
+    }
+
+    private var artworkCard: some View {
+        Group {
+            if visiblePhotos.isEmpty {
+                Image(uiImage: coverImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 574)
+                    .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+            } else {
+                HStack(spacing: 12) {
+                    ForEach(visiblePhotos) { photo in
+                        photoCrop(photo)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 574)
+                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+            }
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity)
+        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 46, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 46, style: .continuous)
+                .stroke(.white.opacity(0.18), lineWidth: 2)
+        }
+        .shadow(
+            color: artworkColor.opacity(0.22 + Double(artworkPulse) * 0.18),
+            radius: 30 + artworkPulse * 12,
+            y: 20
+        )
+        .scaleEffect(1 + artworkPulse * 0.012)
+    }
+
+    private func photoCrop(_ photo: JamStoryExportSnapshot.Photo) -> some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(jamRGB: photo.accentColor).opacity(0.60),
+                    Color(jamRGB: photo.accentColor).opacity(0.24)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            if let image = photoImagesByID[photo.id] {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 574)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var sequencer: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("JAM LOOP")
+                    .font(.custom("ZTTalk-Bold", size: 24, relativeTo: .headline))
+                    .tracking(1.8)
+
+                Spacer(minLength: 0)
+
+                Text("16 STEPS")
+                    .font(.custom("ZTTalk-Medium", size: 21, relativeTo: .subheadline))
+                    .foregroundStyle(.white.opacity(0.52))
+            }
+            .foregroundStyle(.white)
+
+            HStack(spacing: 8) {
+                ForEach(0..<MusicSequence.steps, id: \.self) { step in
+                    stepCell(step)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 42)
+        }
+        .padding(28)
+        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .stroke(.white.opacity(0.15), lineWidth: 1.5)
+        }
+    }
+
+    private var visiblePhotos: [JamStoryExportSnapshot.Photo] {
+        Array(snapshot.photos.prefix(3))
+    }
+
+    private func stepCell(_ step: Int) -> some View {
+        let roles = activeRoles(at: step)
+        let isPlayhead = currentStep == step
+        let isActive = !roles.isEmpty
+        let color = Color(jamRGB: blendedColor(
+            roles.compactMap { snapshot.roleColors[$0] },
+            fallback: JamStoryExportSnapshot.fallbackAccent
+        ))
+
+        return RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(isActive ? color.opacity(0.86) : .white.opacity(0.11))
+            .frame(maxWidth: .infinity)
+            .frame(height: 42)
+            .overlay {
+                if isPlayhead {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(.white.opacity(0.16 + Double(normalizedPulse) * 0.10))
+                }
+            }
+            .overlay {
+                if isPlayhead {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(.white.opacity(0.92), lineWidth: 2)
+                }
+            }
+            .shadow(
+                color: isPlayhead ? .white.opacity(0.25 + Double(normalizedPulse) * 0.16) : .clear,
+                radius: isPlayhead ? 7 : 0
+            )
+    }
+
+    private var jamBackground: some View {
         let colors = backgroundColors
 
         return ZStack {
@@ -133,19 +208,19 @@ struct JamStoryExportView: View {
             )
 
             Circle()
-                .fill(colors.highlight.opacity(0.20))
-                .frame(width: 720, height: 720)
-                .blur(radius: 90)
-                .offset(x: 310, y: -600)
+                .fill(colors.highlight.opacity(0.22))
+                .frame(width: 820, height: 820)
+                .blur(radius: 110)
+                .offset(x: 340, y: -690)
 
             Circle()
-                .fill(colors.base.opacity(0.28))
-                .frame(width: 760, height: 760)
-                .blur(radius: 110)
-                .offset(x: -360, y: 420)
+                .fill(colors.base.opacity(0.25))
+                .frame(width: 900, height: 900)
+                .blur(radius: 130)
+                .offset(x: -420, y: 620)
 
             LinearGradient(
-                colors: [.black.opacity(0.10), .black.opacity(0.34)],
+                colors: [.black.opacity(0.08), .black.opacity(0.38)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -153,103 +228,42 @@ struct JamStoryExportView: View {
         .ignoresSafeArea()
     }
 
-    private var titleBlock: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("DAP JAM")
-                .font(.custom("ZTTalk-Bold", size: 24, relativeTo: .caption))
-                .tracking(3.8)
-                .foregroundStyle(.white.opacity(0.52))
-
-            Text(snapshot.jamName)
-                .font(.custom("ZTTalk-Bold", size: 82, relativeTo: .largeTitle))
-                .foregroundStyle(.white)
-                .lineLimit(2)
-                .minimumScaleFactor(0.72)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var coverBlock: some View {
-        Image(uiImage: coverImage)
-            .resizable()
-            .scaledToFill()
-            .frame(width: JamStoryExportLayout.coverSize, height: JamStoryExportLayout.coverSize)
-            .clipShape(RoundedRectangle(cornerRadius: 42, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 42, style: .continuous)
-                    .stroke(.white.opacity(0.20), lineWidth: 2)
-            }
-            .shadow(color: .black.opacity(0.34), radius: 48, y: 30)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, JamStoryExportLayout.coverTopPadding)
-    }
-
-    private var photoTiles: some View {
-        HStack(spacing: JamStoryExportLayout.photoSpacing) {
-            ForEach(snapshot.photos) { photo in
-                JamStoryPhotoTile(
-                    photo: photo,
-                    image: photoImagesByID[photo.id]
-                )
-            }
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private var sequencerBlock: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(regionDisplayName(snapshot.region).uppercased())
-                        .font(.custom("ZTTalk-Bold", size: 22, relativeTo: .headline))
-                        .tracking(1.4)
-                        .foregroundStyle(.white)
-
-                    Text("\(drumKitDisplayName(snapshot.drumKit)) kit · \(snapshot.bpm) BPM")
-                        .font(.custom("ZTTalk-Medium", size: 22, relativeTo: .subheadline))
-                        .foregroundStyle(.white.opacity(0.58))
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            JamStorySequencerGrid(
-                snapshot: snapshot.sequencerSnapshot,
-                roleColors: snapshot.roleColors
-            )
-        }
-        .padding(JamStoryExportLayout.sequencerPadding)
-        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .stroke(.white.opacity(0.16), lineWidth: 1.5)
-        }
-    }
-
-    private var signature: some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(.white.opacity(0.86))
-                .frame(width: 9, height: 9)
-
-            Text("Made with Dap")
-                .font(.custom("ZTTalk-Bold", size: 24, relativeTo: .footnote))
-                .foregroundStyle(.white.opacity(0.62))
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
-
     private var backgroundColors: (shadow: Color, dark: Color, base: Color, highlight: Color) {
-        let accents = snapshot.roleColors.values
-        let first = accents.first ?? JamStoryExportSnapshot.fallbackAccent
-        let base = blendedColor(Array(accents), fallback: first)
         let palette = RetroCoverRenderer.tonalPalette(for: dominantPitch)
+        let accents = JamRole.allCases.compactMap { snapshot.roleColors[$0] }
+        let blendedAccent = blendedColor(accents, fallback: palette.base)
+
         return (
             Color(jamRGB: palette.shadow).opacity(0.98),
-            Color(jamRGB: first).opacity(0.78),
-            Color(jamRGB: base).opacity(0.82),
+            Color(jamRGB: blendedAccent).opacity(0.72),
+            Color(jamRGB: palette.base).opacity(0.76),
             Color(jamRGB: palette.highlight)
         )
+    }
+
+    private var artworkColor: Color {
+        Color(jamRGB: RetroCoverRenderer.tonalPalette(for: dominantPitch).highlight)
+    }
+
+    private var artworkPulse: CGFloat {
+        guard pulse > 0,
+              let currentStep,
+              aggregatedSteps.contains(currentStep) else {
+            return 0
+        }
+        return normalizedPulse
+    }
+
+    private var normalizedPulse: CGFloat {
+        min(max(pulse, 0), 1)
+    }
+
+    private var aggregatedSteps: Set<Int> {
+        Set(JamRole.allCases.flatMap { snapshot.sequencerSnapshot.steps(for: $0) })
+    }
+
+    private func activeRoles(at step: Int) -> [JamRole] {
+        JamRole.allCases.filter { snapshot.sequencerSnapshot.steps(for: $0).contains(step) }
     }
 
     private var dominantPitch: PitchClass {
@@ -273,124 +287,6 @@ struct JamStoryExportView: View {
         case .bright: "Bright"
         case .deep: "Deep"
         case .intense: "Intense"
-        }
-    }
-
-    private func drumKitDisplayName(_ kit: MusicDrumKit) -> String {
-        switch kit {
-        case .soft: "Soft"
-        case .club: "Club"
-        case .breakbeat: "Break"
-        case .metal: "Metal"
-        }
-    }
-}
-
-private struct JamStoryPhotoTile: View {
-    let photo: JamStoryExportSnapshot.Photo
-    let image: UIImage?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ZStack {
-                fallbackFill
-
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                }
-            }
-            .frame(
-                width: JamStoryExportLayout.photoWidth,
-                height: JamStoryExportLayout.photoHeight
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(alignment: .topLeading) {
-                if let role = photo.role {
-                    Text(role.displayName.uppercased())
-                        .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .caption))
-                        .tracking(0.9)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(.black.opacity(0.54), in: Capsule())
-                        .padding(12)
-                }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                Text(photo.noteLabel)
-                    .font(.custom("ZTTalk-Bold", size: 18, relativeTo: .caption))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(.black.opacity(0.54), in: Capsule())
-                    .padding(12)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color(jamRGB: photo.accentColor).opacity(0.66), lineWidth: 2)
-            }
-
-            Text(photo.title)
-                .font(.custom("ZTTalk-Bold", size: 20, relativeTo: .caption))
-                .foregroundStyle(.white.opacity(0.74))
-                .lineLimit(1)
-                .frame(width: JamStoryExportLayout.photoWidth, alignment: .leading)
-        }
-    }
-
-    private var fallbackFill: some View {
-        LinearGradient(
-            colors: [
-                Color(jamRGB: photo.accentColor).opacity(0.42),
-                .black.opacity(0.20),
-                Color(jamRGB: photo.accentColor).opacity(0.22)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .overlay {
-            Image(systemName: "photo")
-                .font(.system(size: 42, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.26))
-        }
-    }
-}
-
-private struct JamStorySequencerGrid: View {
-    let snapshot: JamSequencerSnapshot
-    let roleColors: [JamRole: RGBColor]
-
-    private static let roles: [JamRole] = [.bass, .harmony, .melody]
-
-    var body: some View {
-        VStack(spacing: 12) {
-            ForEach(Self.roles, id: \.self) { role in
-                row(for: role)
-            }
-        }
-    }
-
-    private func row(for role: JamRole) -> some View {
-        let activeSteps = snapshot.steps(for: role)
-        let color = Color(jamRGB: roleColors[role] ?? JamStoryExportSnapshot.fallbackAccent)
-
-        return HStack(spacing: JamStoryExportLayout.sequencerLabelSpacing) {
-            Text(role.displayName.uppercased())
-                .font(.custom("ZTTalk-Bold", size: 17, relativeTo: .caption))
-                .tracking(0.8)
-                .foregroundStyle(.white.opacity(0.56))
-                .frame(width: JamStoryExportLayout.sequencerLabelWidth, alignment: .leading)
-
-            HStack(spacing: JamStoryExportLayout.sequencerStepSpacing) {
-                ForEach(0..<MusicSequence.steps, id: \.self) { step in
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(activeSteps.contains(step) ? color.opacity(0.86) : color.opacity(0.18))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: JamStoryExportLayout.sequencerStepHeight)
-                }
-            }
         }
     }
 }

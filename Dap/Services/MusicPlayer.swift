@@ -212,11 +212,10 @@ final class MusicPlayer {
             }
 
             if loops {
-                self.playerNode.scheduleBuffer(
+                self.scheduleLoopBuffer(
                     buffer,
-                    at: nil,
-                    options: .loops,
-                    completionHandler: nil
+                    on: self.playerNode,
+                    options: .loops
                 )
                 guard !Task.isCancelled,
                       self.playbackGeneration == generation else {
@@ -396,11 +395,10 @@ final class MusicPlayer {
             musicPlaybackLogger.debug(
                 "jam buffer will schedule: generation=\(generation, privacy: .public)"
             )
-            self.jamPlayerNode.scheduleBuffer(
+            self.scheduleLoopBuffer(
                 buffer,
-                at: nil,
-                options: .loops,
-                completionHandler: nil
+                on: self.jamPlayerNode,
+                options: .loops
             )
             musicPlaybackLogger.debug(
                 "jam buffer scheduled synchronously: generation=\(generation, privacy: .public)"
@@ -648,6 +646,14 @@ final class MusicPlayer {
             channelData[1][i] = samples.right[i]
         }
         return buffer
+    }
+
+    private func scheduleLoopBuffer(
+        _ buffer: AVAudioPCMBuffer,
+        on node: AVAudioPlayerNode,
+        options: AVAudioPlayerNodeBufferOptions
+    ) {
+        node.scheduleBuffer(buffer, at: nil, options: options, completionHandler: nil)
     }
 
     // MARK: - Interruption handling

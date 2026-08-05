@@ -20,7 +20,9 @@ struct JamStoryRenderer {
     @MainActor
     func render(
         snapshot: JamStoryExportSnapshot,
-        template: StoryShareTemplate = .dap
+        template: StoryShareTemplate = .dap,
+        currentStep: Int? = nil,
+        pulse: CGFloat = 0
     ) async throws -> JamStoryRenderResult {
         let coverData = await JamCoverRenderer.shared.data(
             for: snapshot.coverDescriptor,
@@ -61,10 +63,12 @@ struct JamStoryRenderer {
             }
         )
 
-        let content = JamStoryExportView(
+        let content = JamSnippetExportView(
             snapshot: snapshot,
             coverImage: coverImage,
-            photoImagesByID: photoImagesByID
+            photoImagesByID: photoImagesByID,
+            currentStep: currentStep,
+            pulse: pulse
         )
             .frame(width: Self.outputPixelSize.width, height: Self.outputPixelSize.height)
             .environment(\.colorScheme, .dark)
