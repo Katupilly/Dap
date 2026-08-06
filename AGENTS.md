@@ -225,6 +225,15 @@ Use the repository tree over this summary when they differ.
 
 Read `CONTEXT.md` and the implementation for detailed current contracts. Do not duplicate volatile feature internals here.
 
+### Musical determinism
+
+- Derive user-visible musical decisions from stable content inputs or persisted domain data, never from transient identity, clock time, process order, unordered collection traversal, or unconstrained runtime randomness.
+- Use the repository's canonical stable content signature—currently `visualSignature` where that contract applies—instead of UUIDs as a seed for arrangement, role, groove, or transformation decisions. Do not create a parallel seed source.
+- The same ordered inputs and the same persisted settings must produce the same musical result across launches and devices. Preserve input order when order is part of the contract.
+- Jam transformations may change arrangement characteristics, but they must preserve the recognizable musical identity supplied by the source Musical Photos unless the task explicitly changes that product contract.
+- Before changing a seed, mapping, arrangement invariant, or deterministic ownership boundary, inspect all producers and consumers and update `CONTEXT.md` in the same task.
+- Validate deterministic algorithm changes separately from listening quality: verify same-input stability, meaningful variation across distinct inputs, and preservation of documented musical invariants. Do not claim sound quality without listening validation.
+
 ### State and concurrency
 
 - Every mutable state value has one clear owner.

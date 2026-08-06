@@ -170,7 +170,7 @@ Current behavior:
 - select Drum Kit `Auto`, `Soft`, `Club`, `Break`, or `Metal`;
 - apply contextual deterministic arrangement variations to Bass, Harmony, or Melody;
 - enable and adjust global Reverb, Delay, and LFO/tremolo;
-- play one fixed 16-step loop at 96 BPM;
+- play one fixed 16-step loop at global 96 BPM; individual Photo BPM is standalone and does not set Jam transport;
 - open a Jam Share flow from the session header;
 - derive visible step and active-photo state from the live `AVAudioPlayerNode` transport;
 - queue latest-wins arrangement replacements for the next loop boundary;
@@ -198,7 +198,9 @@ A Musical Photo contains:
 - optional description;
 - creation date;
 - Cover filename;
-- `MusicSequence`.
+- `MusicSequence`;
+- `algorithmVersion` (`3` for the active pipeline; missing values decode as legacy v2);
+- optional `visualSignature` for stable normalized visual identity. Legacy v2 records may not have one.
 
 ### Cover
 
@@ -232,7 +234,7 @@ The tonal identity derived during photo analysis:
 - gate;
 - octave range.
 
-The root pitch class is the canonical connection between music, persisted Cover color, and Inspector background color.
+The root pitch class is derived directly from the relevant dominant chromatic palette color: twelve hue sectors map to the documented circle of fifths. Neutral or non-chromatic images use the explicit stable C fallback. It is the canonical connection between music, persisted Cover color, and Inspector background color.
 
 ### Voice Role
 
@@ -401,25 +403,26 @@ The normalized image is drawn into a 64×64 RGBA buffer.
 
 The analysis computes:
 
-- mean RGB, hue, saturation, and luminance;
-- chromatic hue samples;
+- alpha-aware mean RGB, hue, saturation, and luminance in normalized sRGB;
+- a small weighted chromatic palette with dominant, secondary, contrast, and accent entries;
 - circular hue variance;
 - Sobel edge density;
-- twelve weighted hue bins;
-- a stable FNV-style seed from pixel bytes.
+- a stable content signature from the normalized visual raster.
 
-The root pitch class is selected from softened weighted hue bins using the stable seed. The result is deterministic for the same analyzed pixels and current algorithm.
+The root is the dominant relevant palette sector mapped through the circle of fifths; no seed, hash, or UUID selects it. Neutrals are ignored when sufficient chromatic content exists. The result is deterministic for the same normalized image and current algorithm.
 
-Current color-pipeline algorithm constant: `2`.
+The active photo-to-music algorithm version is `3`, persisted on `PhotoSound` with the visual signature.
 
 ### 3. Tone analysis
 
-Tone analysis reads direct normalized-source luminance. Significant tone count is measured from a version capped at 256 px on its longest side, and note generation uses a separate 16×8 tone grid. The active pipeline does not use the retained `RetroCoverRenderer.floydSteinberg` helper for this stage.
+Tone analysis reads the normalized source in a fixed 16×8 spatial grid. Each temporal column produces at most one primary melodic event by selecting the most relevant region; rests are controlled by local luminance/chromatic contrast.
 
 Tone analysis derives:
 
-- significant tone count from the downsampled normalized source;
-- a 16×8 tone grid for note generation.
+- local color group and palette relation;
+- scale degree relative to the photo palette and safe scale;
+- vertical/luminance register;
+- saturation velocity, contrast presence/accent, and edge-density gate.
 
 ### 4. Sequence construction
 
@@ -427,18 +430,15 @@ Current mappings:
 
 - root: selected root pitch class;
 - BPM: luminance mapped and clamped to 70...140;
-- scale:
-  - high hue variance → whole tone;
-  - medium hue variance → dorian;
-  - otherwise saturation chooses major or minor pentatonic;
-- octave range: significant tone count;
+- scale: saturation, palette diversity, and contrast choose a safe major or minor pentatonic family;
+- octave range: selected spatial feature rows;
 - gate: Sobel edge density mapped from long to short;
 - waveform:
   - hue from 90° through under 300° → square;
   - remaining hues → triangle;
-- notes: nonzero levels from the 16×8 tone grid.
+- notes: at most one event per step, with local color participating directly in the safe scale degree.
 
-If the tone grid is empty, tone analysis fails, or the color profile is invalid, the pipeline preserves the available finite profile where possible and emits a deterministic five-note motif at steps 0, 3, 6, 10, and 14. Three pentatonic motif variants, fallback root selection, register, gate, and velocity are derived from the stable image seed and remain inside the safe MIDI range.
+If spatial analysis is empty, fails, or the color profile is invalid, the pipeline preserves the available finite profile where possible and emits a deterministic four-note fallback at steps 0, 4, 8, and 12. Neutral fallback uses C and does not derive motif identity from a seed or UUID.
 
 ### 5. Cover rendering
 
@@ -468,7 +468,9 @@ This is the canonical pitch-to-color path. The persisted Cover and Inspector use
 
 ### 7. Essential persistence
 
-The pipeline creates a new UUID, a `PhotoSound` with nil metadata, and PNG Cover data. The essential result is persisted before it appears in shared state. Visual preparation may run before the user confirms a Photo, but only the confirmed result enters persistence.
+The pipeline creates a new persistence UUID, a v3 `PhotoSound` with nil metadata, its stable normalized visual signature, and PNG Cover data. The essential result is persisted before it appears in shared state. Visual preparation may run before the user confirms a Photo, but only the confirmed result enters persistence.
+
+Persisted v2 `PhotoSound` values continue to decode and play their existing `MusicSequence` unchanged. They are not regenerated automatically; legacy records without new metadata keep the v2 default and may derive only a sequence-based Jam key when needed.
 
 ### 8. Progressive metadata
 
@@ -662,7 +664,7 @@ For a fresh selection, playable Photos are sorted by:
 
 1. average MIDI register;
 2. note count;
-3. UUID string.
+3. stable visual signature.
 
 Roles are assigned as:
 
@@ -674,12 +676,7 @@ After initial assignment, role identity is explicit state. Drag-and-drop swaps r
 
 ### Global harmony
 
-All selected notes are counted by pitch class. The builder evaluates every root for major pentatonic and minor pentatonic and selects the candidate with greatest note coverage.
-
-Ties prefer:
-
-1. major pentatonic over minor pentatonic;
-2. lower root pitch class within the same scale.
+For one active Photo, the builder preserves that Photo's root and scale. For multiple active Photos, selected notes are scored against the available `MusicScale` values and roots, with source-scale matches used as a tie preference.
 
 All active assigned Photos influence this root and scale. Reserve Photos do not enter the arrangement builder.
 
@@ -746,7 +743,7 @@ Melody intents:
 - Sparse;
 - Surprise.
 
-Bass and Harmony persist an intent plus generation counter. Melody persists a generation counter; the UI intent guides a deterministic search across rhythm, contour, register, and full variation families. Applying an option increments/searches generation until it finds a sufficiently different valid arrangement or uses the defined fallback path.
+Bass and Harmony persist an intent plus generation counter. Melody persists a generation counter; its deterministic variation family may adjust register, density, intensity, and articulation while retaining the source structure as far as the selected Vibe permits. Variations do not replace the source with a regional motif template.
 
 Variations remain deterministic for the same Jam document, source Photos, Vibe region, and current algorithm. They do not mutate persisted Musical Photo sequences.
 
@@ -756,92 +753,40 @@ The Melody's primary pitch material comes from only one Musical Photo: the photo
 
 The builder passes only that photo's source notes through:
 
-`source notes → register shift → global-scale snap → transformed Melody pool`
+`source notes → one representative event per step → Vibe density → register/scale adjustment → Melody`
 
 All active assigned Photos still influence:
 
 - global root and scale;
-- sorted UUIDs used by the Melody seed;
+- sorted visual signatures used by deterministic Jam variation;
 - Bass and Harmony accompaniment;
 - which photo becomes the Melody role.
 
-The other photos do not currently add equal pitch candidates to the Melody pool.
+The other photos do not currently add equal pitch candidates to the Melody pool. The active source sequence contributes at most one primary Melody event per step.
 
-### Melody Motif Engine
+### Melody preservation
 
-The Motif Engine replaces the previous one-to-one sampled-note transformation.
-
-It builds:
-
-- phrase A in steps 0...7;
-- related variation A' in steps 8...15;
-- one anchor pitch class;
-- one regional contour;
-- one regional rhythm template;
-- semantic attack roles: anchor, passing, climax, resolution.
-
-Available contours:
-
-- ascending;
-- descending;
-- arch;
-- valley;
-- pendulum;
-- repeated anchor.
-
-Regional attack counts per half:
-
-- Airy: 2 or 3;
-- Bright: 3 or 4;
-- Deep: 2 or 3;
-- Intense: 4 or 5.
-
-Regional rhythm templates:
-
-- Airy: `[1,4,7]`, `[0,3,6]`, `[2,5]`;
-- Bright: `[0,2,5,7]`, `[1,3,6]`, `[0,3,5,7]`;
-- Deep: `[0,4,7]`, `[2,5]`, `[1,4,6]`;
-- Intense: `[0,2,3,6,7]`, `[1,2,4,6]`, `[0,3,4,5,7]`.
-
-A' preserves the anchor and contour and may apply one deterministic variation kind:
-
-- internal pitch change;
-- internal one-step rhythm shift;
-- octave shift at the A' climax;
-- velocity accent.
-
-Additional rules:
-
-- stable degrees prefer root, third, fifth, then seventh when present;
-- source-note occurrence helps select the anchor;
-- Melody remains within MIDI 60...96;
-- no more than one octave jump is permitted per loop;
-- octave variation is available only to Bright and Intense selection sets;
-- large leaps are softened when not intentional;
-- repeated single-note halves are normalized with a scale-neighbor adjustment;
-- close simultaneous Bass conflicts are resolved by octave displacement or scale-neighbor choice;
-- Melody notes keep `timingOffsetSteps == nil`;
-- per-note duration does not exist in the current model, so Melody articulation is expressed through attack spacing and velocity.
+Melody preserves the source step positions, relative contour, scale degrees, density relationship, and accents as far as the current Vibe and global-scale compatibility allow. It keeps one note per retained source step, remains in the Jam scale and MIDI 60...96 range, and bounds large register leaps. Vibe and Arrange can adjust density, register, gate, intensity, and articulation without silently replacing the photo structure. `timingOffsetSteps` remains nil for Melody notes; the model has no per-note duration.
 
 ### Melody determinism
 
-The local FNV-1a 64-bit seed includes:
+The local deterministic variation key includes:
 
-- active assigned UUID strings in sorted order;
+- active assigned visual signatures in sorted order;
 - global root pitch class;
 - global scale raw value;
 - Jam region;
-- transformed Melody source-note step and MIDI values.
+- source Melody note steps and MIDI values.
 
-Runtime randomness, `Hasher`, `Date`, and new UUID generation are not used.
+Runtime randomness, `Hasher`, `Date`, and Photo UUIDs are not used for musical variation. A v3 visual signature is the stable content key; legacy v2 records without one use a deterministic key derived from their persisted sequence.
 
-Raw `vibePosition` is not hashed. However, transformed Melody MIDI values depend on rounded register shift. Crossing a register-shift threshold can therefore change the seed and rebuild the motif even inside the same region. This is a current known behavior.
+The UUID remains the persistence and UI identity only.
 
 ### Groove selection
 
 The Vibe quadrant selects Airy, Bright, Deep, or Intense.
 
-Each region has three hard-coded 16-step variants. Variant index is derived from FNV-1a hashing of sorted active assigned UUID strings, so the same active assignment set and region produce the same pattern.
+Each region has three hard-coded 16-step variants. Variant index is derived deterministically from the sorted visual signatures of the active Photo set, so reimporting the same visual content with new UUIDs does not change the groove.
 
 Patterns can contain kick, snare, closed hat, open hat, and rim events with velocity.
 
@@ -931,7 +876,6 @@ The app does not persist:
 - rendered Jam arrangements or audio buffers;
 - generated Jam Cover PNG files;
 - export history;
-- algorithm-version metadata for Musical Photos;
 - migration logic beyond strict Saved Jam schema-version rejection.
 
 Story export files are transient. `DapExportFileHelper` prepares files under the temporary directory for native sharing, while Jam video rendering uses a separate temporary working directory. Export coordinators remove those files on cancellation, dismissal, or after the share lifecycle completes. No export history is written to Application Support.
@@ -970,7 +914,7 @@ Owns Musical Photo JSON, Cover files, serialized saves, metadata patches, rollba
 
 ### `PhotoMusicPipeline`
 
-Owns cancellable visual preparation, deterministic image/color/tone analysis, base Musical Sequence construction, fallback motifs, Musical Identity, and Cover generation.
+Owns cancellable visual preparation, deterministic image/color/spatial analysis, versioned Musical Sequence construction, stable visual signatures, Musical Identity, and Cover generation.
 
 ### `RetroCoverRenderer`
 
@@ -1053,11 +997,11 @@ Owns only the visible current step and active Photo UUIDs projected from the liv
 
 ### `JamArrangementBuilder`
 
-Owns initial role assignment, global harmony, Vibe interpolation, Bass/Harmony transformation, contextual role variations, Melody Motif Engine, and active-step attribution.
+Owns initial role assignment, global harmony, Vibe interpolation, Bass/Harmony transformation, source-preserving Melody construction, contextual role variations, and active-step attribution.
 
 ### `JamGrooveLibrary`
 
-Owns groove-region classification, stable set hashing, and the twelve hard-coded percussion variants.
+Owns groove-region classification, stable visual-signature set hashing, and the twelve hard-coded percussion variants.
 
 ### `JamCoverRenderer`
 
@@ -1083,20 +1027,21 @@ Owns deterministic abstract Jam artwork, recipe versioning, detached rendering, 
 12. Visible Jam transport is derived from the live Jam player node.
 13. Capture acquires Source Images but does not own persisted library state.
 14. Inspector presents an existing Musical Photo and does not duplicate it.
-15. The root pitch class is the canonical source for pitch-color identity.
-16. Photo creation, Jam arrangement, role variations, grooves, and Jam Covers are deterministic for stable inputs and current algorithms.
-17. A Saved Jam references Musical Photos by stable UUID and never mutates persisted Photo sequences.
-18. `JamSlotAssignments` is the sole membership and role source for an open Jam.
-19. Initial role sorting runs only to establish an assignment; later swaps preserve explicit role state.
-20. Only the Photo assigned `.melody` supplies the current primary Melody note pool.
-21. All active assigned Photos contribute to global Jam harmony.
-22. Melody and Harmony samples are role-specific Jam behavior; nil-role Photo playback remains procedural.
-23. Drum Kit selection changes instrumentation, not the underlying regional groove pattern.
-24. Global Jam effects alter live playback DSP and persist as settings; they do not rewrite the arrangement.
-25. Rendered arrangements, buffers, transport projections, panel snapshots, DSP phase, and Story export files are transient.
-26. Saved Jam schema version is validated before use; unsupported versions are not silently migrated.
-27. The current product limit is three Photos per Jam.
-28. Melody has no per-note duration model; timing offsets are currently used only where explicitly generated, such as Bass variation timing.
+15. The root pitch class is the canonical source for pitch-color identity and is selected from the relevant palette, not from a seed or UUID.
+16. New PhotoSounds persist algorithm version 3 and a stable visual signature; legacy v2 PhotoSounds continue to decode and play without automatic regeneration.
+17. Photo creation, Jam arrangement, role variations, grooves, and Jam Covers are deterministic for stable inputs and current algorithms.
+18. A Saved Jam references Musical Photos by stable UUID and never mutates persisted Photo sequences.
+19. `JamSlotAssignments` is the sole membership and role source for an open Jam.
+20. Initial role sorting runs only to establish an assignment; later swaps preserve explicit role state.
+21. Only the Photo assigned `.melody` supplies the current primary Melody note pool, and Jam retains its source step structure as far as Vibe allows.
+22. All active assigned Photos contribute to global Jam harmony.
+23. Melody and Harmony samples are role-specific Jam behavior; nil-role Photo playback remains procedural.
+24. Drum Kit selection changes instrumentation, not the underlying regional groove pattern; groove variation uses visual signatures rather than Photo UUIDs.
+25. Global Jam effects alter live playback DSP and persist as settings; they do not rewrite the arrangement.
+26. Rendered arrangements, buffers, transport projections, panel snapshots, DSP phase, and Story export files are transient.
+27. Saved Jam schema version is validated before use; unsupported versions are not silently migrated.
+28. The current product limit is three Photos per Jam.
+29. Melody has no per-note duration model; timing offsets are currently used only where explicitly generated, such as Bass variation timing.
 
 ## Current intentional gaps and risks
 
@@ -1112,15 +1057,12 @@ The following are not implemented and must not be assumed to exist:
 - multiplayer or collaboration;
 - remote services;
 - analytics;
-- a test target;
 - Saved Jam schema migration beyond rejecting unsupported versions.
 
 Current technical or musical risks:
 
-- Bass, Harmony, and Melody variation generation still requires broad listening validation across intents, grooves, Vibe regions, and Photo sets;
-- Melody variation search is intentionally complex and can fall back when no candidate meets the requested difference threshold;
-- Melody A/A' identity can change at rounded register-shift thresholds because transformed MIDI values enter the seed;
-- additional selected Photos alter Melody context and seed but do not contribute equal Melody pitch material;
+- Bass, Harmony, Melody variations, and grooves still require broad listening validation across intents, Vibe regions, and Photo sets;
+- additional selected Photos alter Melody context and its visual-signature seed but do not contribute equal Melody pitch material;
 - pumping is not circular across the loop boundary;
 - there is no per-note duration model for Melody articulation;
 - final output uses clamping rather than a dedicated limiter/master stage;
@@ -1130,7 +1072,7 @@ Current technical or musical risks:
 - Jam Story export currently does not apply the live Jam effect rack to exported audio;
 - Instagram Stories depends on the Instagram app, `FacebookAppID`, `LSApplicationQueriesSchemes`, and pasteboard handoff;
 - paper lighting depends on CoreMotion availability and the device motion permission;
-- the project has no automated regression coverage for persistence, audio scheduling, onboarding, export, or complex Jam UI state.
+- broad automated regression coverage for persistence, audio scheduling, onboarding, export, and complex Jam UI state remains limited; focused photo-pipeline invariants have a test target.
 
 These are possible future tasks, not authorization to prebuild their architecture.
 
