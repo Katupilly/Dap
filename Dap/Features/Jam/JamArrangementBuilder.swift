@@ -15,7 +15,11 @@ struct JamArrangementBuilder {
                 return lhs.sequence.notes.count < rhs.sequence.notes.count
             }
 
-            return lhs.id.uuidString < rhs.id.uuidString
+            let lhsSignature = visualSignature(for: lhs)
+            let rhsSignature = visualSignature(for: rhs)
+            if lhsSignature != rhsSignature { return lhsSignature < rhsSignature }
+
+            return false
         }
 
         switch orderedSounds.count {
@@ -78,16 +82,16 @@ struct JamArrangementBuilder {
         let harmony = globalHarmony(for: assignedSounds.map { $0.sound })
         let melodyProfile = melodySound.sound.sequence.soundProfile
         let region = JamGrooveLibrary.region(for: vibePosition)
+        let selectedVisualSignatures = assignedSounds.map { visualSignature(for: $0.sound) }
         let percussion = grooveLibrary.pattern(
             for: vibePosition,
-            soundIDs: assignedSounds.map(\.sound.id),
+            visualSignatures: selectedVisualSignatures,
             drumKit: drumKit
         )
 
         var activeStepsBySoundID: [UUID: Set<Int>] = [:]
 
         var notes: [MusicNote] = []
-        let selectedSoundIDs = assignedSounds.map(\.sound.id)
 
         for assignedSound in assignedSounds {
             let sourceNotes = sortedNotes(from: assignedSound.sound.sequence.notes)
@@ -97,8 +101,8 @@ struct JamArrangementBuilder {
             switch assignedSound.role {
             case .bass:
                 builtNotes = buildBassNotes(
-                    soundID: assignedSound.sound.id,
                     from: sourceNotes,
+                    visualSignature: visualSignature(for: assignedSound.sound),
                     harmony: harmony,
                     registerShift: registerShift,
                     vibePosition: vibePosition,
@@ -107,8 +111,8 @@ struct JamArrangementBuilder {
                 )
             case .harmony:
                 builtNotes = buildHarmonyNotes(
-                    soundID: assignedSound.sound.id,
                     from: sourceNotes,
+                    visualSignature: visualSignature(for: assignedSound.sound),
                     harmony: harmony,
                     registerShift: registerShift,
                     vibePosition: vibePosition,
@@ -128,9 +132,7 @@ struct JamArrangementBuilder {
                         vibePosition: vibePosition
                     ),
                     region: region,
-                    percussion: percussion,
-                    accompanimentNotes: notes,
-                    selectedSoundIDs: selectedSoundIDs
+                    selectedVisualSignatures: selectedVisualSignatures
                 )
             }
 
@@ -170,8 +172,8 @@ struct JamArrangementBuilder {
     }
 
     private func buildBassNotes(
-        soundID: UUID,
         from sourceNotes: [MusicNote],
+        visualSignature: UInt64,
         harmony: GlobalHarmony,
         registerShift: Int,
         vibePosition: CGPoint,
@@ -191,7 +193,7 @@ struct JamArrangementBuilder {
         guard !stepNotes.isEmpty else { return [] }
 
         let seed = stableRoleVariationSeed(
-            soundID: soundID,
+            visualSignature: visualSignature,
             roleLabel: "bass",
             intentLabel: intent.rawValue,
             generation: variation.generation,
@@ -307,8 +309,8 @@ struct JamArrangementBuilder {
     }
 
     private func buildHarmonyNotes(
-        soundID: UUID,
         from sourceNotes: [MusicNote],
+        visualSignature: UInt64,
         harmony: GlobalHarmony,
         registerShift: Int,
         vibePosition: CGPoint,
@@ -328,7 +330,7 @@ struct JamArrangementBuilder {
         guard !sourceEvents.isEmpty else { return [] }
 
         let seed = stableRoleVariationSeed(
-            soundID: soundID,
+            visualSignature: visualSignature,
             roleLabel: "harmony",
             intentLabel: intent.rawValue,
             generation: variation.generation,
@@ -416,138 +418,134 @@ struct JamArrangementBuilder {
         buildMode: MelodyVariationBuildMode,
         density: Double,
         region: JamRegion,
-        percussion: MusicPercussionPattern,
-        accompanimentNotes: [MusicNote],
-        selectedSoundIDs: [UUID]
+        selectedVisualSignatures: [UInt64]
     ) -> [MusicNote] {
-        let transformedSourceNotes = melodySourceNotes(
-            from: sourceNotes,
-            harmony: harmony,
-            registerShift: registerShift
-        )
-        let scalePitchClasses = harmony.scale.degrees.map { (harmony.rootPitchClass + $0) % 12 }
+        let sourceByStep = representativeNotesByStep(from: sourceNotes)
+        guard !sourceByStep.isEmpty else { return [] }
+
         let seed = stableMelodySeed(
-            selectedSoundIDs: selectedSoundIDs,
+            selectedVisualSignatures: selectedVisualSignatures,
             harmony: harmony,
             region: region,
-            transformedSourceNotes: transformedSourceNotes,
+            sourceNotes: sourceByStep,
             melodyVariation: melodyVariation
         )
         let variationFamily = MelodyVariationFamily(generation: melodyVariation.generation)
-        let isFallback = buildMode == .fallback
-        let rhythmSeed = mixedSeed(seed, salt: 0x18D3_A5F9_52C1_7B41)
-        let contourSeed = mixedSeed(seed, salt: 0x72E9_C41D_A16B_3F25)
-        let registerSeed = mixedSeed(seed, salt: 0xB54C_91E2_5DA8_0C73)
-        let velocitySeed = mixedSeed(seed, salt: 0xC9A3_7E11_4BF2_DA9D)
-        let template = adjustedMelodyTemplate(
-            photoConditionedMelodyTemplate(
-                for: region,
-                seed: rhythmSeed,
-                variationFamily: variationFamily,
-                transformedSourceNotes: transformedSourceNotes
-            ),
-            region: region,
-            density: density
+        let retention = buildMode == .fallback
+            ? max(0.55, density)
+            : max(0.82, density)
+        let selectedSource = sampledNotes(
+            from: sourceByStep,
+            density: retention
         )
+        let scalePitchClasses = harmony.scale.degrees.map { (harmony.rootPitchClass + $0) % 12 }
+        var previousMIDINote: Int?
 
-        guard !template.isEmpty else { return [] }
+        return selectedSource.enumerated().map { index, source in
+            let snapped = nearestScaleMIDINote(
+                to: source.midiNote + registerShift,
+                rootPitchClass: harmony.rootPitchClass,
+                scale: harmony.scale,
+                range: 60...96
+            )
+            let targetMIDINote = variedPhotoMelodyMIDINote(
+                snapped,
+                index: index,
+                eventCount: selectedSource.count,
+                family: variationFamily,
+                buildMode: buildMode,
+                seed: seed,
+                scalePitchClasses: scalePitchClasses,
+                previousMIDINote: previousMIDINote
+            )
+            previousMIDINote = targetMIDINote
+            let beatAccent: Float = source.step.isMultiple(of: 4) ? 1.06 : 1.0
+            let regionalIntensity: Float = region == .intense ? 1.04 : 1.0
+            let velocity = min(
+                0.96,
+                max(0.28, source.velocity * 0.82 * beatAccent * regionalIntensity)
+            )
+            return MusicNote(
+                step: source.step,
+                row: row(for: targetMIDINote),
+                midiNote: targetMIDINote,
+                velocity: velocity,
+                voiceRole: .melody,
+                timingOffsetSteps: nil
+            )
+        }
+    }
 
-        let anchorPitchClass = melodyAnchorPitchClass(
-            harmony: harmony,
-            transformedSourceNotes: transformedSourceNotes
-        )
-        let contour = melodyContour(for: region, seed: contourSeed, variationFamily: variationFamily)
-        let anchorMIDINote = melodyAnchorMIDINote(
-            anchorPitchClass: anchorPitchClass,
-            harmony: harmony,
-            transformedSourceNotes: transformedSourceNotes,
-            registerShift: registerShift,
-            region: region,
-            variationFamily: variationFamily,
-            seed: registerSeed
-        )
-        let kickSteps = Set(percussion.kickHits.map(\.step))
-        let primarySteps = variedMelodyTemplate(
-            from: template,
-            region: region,
-            seed: mixedSeed(rhythmSeed, salt: 0x01),
-            variationFamily: variationFamily,
-            buildMode: buildMode,
-            preserveLeadingAnchor: true,
-            kickSteps: kickSteps
-        )
-        let secondarySteps = variedMelodyTemplate(
-            from: template,
-            region: region,
-            seed: mixedSeed(rhythmSeed, salt: 0x02),
-            variationFamily: variationFamily,
-            buildMode: buildMode,
-            preserveLeadingAnchor: false,
-            kickSteps: kickSteps
-        )
-        let variationKind = melodyVariationKind(for: region, seed: seed)
-        let primaryOffsets = variedMelodyOffsets(
-            from: melodyContourOffsets(for: contour, count: primarySteps.count),
-            variationKind: variationKind,
-            variationFamily: variationFamily,
-            seed: mixedSeed(contourSeed, salt: 0x11),
-            buildMode: buildMode
-        )
-        let secondaryOffsets = variedMelodyOffsets(
-            from: melodyContourOffsets(for: contour, count: secondarySteps.count),
-            variationKind: variationKind,
-            variationFamily: variationFamily,
-            seed: mixedSeed(contourSeed, salt: 0x22),
-            buildMode: buildMode
-        )
-        let primaryRegisterPlan = melodyRegisterPlan(
-            eventCount: primarySteps.count,
-            seed: mixedSeed(registerSeed, salt: 0x1111),
-            variationFamily: variationFamily,
-            buildMode: buildMode
-        )
-        let secondaryRegisterPlan = melodyRegisterPlan(
-            eventCount: secondarySteps.count,
-            seed: mixedSeed(registerSeed, salt: 0x2222),
-            variationFamily: variationFamily,
-            buildMode: buildMode
-        )
+    private func variedPhotoMelodyMIDINote(
+        _ snappedMIDINote: Int,
+        index: Int,
+        eventCount: Int,
+        family: MelodyVariationFamily,
+        buildMode: MelodyVariationBuildMode,
+        seed: UInt64,
+        scalePitchClasses: [Int],
+        previousMIDINote: Int?
+    ) -> Int {
+        guard family != .rhythm || buildMode == .fallback || eventCount > 0 else {
+            return snappedMIDINote
+        }
 
-        let primaryHalf = buildMelodyHalf(
-            relativeSteps: primarySteps,
-            contourOffsets: primaryOffsets,
-            halfOffset: 0,
-            anchorMIDINote: anchorMIDINote,
-            anchorPitchClass: anchorPitchClass,
-            harmony: harmony,
+        let mutationSeed = mixedSeed(seed, salt: UInt64(index) &+ 0xCAFE)
+        let direction = ((mutationSeed >> 5) & 1) == 0 ? 1 : -1
+        let shouldMutate: Bool
+        switch family {
+        case .rhythm:
+            shouldMutate = index.isMultiple(of: 3)
+        case .contour:
+            shouldMutate = index > 0
+        case .register:
+            shouldMutate = index.isMultiple(of: 2)
+        case .full:
+            shouldMutate = index.isMultiple(of: 2) || buildMode == .fallback
+        }
+
+        var result = snappedMIDINote
+        if shouldMutate {
+            switch family {
+            case .register:
+                result = octaveShiftedMIDINote(
+                    from: result,
+                    preferredDirection: direction,
+                    range: 60...96
+                ) ?? result
+            default:
+                result = moveScaleSteps(
+                    from: result,
+                    steps: direction * (buildMode == .fallback ? 2 : 1),
+                    scalePitchClasses: scalePitchClasses,
+                    range: 60...96
+                )
+            }
+        }
+
+        if let previousMIDINote,
+           abs(result - previousMIDINote) > 12 {
+            return softenedPhotoMelodyLeap(
+                from: previousMIDINote,
+                to: result,
+                scalePitchClasses: scalePitchClasses
+            )
+        }
+        return result
+    }
+
+    private func softenedPhotoMelodyLeap(
+        from previousMIDINote: Int,
+        to midiNote: Int,
+        scalePitchClasses: [Int]
+    ) -> Int {
+        let direction = midiNote >= previousMIDINote ? 1 : -1
+        return moveScaleSteps(
+            from: previousMIDINote,
+            steps: direction,
             scalePitchClasses: scalePitchClasses,
-            transformedSourceNotes: transformedSourceNotes,
-            accompanimentNotes: accompanimentNotes,
-            region: region,
-            variationKind: isFallback ? variationKind : nil,
-            registerPlan: primaryRegisterPlan,
-            velocitySeed: mixedSeed(velocitySeed, salt: 0xA1),
-            octaveJumpUsed: false
+            range: 60...96
         )
-
-        let secondaryHalf = buildMelodyHalf(
-            relativeSteps: secondarySteps,
-            contourOffsets: secondaryOffsets,
-            halfOffset: 8,
-            anchorMIDINote: anchorMIDINote,
-            anchorPitchClass: anchorPitchClass,
-            harmony: harmony,
-            scalePitchClasses: scalePitchClasses,
-            transformedSourceNotes: transformedSourceNotes,
-            accompanimentNotes: accompanimentNotes + primaryHalf.notes,
-            region: region,
-            variationKind: variationKind,
-            registerPlan: secondaryRegisterPlan,
-            velocitySeed: mixedSeed(velocitySeed, salt: 0xB2),
-            octaveJumpUsed: primaryHalf.usedOctaveJump
-        )
-
-        return primaryHalf.notes + secondaryHalf.notes
     }
 
     private func transformedVelocity(
@@ -869,7 +867,7 @@ struct JamArrangementBuilder {
     }
 
     private func stableRoleVariationSeed(
-        soundID: UUID,
+        visualSignature: UInt64,
         roleLabel: String,
         intentLabel: String,
         generation: UInt64,
@@ -899,7 +897,11 @@ struct JamArrangementBuilder {
             }
         }
 
-        feed(string: soundID.uuidString)
+        var signature = visualSignature
+        for _ in 0..<8 {
+            feed(byte: UInt8(truncatingIfNeeded: signature))
+            signature >>= 8
+        }
         feed(string: roleLabel)
         feed(string: intentLabel)
         feed(int: harmony.rootPitchClass)
@@ -997,8 +999,20 @@ struct JamArrangementBuilder {
     private func globalHarmony(for sounds: [PhotoSound]) -> GlobalHarmony {
         let allNotes = sounds.flatMap { $0.sequence.notes }
         guard !allNotes.isEmpty else {
-            let fallback = sounds.first?.sequence.harmony.rootPitchClass ?? 0
-            return GlobalHarmony(rootPitchClass: fallback, scale: .majorPentatonic)
+            let sourceHarmony = sounds.first?.sequence.harmony
+            return GlobalHarmony(
+                rootPitchClass: sourceHarmony?.rootPitchClass ?? 0,
+                scale: sourceHarmony?.scale ?? .majorPentatonic
+            )
+        }
+
+        if sounds.count == 1, let sourceHarmony = sounds.first?.sequence.harmony {
+            // A one-photo Jam is the direct audition of that Photo. Do not
+            // replace its root or scale with a global re-composition.
+            return GlobalHarmony(
+                rootPitchClass: sourceHarmony.rootPitchClass,
+                scale: sourceHarmony.scale
+            )
         }
 
         var histogram = Array(repeating: 0, count: 12)
@@ -1008,25 +1022,34 @@ struct JamArrangementBuilder {
 
         var bestCandidate = GlobalHarmony(rootPitchClass: 0, scale: .majorPentatonic)
         var bestCoverage = Int.min
+        var bestScaleMatches = Int.min
 
-        for scale in [MusicScale.majorPentatonic, .minorPentatonic] {
+        for scale in MusicScale.allCases {
             for root in 0..<12 {
                 let coverage = scale.degrees
                     .map { (root + $0) % 12 }
                     .reduce(0) { $0 + histogram[$1] }
+                let scaleMatches = sounds.reduce(into: 0) { count, sound in
+                    if sound.sequence.harmony.scale == scale {
+                        count += 1
+                    }
+                }
 
                 if coverage > bestCoverage {
                     bestCoverage = coverage
+                    bestScaleMatches = scaleMatches
                     bestCandidate = GlobalHarmony(rootPitchClass: root, scale: scale)
                     continue
                 }
 
                 guard coverage == bestCoverage else { continue }
 
-                if bestCandidate.scale.rawValue == MusicScale.minorPentatonic.rawValue &&
-                    scale.rawValue == MusicScale.majorPentatonic.rawValue {
+                if scaleMatches > bestScaleMatches {
+                    bestScaleMatches = scaleMatches
                     bestCandidate = GlobalHarmony(rootPitchClass: root, scale: scale)
-                } else if bestCandidate.scale.rawValue == scale.rawValue && root < bestCandidate.rootPitchClass {
+                } else if scaleMatches == bestScaleMatches,
+                          scale.rawValue == bestCandidate.scale.rawValue,
+                          root < bestCandidate.rootPitchClass {
                     bestCandidate = GlobalHarmony(rootPitchClass: root, scale: scale)
                 }
             }
@@ -1170,10 +1193,10 @@ struct JamArrangementBuilder {
     }
 
     private func stableMelodySeed(
-        selectedSoundIDs: [UUID],
+        selectedVisualSignatures: [UInt64],
         harmony: GlobalHarmony,
         region: JamRegion,
-        transformedSourceNotes: [MelodySourceNote],
+        sourceNotes: [MusicNote],
         melodyVariation: JamMelodyVariation
     ) -> UInt64 {
         var hash: UInt64 = 14_695_981_039_346_656_037
@@ -1198,15 +1221,19 @@ struct JamArrangementBuilder {
             }
         }
 
-        for uuidString in selectedSoundIDs.map(\.uuidString).sorted() {
-            feed(string: uuidString)
+        for signature in selectedVisualSignatures.sorted() {
+            var value = signature
+            for _ in 0..<8 {
+                feed(byte: UInt8(truncatingIfNeeded: value))
+                value >>= 8
+            }
         }
 
         feed(int: harmony.rootPitchClass)
         feed(string: harmony.scale.rawValue)
         feed(string: region.seedLabel)
 
-        for note in transformedSourceNotes {
+        for note in sourceNotes {
             feed(int: note.step)
             feed(int: note.midiNote)
         }
@@ -2104,6 +2131,40 @@ struct JamArrangementBuilder {
     private func row(for midiNote: Int) -> Int {
         let normalized = Double(108 - min(108, max(48, midiNote))) / 60.0
         return min(7, max(0, Int((normalized * 7).rounded())))
+    }
+
+    private func visualSignature(for sound: PhotoSound) -> UInt64 {
+        if let visualSignature = sound.visualSignature {
+            return visualSignature
+        }
+
+        // Legacy v2 Photos have no persisted image signature. Their sequence
+        // is still stable, so derive a content key without reviving UUID-based
+        // musical variation.
+        var hash: UInt64 = 0xcbf29ce484222325
+
+        func feed(_ byte: UInt8) {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+
+        func feed(_ value: Int) {
+            var bits = UInt64(bitPattern: Int64(value))
+            for _ in 0..<8 {
+                feed(UInt8(truncatingIfNeeded: bits))
+                bits >>= 8
+            }
+        }
+
+        feed(sound.sequence.harmony.rootPitchClass)
+        for byte in sound.sequence.harmony.scale.rawValue.utf8 { feed(byte) }
+        for note in sortedNotes(from: sound.sequence.notes) {
+            feed(note.step)
+            feed(note.row)
+            feed(note.midiNote)
+            feed(Int(note.velocity.bitPattern))
+        }
+        return hash
     }
 }
 

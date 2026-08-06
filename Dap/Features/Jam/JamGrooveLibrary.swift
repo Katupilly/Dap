@@ -11,13 +11,13 @@ enum JamRegion: Sendable, Equatable {
 struct JamGrooveLibrary {
     func pattern(
         for vibePosition: CGPoint,
-        soundIDs: [UUID],
+        visualSignatures: [UInt64],
         drumKit: MusicDrumKit
     ) -> MusicPercussionPattern {
         let region = Self.region(for: vibePosition)
         let variants = patterns(for: region, drumKit: drumKit)
         let variantIndex = Int(
-            stableSeed(for: soundIDs) % UInt64(variants.count)
+            stableSeed(for: visualSignatures) % UInt64(variants.count)
         )
         return variants[variantIndex]
     }
@@ -34,21 +34,22 @@ struct JamGrooveLibrary {
     }
 
     private func stableSeed(
-        for soundIDs: [UUID]
+        for visualSignatures: [UInt64]
     ) -> UInt64 {
-        guard !soundIDs.isEmpty else {
+        guard !visualSignatures.isEmpty else {
             return 0
         }
 
         var hash: UInt64 = 14_695_981_039_346_656_037
 
-        for uuidString in soundIDs
-            .map(\.uuidString)
+        for signature in visualSignatures
             .sorted()
         {
-            for byte in uuidString.utf8 {
-                hash ^= UInt64(byte)
+            var value = signature
+            for _ in 0..<8 {
+                hash ^= value & 0xFF
                 hash &*= 1_099_511_628_211
+                value >>= 8
             }
         }
 

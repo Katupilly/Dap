@@ -3,6 +3,8 @@ import UIKit
 import OSLog
 
 private let jamStepsPerBar = MusicSequence.steps
+// Jam deliberately keeps one global transport tempo; Photo BPM applies only
+// to standalone Photo playback and is not presented as active Jam identity.
 private let jamBPM = 96.0
 
 struct JamView: View {
