@@ -413,12 +413,12 @@ private struct PhotoStoryExportView: View {
     }
 }
 
-private struct AdaptiveStoryForeground {
+struct AdaptiveStoryForeground {
     let primary: Color
     let secondary: Color
 }
 
-private func foregroundColors(
+func foregroundColors(
     atNormalizedY normalizedY: CGFloat,
     gradient: PhotoStoryBackgroundGradient
 ) -> AdaptiveStoryForeground {
@@ -429,7 +429,7 @@ private func foregroundColors(
     return AdaptiveStoryForeground(primary: primary, secondary: primary.opacity(0.60))
 }
 
-private struct PhotoStoryBackgroundGradient {
+struct PhotoStoryBackgroundGradient {
     private struct Stop {
         let color: RGBColor
         let opacity: Double

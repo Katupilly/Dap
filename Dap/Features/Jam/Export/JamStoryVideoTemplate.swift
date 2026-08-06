@@ -20,12 +20,20 @@ struct JamStoryVideoTemplate: Sendable {
         let currentStep = Int(floor(stepPosition)) % MusicSequence.steps
         let stepProgress = stepPosition - floor(stepPosition)
         let pulse = CGFloat(1 - stepProgress)
-        let frameImage = try renderedFrame(currentStep: currentStep, pulse: pulse)
+        let frameImage = try renderedFrame(
+            currentStep: currentStep,
+            stepProgress: stepProgress,
+            pulse: pulse
+        )
         try Self.copy(frameImage, into: pixelBuffer)
     }
 
     @MainActor
-    private func renderedFrame(currentStep: Int, pulse: CGFloat) throws -> CGImage {
+    private func renderedFrame(
+        currentStep: Int,
+        stepProgress: Double,
+        pulse: CGFloat
+    ) throws -> CGImage {
         guard let coverImage = UIImage(data: coverImageData, scale: 1) else {
             throw JamStoryVideoExportError.frameRenderingFailed
         }
@@ -48,13 +56,21 @@ struct JamStoryVideoTemplate: Sendable {
                     .environment(\.colorScheme, .dark)
             )
         case .dap:
+            let activeRoles = Set(
+                JamRole.allCases.filter {
+                    snapshot.sequencerSnapshot.steps(for: $0).contains(currentStep)
+                }
+            )
             content = AnyView(
                 JamSnippetExportView(
                     snapshot: snapshot,
-                    coverImage: coverImage,
                     photoImagesByID: photoImagesByID,
-                    currentStep: currentStep,
-                    pulse: pulse
+                    frameState: JamSnippetFrameState(
+                        currentStep: currentStep,
+                        stepProgress: stepProgress,
+                        activeRoles: activeRoles,
+                        pulseIntensity: Double(pulse)
+                    )
                 )
             )
         }

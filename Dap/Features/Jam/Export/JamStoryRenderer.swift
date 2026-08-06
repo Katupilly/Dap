@@ -65,7 +65,6 @@ struct JamStoryRenderer {
 
         let content = JamSnippetExportView(
             snapshot: snapshot,
-            coverImage: coverImage,
             photoImagesByID: photoImagesByID,
             currentStep: currentStep,
             pulse: pulse
