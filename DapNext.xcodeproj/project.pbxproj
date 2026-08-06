@@ -69,6 +69,8 @@
 		AA000001000000000000025E /* PhotoPaperExportRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000025F /* PhotoPaperExportRenderer.swift */; };
 		AA0000010000000000000258 /* PaperShaders in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000010000000000000259 /* PaperShaders */; };
 		AA000001000000000000025B /* PaperShaders-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000025C /* PaperShaders-LICENSE.txt */; };
+		BB0000000000000000000001 /* PhotoMusicPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000002 /* PhotoMusicPipelineTests.swift */; };
+		BB0000000000000000000010 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000011 /* XCTest.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -135,6 +137,9 @@
 		AA0000010000000000000256 /* PhotoPaperMotionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPaperMotionProvider.swift; sourceTree = "<group>"; };
 		AA000001000000000000025F /* PhotoPaperExportRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPaperExportRenderer.swift; sourceTree = "<group>"; };
 		AA000001000000000000025C /* PaperShaders-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "PaperShaders-LICENSE.txt"; sourceTree = "<group>"; };
+		BB0000000000000000000002 /* PhotoMusicPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMusicPipelineTests.swift; sourceTree = "<group>"; };
+		BB0000000000000000000003 /* DapTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DapTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BB0000000000000000000011 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -150,6 +155,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BB0000000000000000000006 /* DapTests Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB0000000000000000000010 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -160,11 +173,30 @@
 		};
 /* End XCSwiftPackageProductDependency section */
 
+/* Begin PBXContainerItemProxy section */
+		BB000000000000000000000C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000010000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000010000000000000010;
+			remoteInfo = Dap;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		BB000000000000000000000D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000010000000000000010 /* Dap */;
+			targetProxy = BB000000000000000000000C /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin PBXGroup section */
 		AA0000010000000000000080 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000007B /* Dap.app */,
+				BB0000000000000000000003 /* DapTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -173,6 +205,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000010000000000000091 /* Dap */,
+				BB0000000000000000000004 /* DapTests */,
 				AA0000010000000000000080 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -191,6 +224,14 @@
 				AA000001000000000000008B /* Info.plist */,
 			);
 			path = Dap;
+			sourceTree = "<group>";
+		};
+		BB0000000000000000000004 /* DapTests */ = {
+			isa = PBXGroup;
+			children = (
+				BB0000000000000000000002 /* PhotoMusicPipelineTests.swift */,
+			);
+			path = DapTests;
 			sourceTree = "<group>";
 		};
 		AA0000010000000000000092 /* App */ = {
@@ -385,6 +426,24 @@
 			productReference = AA000001000000000000007B /* Dap.app */;
 			productType = "com.apple.product-type.application";
 		};
+		BB0000000000000000000008 /* DapTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BB000000000000000000000B /* Build configuration list for PBXNativeTarget "DapTests" */;
+			buildPhases = (
+				BB0000000000000000000005 /* DapTests Sources */,
+				BB0000000000000000000006 /* DapTests Frameworks */,
+				BB0000000000000000000007 /* DapTests Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BB000000000000000000000D /* PBXTargetDependency */,
+			);
+			name = DapTests;
+			productName = DapTests;
+			productReference = BB0000000000000000000003 /* DapTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -394,10 +453,14 @@
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1700;
 				LastUpgradeCheck = 2650;
-				TargetAttributes = {
-					AA0000010000000000000010 = {
-						CreatedOnToolsVersion = 17.0;
-					};
+			TargetAttributes = {
+				AA0000010000000000000010 = {
+					CreatedOnToolsVersion = 17.0;
+				};
+				BB0000000000000000000008 = {
+					CreatedOnToolsVersion = 17.0;
+					TestTargetID = AA0000010000000000000010;
+				};
 				};
 			};
 			buildConfigurationList = AA0000010000000000000020 /* Build configuration list for PBXProject "DapNext" */;
@@ -417,6 +480,7 @@
 			projectRoot = "";
 			targets = (
 				AA0000010000000000000010 /* Dap */,
+				BB0000000000000000000008 /* DapTests */,
 			);
 		};
 /* End PBXProject section */
@@ -500,7 +564,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BB0000000000000000000005 /* DapTests Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB0000000000000000000001 /* PhotoMusicPipelineTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXResourcesBuildPhase section */
+		BB0000000000000000000007 /* DapTests Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
 		AA0000010000000000000021 /* Debug */ = {
@@ -691,6 +773,44 @@
 			};
 			name = Release;
 		};
+		BB0000000000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3YFDTC5X3L;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pedrolima.DapTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dap.app/Dap";
+			};
+			name = Debug;
+		};
+		BB000000000000000000000A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3YFDTC5X3L;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pedrolima.DapTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dap.app/Dap";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -708,6 +828,15 @@
 			buildConfigurations = (
 				AA0000010000000000000061 /* Debug */,
 				AA0000010000000000000062 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BB000000000000000000000B /* Build configuration list for PBXNativeTarget "DapTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BB0000000000000000000009 /* Debug */,
+				BB000000000000000000000A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

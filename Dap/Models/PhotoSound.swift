@@ -258,6 +258,8 @@ enum PhotoNameSource: String, Codable, Equatable, Sendable {
 }
 
 struct PhotoSound: Identifiable, Codable, Equatable, Sendable {
+    static let legacyAlgorithmVersion = 2
+
     let id: UUID
     var name: String?
     var nameSource: PhotoNameSource?
@@ -265,6 +267,72 @@ struct PhotoSound: Identifiable, Codable, Equatable, Sendable {
     let createdAt: Date
     let coverFilename: String
     let sequence: MusicSequence
+    /// Version of the photo-to-music algorithm that created `sequence`.
+    /// Missing values are legacy v2 records and are intentionally not regenerated.
+    let algorithmVersion: Int
+    /// Stable signature of normalized visual content. Legacy records have nil.
+    let visualSignature: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case nameSource
+        case description
+        case createdAt
+        case coverFilename
+        case sequence
+        case algorithmVersion
+        case visualSignature
+    }
+
+    init(
+        id: UUID,
+        name: String?,
+        nameSource: PhotoNameSource?,
+        description: String?,
+        createdAt: Date,
+        coverFilename: String,
+        sequence: MusicSequence,
+        algorithmVersion: Int = PhotoSound.legacyAlgorithmVersion,
+        visualSignature: UInt64? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.nameSource = nameSource
+        self.description = description
+        self.createdAt = createdAt
+        self.coverFilename = coverFilename
+        self.sequence = sequence
+        self.algorithmVersion = algorithmVersion
+        self.visualSignature = visualSignature
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        nameSource = try container.decodeIfPresent(PhotoNameSource.self, forKey: .nameSource)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        coverFilename = try container.decode(String.self, forKey: .coverFilename)
+        sequence = try container.decode(MusicSequence.self, forKey: .sequence)
+        algorithmVersion = try container.decodeIfPresent(Int.self, forKey: .algorithmVersion)
+            ?? Self.legacyAlgorithmVersion
+        visualSignature = try container.decodeIfPresent(UInt64.self, forKey: .visualSignature)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(nameSource, forKey: .nameSource)
+        try container.encodeIfPresent(description, forKey: .description)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(coverFilename, forKey: .coverFilename)
+        try container.encode(sequence, forKey: .sequence)
+        try container.encode(algorithmVersion, forKey: .algorithmVersion)
+        try container.encodeIfPresent(visualSignature, forKey: .visualSignature)
+    }
 
     var trimmedName: String? {
         guard let name else { return nil }

@@ -2,6 +2,7 @@ import AVFoundation
 import PhotosUI
 import SwiftUI
 import UIKit
+import Vision
 
 struct CameraView: View {
     let library: PhotoLibraryViewModel
@@ -20,6 +21,7 @@ struct CameraView: View {
     @State private var isZoomed = false
     @State private var isSwitchingCamera = false
     @State private var previewPitchClass: PitchClass = .c
+    @State private var isPortraitPreviewMode = false
     @State private var importCompletion: ImportCompletion?
     @State private var importVisualPhase: ImportVisualPhase = .idle
     @State private var importAnimationStartDate = Date()
@@ -48,7 +50,15 @@ struct CameraView: View {
     }
 
     private var previewPalette: ColorPalette {
-        RetroCoverRenderer.tonalPalette(for: previewPitchClass)
+        if isPortraitPreviewMode {
+            return ColorPalette(
+                shadow: .black,
+                dark: .black,
+                base: .black,
+                highlight: .white
+            )
+        }
+        return RetroCoverRenderer.tonalPalette(for: previewPitchClass)
     }
 
     var body: some View {
@@ -110,6 +120,8 @@ struct CameraView: View {
         }
         .onDisappear {
             controller?.onPitchClassSample = nil
+            controller?.onPortraitPreviewMode = nil
+            isPortraitPreviewMode = false
             controller?.stop()
             invalidateVisualCompletion()
         }
@@ -340,15 +352,26 @@ struct CameraView: View {
 
     private func configureCamera() async {
         state = .configuring
+        isPortraitPreviewMode = false
         let controller = CameraController()
         do {
             try await controller.configure()
             controller.onPitchClassSample = { pitchClass in
                 Task { @MainActor in
-                    previewPitchClass = pitchClass
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.35)) {
+                        previewPitchClass = pitchClass
+                    }
+                }
+            }
+            controller.onPortraitPreviewMode = { isPortrait in
+                Task { @MainActor in
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.35)) {
+                        isPortraitPreviewMode = isPortrait
+                    }
                 }
             }
             self.controller?.onPitchClassSample = nil
+            self.controller?.onPortraitPreviewMode = nil
             self.controller = controller
             controller.start()
             isFlashOn = false
@@ -768,8 +791,16 @@ final class CameraController: NSObject, @unchecked Sendable {
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var previewRotationObservation: NSKeyValueObservation?
     private var lastColorSampleTime: CFAbsoluteTime = 0
+    private var colorSampleCounter: Int = 0
     private var pendingPitchClass: PitchClass?
+    private var pendingScore: Double = 0
     private var publishedPitchClass: PitchClass?
+    private var publishedScore: Double = 0
+    private var isPortraitPreviewMode = false
+    private var pendingPortraitMode: Bool?
+    private var pendingPortraitModeSamples = 0
+    private let faceDetectionStride = 4
+    private let scoreSwapMargin = 0.08
 
     var onPitchClassSample: (@Sendable (PitchClass) -> Void)? {
         didSet {
@@ -778,6 +809,8 @@ final class CameraController: NSObject, @unchecked Sendable {
             }
         }
     }
+
+    var onPortraitPreviewMode: (@Sendable (Bool) -> Void)?
 
     var isFlashAvailable: Bool {
         guard let device else { return false }
@@ -834,8 +867,14 @@ final class CameraController: NSObject, @unchecked Sendable {
 
     func stop() {
         queue.async {
-            guard self.session.isRunning else { return }
-            self.session.stopRunning()
+            let wasPortraitPreviewMode = self.isPortraitPreviewMode
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+            self.resetPitchClassSamplingState()
+            if wasPortraitPreviewMode {
+                self.onPortraitPreviewMode?(false)
+            }
         }
     }
 
@@ -1004,8 +1043,14 @@ final class CameraController: NSObject, @unchecked Sendable {
 
     private func resetPitchClassSamplingState() {
         lastColorSampleTime = 0
+        colorSampleCounter = 0
         pendingPitchClass = nil
+        pendingScore = 0
         publishedPitchClass = nil
+        publishedScore = 0
+        isPortraitPreviewMode = false
+        pendingPortraitMode = nil
+        pendingPortraitModeSamples = 0
     }
 
     private func setZoomFactor(_ requestedFactor: CGFloat, on device: AVCaptureDevice) throws -> CGFloat {
@@ -1045,44 +1090,115 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from _: AVCaptureConnection
     ) {
-        guard output === videoOutput, onPitchClassSample != nil else { return }
+        guard output === videoOutput,
+              onPitchClassSample != nil || onPortraitPreviewMode != nil
+        else { return }
 
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastColorSampleTime >= Self.colorSampleInterval else { return }
         lastColorSampleTime = now
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let candidatePitchClass = samplePitchClass(from: pixelBuffer)
+
+        colorSampleCounter += 1
+        if colorSampleCounter.isMultiple(of: faceDetectionStride) {
+            let faceArea = detectFaceAreaProportion(in: pixelBuffer)
+            let shouldUsePortraitMode = faceArea >= 0.08
+            if shouldUsePortraitMode == isPortraitPreviewMode {
+                pendingPortraitMode = nil
+                pendingPortraitModeSamples = 0
+            } else if pendingPortraitMode == shouldUsePortraitMode {
+                pendingPortraitModeSamples += 1
+            } else {
+                pendingPortraitMode = shouldUsePortraitMode
+                pendingPortraitModeSamples = 1
+            }
+
+            if pendingPortraitMode == shouldUsePortraitMode,
+               pendingPortraitModeSamples >= 2 {
+                isPortraitPreviewMode = shouldUsePortraitMode
+                pendingPortraitMode = nil
+                pendingPortraitModeSamples = 0
+                pendingPitchClass = nil
+                pendingScore = 0
+                publishedPitchClass = nil
+                publishedScore = 0
+                onPortraitPreviewMode?(shouldUsePortraitMode)
+            }
+        }
+
+        guard !isPortraitPreviewMode, pendingPortraitMode != true else { return }
+
+        let (candidatePitchClass, candidateScore) = samplePitchClass(from: pixelBuffer)
+
+        if publishedPitchClass == nil {
+            publishedPitchClass = candidatePitchClass
+            publishedScore = candidateScore
+            onPitchClassSample?(candidatePitchClass)
+            pendingPitchClass = nil
+            pendingScore = 0
+            return
+        }
 
         guard candidatePitchClass != publishedPitchClass else {
             pendingPitchClass = nil
+            pendingScore = 0
+            return
+        }
+
+        let dominant = max(candidateScore, publishedScore)
+        let marginClear = dominant > 0
+            && abs(candidateScore - publishedScore) / dominant >= scoreSwapMargin
+        guard marginClear else {
+            pendingPitchClass = nil
+            pendingScore = 0
             return
         }
 
         guard pendingPitchClass == candidatePitchClass else {
             pendingPitchClass = candidatePitchClass
+            pendingScore = candidateScore
             return
         }
 
         pendingPitchClass = nil
+        pendingScore = 0
         publishedPitchClass = candidatePitchClass
+        publishedScore = candidateScore
         onPitchClassSample?(candidatePitchClass)
     }
 
-    private func samplePitchClass(from pixelBuffer: CVPixelBuffer) -> PitchClass {
+    private func detectFaceAreaProportion(in pixelBuffer: CVPixelBuffer) -> Double {
+        let request = VNDetectFaceRectanglesRequest()
+        let handler = VNImageRequestHandler(
+            cvPixelBuffer: pixelBuffer,
+            orientation: .up,
+            options: [:]
+        )
+        do {
+            try handler.perform([request])
+        } catch {
+            return 0
+        }
+        return min(1, (request.results ?? []).reduce(0) { result, observation in
+            result + observation.boundingBox.width * observation.boundingBox.height
+        })
+    }
+
+    private func samplePitchClass(from pixelBuffer: CVPixelBuffer) -> (PitchClass, Double) {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return .c }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            return (.c, 0)
+        }
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let samplesPerAxis = Self.colorSamplesPerAxis
-        var red = 0.0
-        var green = 0.0
-        var blue = 0.0
-        var sampleCount = 0.0
+        var sectorWeights = [Double](repeating: 0, count: 12)
+        var globalWeight = 0.0
 
         for yIndex in 0 ..< samplesPerAxis {
             let y = min(height - 1, ((yIndex * 2 + 1) * height) / (samplesPerAxis * 2))
@@ -1091,32 +1207,47 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
             for xIndex in 0 ..< samplesPerAxis {
                 let x = min(width - 1, ((xIndex * 2 + 1) * width) / (samplesPerAxis * 2))
                 let pixel = row.advanced(by: x * 4)
-                blue += Double(pixel[0]) / 255
-                green += Double(pixel[1]) / 255
-                red += Double(pixel[2]) / 255
-                sampleCount += 1
+                let blue = Double(pixel[0]) / 255
+                let green = Double(pixel[1]) / 255
+                let red = Double(pixel[2]) / 255
+                let (hue, saturation) = hueSaturation(red: red, green: green, blue: blue)
+                let weight = max(0, saturation - 0.10)
+                guard weight > 0 else { continue }
+                let sector = min(11, max(0, Int(hue / 30)))
+                sectorWeights[sector] += weight
+                globalWeight += weight
             }
         }
 
-        guard sampleCount > 0 else { return .c }
-
-        let hue = hueDegrees(red: red / sampleCount, green: green / sampleCount, blue: blue / sampleCount)
-        return PitchClass(rawValue: RetroCoverRenderer.pitchClass(forHueDegrees: hue))!
+        guard globalWeight > 0 else { return (.c, 0) }
+        guard let bestSector = sectorWeights.indices.max(by: {
+            if sectorWeights[$0] != sectorWeights[$1] {
+                return sectorWeights[$0] < sectorWeights[$1]
+            }
+            return $0 > $1
+        }) else { return (.c, 0) }
+        let score = sectorWeights[bestSector] / globalWeight
+        let pitchClass = PhotoMusicPipeline.colorBasedRootPitchClass(
+            fromHue: Double(bestSector * 30 + 15)
+        )
+        return (pitchClass, score)
     }
 
-    private func hueDegrees(red: Double, green: Double, blue: Double) -> Double {
+    private func hueSaturation(red: Double, green: Double, blue: Double) -> (hue: Double, saturation: Double) {
         let maxComponent = max(red, green, blue)
         let minComponent = min(red, green, blue)
         let delta = maxComponent - minComponent
-
-        if delta == 0 { return 0 }
+        let saturation = maxComponent == 0 ? 0 : delta / maxComponent
+        if delta == 0 { return (0, saturation) }
+        let hue: Double
         if maxComponent == red {
-            return (60 * ((green - blue) / delta) + 360).truncatingRemainder(dividingBy: 360)
+            hue = (60 * ((green - blue) / delta) + 360).truncatingRemainder(dividingBy: 360)
+        } else if maxComponent == green {
+            hue = 60 * ((blue - red) / delta + 2)
+        } else {
+            hue = 60 * ((red - green) / delta + 4)
         }
-        if maxComponent == green {
-            return 60 * ((blue - red) / delta + 2)
-        }
-        return 60 * ((red - green) / delta + 4)
+        return (hue, saturation)
     }
 }
 

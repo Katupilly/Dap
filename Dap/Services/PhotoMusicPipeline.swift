@@ -1,6 +1,7 @@
 import CoreGraphics
 import OSLog
 import UIKit
+import Vision
 
 // MARK: - Pipeline errors
 
@@ -25,8 +26,55 @@ struct PhotoMusicColorProfile: Sendable {
     let hueVarianceDegrees: Double
     let edgeDensity: Double
     let rootPitchClass: PitchClass
-    let selectorSeed: UInt64?
+    let palette: PhotoMusicPalette
+    let visualSignature: UInt64
     let hasReliableRoot: Bool
+    let isPortraitDominant: Bool
+}
+
+struct PhotoPaletteColor: Sendable {
+    let hue: Double
+    let saturation: Double
+    let luminance: Double
+    let sector: Int
+    let proportion: Double
+}
+
+struct PhotoMusicPalette: Sendable {
+    let dominant: PhotoPaletteColor?
+    let secondary: PhotoPaletteColor?
+    let contrast: PhotoPaletteColor?
+    let accent: PhotoPaletteColor?
+    let chromaticProportion: Double
+    let contrastAmount: Double
+
+    var entries: [PhotoPaletteColor] {
+        [dominant, secondary, contrast, accent].compactMap { $0 }
+    }
+
+    var diversity: Int {
+        Set(entries.map(\.sector)).count
+    }
+}
+
+struct PhotoMusicAnalysisOverrides: Sendable, Equatable {
+    let portraitDominant: Bool?
+
+    init(portraitDominant: Bool? = nil) {
+        self.portraitDominant = portraitDominant
+    }
+}
+
+enum PortraitDetectionStatus: String, Sendable {
+    case detected
+    case none
+    case timeout
+    case error
+}
+
+struct PortraitDetectionResult: Sendable {
+    let faceAreaProportion: Double
+    let status: PortraitDetectionStatus
 }
 
 struct PreparedPhotoInput: Sendable {
@@ -34,6 +82,15 @@ struct PreparedPhotoInput: Sendable {
     let analysisInputData: Data
     let processedPreviewData: Data
     let colorProfile: PhotoMusicColorProfile
+}
+
+private struct PhotoStepFeature: Sendable {
+    let step: Int
+    let row: Int
+    let hueSector: Int?
+    let saturation: Double
+    let luminance: Double
+    let localContrast: Double
 }
 
 // MARK: - PhotoMusicPipeline
@@ -47,18 +104,24 @@ enum PhotoMusicPipeline {
 
     private static let analysisSide              = 64
     private static let minimumSaturationForHue   = 0.10
-    private static let lowHueVarianceDegrees     = 30.0
-    private static let highHueVarianceDegrees    = 70.0
-    private static let significantToneFraction   = 0.05
     private static let edgeGradientThreshold     = 0.18
     private static let lowEdgeDensity            = 0.03
     private static let highEdgeDensity           = 0.25
     private static let shortGate                 = 0.25
     private static let longGate                  = 0.98
-    private static let colorPipelineAlgorithmVersion = 2
-    private static let weightedHueFallbackRatio      = 0.003
-    private static let weightedHueSofteningExponent  = 0.85
-    private static let toneAnalysisMaximumDimension  = 256
+    static let currentAlgorithmVersion = 6
+    private static let portraitAreaThreshold = 0.08
+    private static let proceduralRootSalt: UInt64 = 0x726F6F74_73656564
+    private static let minimumChromaticProportion = 0.02
+    private static let minimumLocalContrast = 0.06
+    private static let sRGBColorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+        ?? CGColorSpaceCreateDeviceRGB()
+    /// Hue sectors map around the circle of fifths so neighboring visual hues
+    /// remain neighboring tonal functions without a seed deciding the root.
+    private static let circleOfFifths: [PitchClass] = [
+        .c, .g, .d, .a, .e, .b, .fSharp,
+        .cSharp, .gSharp, .dSharp, .aSharp, .f
+    ]
 
     #if DEBUG
     private static let performanceLogger = Logger(
@@ -71,11 +134,10 @@ enum PhotoMusicPipeline {
         rootSource: String,
         root: Int,
         scale: MusicScale,
-        variation: Int,
         sequence: MusicSequence
     ) {
         performanceLogger.debug(
-            "sequence fallback: stage=\(mode.rawValue, privacy: .public), preserved=color-profile,bpm,seed, rootSource=\(rootSource, privacy: .public), root=\(root, privacy: .public), scale=\(scale.rawValue, privacy: .public), variation=\(variation, privacy: .public), bpm=\(sequence.harmony.bpm, privacy: .public), steps=\(MusicSequence.steps, privacy: .public), duration=\(sequence.nominalDuration, privacy: .public)"
+            "sequence fallback: stage=\(mode.rawValue, privacy: .public), preserved=color-profile,bpm, rootSource=\(rootSource, privacy: .public), root=\(root, privacy: .public), scale=\(scale.rawValue, privacy: .public), bpm=\(sequence.harmony.bpm, privacy: .public), steps=\(MusicSequence.steps, privacy: .public), duration=\(sequence.nominalDuration, privacy: .public)"
         )
     }
 
@@ -88,30 +150,41 @@ enum PhotoMusicPipeline {
             "\(label, privacy: .public): \(String(describing: startedAt.duration(to: clock.now)), privacy: .public)"
         )
     }
+
+    private static func logRootSelection(
+        _ result: PortraitDetectionResult,
+        isPortraitDominant: Bool
+    ) {
+        let mode = isPortraitDominant ? "portrait" : "color"
+        performanceLogger.debug(
+            "root mode selected: mode=\(mode, privacy: .public), visionStatus=\(result.status.rawValue, privacy: .public)"
+        )
+    }
     #endif
 
     private enum SequenceFallback: String {
         case none
-        case emptyToneGrid
-        case toneAnalysisFailed
+        case emptyVisualStructure
+        case visualAnalysisFailed
         case invalidProfile
     }
 
-    private static let fallbackSteps = [0, 3, 6, 10, 14]
-    private static let fallbackMotifs = [
-        [0, 1, 2, 1, 0],
-        [0, 1, 3, 2, 0],
-        [0, 2, 1, 2, 0]
-    ]
+    private static let fallbackSteps = [0, 4, 8, 12]
 
     // MARK: Public entry point
 
-    static func process(imageData: Data) async throws -> ProcessedPhotoSound {
-        let prepared = try await prepare(imageData: imageData)
+    static func process(
+        imageData: Data,
+        overrides: PhotoMusicAnalysisOverrides = .init()
+    ) async throws -> ProcessedPhotoSound {
+        let prepared = try await prepare(imageData: imageData, overrides: overrides)
         return try await process(prepared: prepared)
     }
 
-    static func prepare(imageData: Data) async throws -> PreparedPhotoInput {
+    static func prepare(
+        imageData: Data,
+        overrides: PhotoMusicAnalysisOverrides = .init()
+    ) async throws -> PreparedPhotoInput {
         let worker = Task.detached(priority: .userInitiated) {
             let clock = ContinuousClock()
             let totalStart = clock.now
@@ -135,7 +208,7 @@ enum PhotoMusicPipeline {
 
             // The root pitch is needed to select the canonical Cover palette.
             let colorAnalysisStart = clock.now
-            let colorProfile = try analyzeColor(cgImage: normalized)
+            let colorProfile = try await analyzeColor(cgImage: normalized, overrides: overrides)
             try Task.checkCancellation()
             #if DEBUG
             logDuration("downsample + color analysis", startedAt: colorAnalysisStart, clock: clock)
@@ -175,37 +248,35 @@ enum PhotoMusicPipeline {
             try Task.checkCancellation()
 
             let normalized = UIImage(data: prepared.analysisInputData)?.cgImage
-            let gridLevels: [Int]
-            let significantToneCount: Int
+            let stepFeatures: [PhotoStepFeature]
             let fallback: SequenceFallback
 
             if let normalized {
-                // Tone analysis stays on direct source luminance so Cover tuning does not change music.
+                // Musical analysis reads the normalized source, not the Cover preview.
                 let toneAnalysisStart = clock.now
                 do {
-                    let analyzed = try analyzeTones(cgImage: normalized)
-                    gridLevels = analyzed.0
-                    significantToneCount = analyzed.1
-                    fallback = gridLevels.contains(where: { $0 > 0 }) ? .none : .emptyToneGrid
+                    stepFeatures = try analyzeSteps(
+                        cgImage: normalized,
+                        palette: prepared.colorProfile.palette
+                    )
+                    fallback = stepFeatures.isEmpty ? .emptyVisualStructure : .none
                     #if DEBUG
-                    logDuration("musical downsample + tone analysis", startedAt: toneAnalysisStart, clock: clock)
+                    logDuration("musical color/contrast analysis", startedAt: toneAnalysisStart, clock: clock)
                     #endif
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    gridLevels = []
-                    significantToneCount = 0
-                    fallback = .toneAnalysisFailed
+                    stepFeatures = []
+                    fallback = .visualAnalysisFailed
                     #if DEBUG
                     performanceLogger.debug(
-                        "sequence fallback: stage=tone-analysis-error, error=\(String(describing: error), privacy: .public)"
+                        "sequence fallback: stage=visual-analysis-error, error=\(String(describing: error), privacy: .public)"
                     )
                     #endif
                 }
             } else {
-                gridLevels = []
-                significantToneCount = 0
-                fallback = .toneAnalysisFailed
+                stepFeatures = []
+                fallback = .visualAnalysisFailed
                 #if DEBUG
                 performanceLogger.debug(
                     "sequence fallback: stage=analysis-input-decode, preserved=color-profile, privacy=public"
@@ -216,8 +287,7 @@ enum PhotoMusicPipeline {
             let sequenceStart = clock.now
             let sequence = buildSequence(
                 colorProfile: prepared.colorProfile,
-                gridLevels: gridLevels,
-                significantToneCount: significantToneCount,
+                stepFeatures: stepFeatures,
                 fallback: fallback
             )
             try Task.checkCancellation()
@@ -234,7 +304,9 @@ enum PhotoMusicPipeline {
                 description: nil,
                 createdAt: .now,
                 coverFilename: "\(id.uuidString).png",
-                sequence: sequence
+                sequence: sequence,
+                algorithmVersion: currentAlgorithmVersion,
+                visualSignature: prepared.colorProfile.visualSignature
             )
             return ProcessedPhotoSound(sound: sound, coverData: prepared.processedPreviewData)
         }
@@ -268,7 +340,7 @@ enum PhotoMusicPipeline {
         guard let ctx = CGContext(
             data: &pixels, width: width, height: height,
             bitsPerComponent: 8, bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
+            space: sRGBColorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { throw PhotoMusicPipelineError.decodeFailed }
 
@@ -284,179 +356,410 @@ enum PhotoMusicPipeline {
         return result
     }
 
-    // MARK: - Color analysis (adapted from PhotoColorAnalyzer)
+    // MARK: - Color analysis
 
-    private static func analyzeColor(cgImage source: CGImage) throws -> PhotoMusicColorProfile {
+    private static func analyzeColor(
+        cgImage source: CGImage,
+        overrides: PhotoMusicAnalysisOverrides
+    ) async throws -> PhotoMusicColorProfile {
         let side = analysisSide
         var pixels = [UInt8](repeating: 0, count: side * side * 4)
         guard let ctx = CGContext(
             data: &pixels, width: side, height: side,
             bitsPerComponent: 8, bytesPerRow: side * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
+            space: sRGBColorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { throw PhotoMusicPipelineError.decodeFailed }
         ctx.interpolationQuality = .medium
         ctx.draw(source, in: CGRect(x: 0, y: 0, width: side, height: side))
 
+        let visualSignature = stableContentSignature(bytes: pixels)
+        let portraitDetection = await detectPortrait(cgImage: source, timeout: .milliseconds(150))
+        let isPortraitDominant = overrides.portraitDominant
+            ?? (portraitDetection.status == .detected
+                && portraitDetection.faceAreaProportion >= portraitAreaThreshold)
+
+        #if DEBUG
+        logRootSelection(portraitDetection, isPortraitDominant: isPortraitDominant)
+        #endif
+
         var r = 0.0, g = 0.0, b = 0.0, weight = 0.0
         var hues: [Double] = []
         var gray = [Double](repeating: 0, count: side * side)
-        var hueBins = [Double](repeating: 0, count: 12)
+        var sectorWeights = [Double](repeating: 0, count: 12)
+        var sectorLuminance = [Double](repeating: 0, count: 12)
+        var sectorSaturation = [Double](repeating: 0, count: 12)
         var totalChromaticWeight = 0.0
-        let selectorSeed = stableSelectorSeed(bytes: pixels)
+        var luminanceMinimum = 1.0
+        var luminanceMaximum = 0.0
+        var luminanceDeviation = 0.0
 
         for i in 0..<side * side {
-            let p     = i * 4
-            let alpha = Double(pixels[p + 3]) / 255
-            guard alpha > 0 else { continue }
-            let pr = Double(pixels[p])     / 255
-            let pg = Double(pixels[p + 1]) / 255
-            let pb = Double(pixels[p + 2]) / 255
-            r += pr * alpha; g += pg * alpha; b += pb * alpha; weight += alpha
-            let luminance = 0.2126 * pr + 0.7152 * pg + 0.0722 * pb
+            guard let sample = rgbaComponents(from: pixels, at: i) else { continue }
+            r += sample.red * sample.alpha
+            g += sample.green * sample.alpha
+            b += sample.blue * sample.alpha
+            weight += sample.alpha
+            let luminance = sample.luminance
             gray[i] = luminance
-            let (hue, sat) = hsb(r: pr, g: pg, b: pb)
-            if sat >= minimumSaturationForHue { hues.append(hue) }
-
-            let saturationWeight = pow(max(0, (sat - 0.08) / 0.92), 2.0)
-            let luminanceConfidence = 0.25 + 0.75 * max(0, 1 - abs(luminance - 0.5) / 0.5)
-            let hueWeight = alpha * saturationWeight * luminanceConfidence
-            if hueWeight > 0 {
-                let bin = min(11, max(0, Int((hue / 30).rounded(.down))))
-                hueBins[bin] += hueWeight
-                totalChromaticWeight += hueWeight
+            luminanceMinimum = min(luminanceMinimum, luminance)
+            luminanceMaximum = max(luminanceMaximum, luminance)
+            let (hue, saturation) = hsb(r: sample.red, g: sample.green, b: sample.blue)
+            if saturation >= minimumSaturationForHue {
+                hues.append(hue)
             }
+
+            let chromaticWeight = sample.alpha * max(0, saturation - minimumSaturationForHue)
+            guard chromaticWeight > 0 else { continue }
+            let sector = hueSector(for: hue)
+            sectorWeights[sector] += chromaticWeight
+            sectorLuminance[sector] += luminance * chromaticWeight
+            sectorSaturation[sector] += saturation * chromaticWeight
+            totalChromaticWeight += chromaticWeight
         }
 
         guard weight > 0 else {
+            let rootPitchClass = isPortraitDominant
+                ? PitchClass(normalizing: proceduralRootPitchClass(from: visualSignature))
+                : .c
             return PhotoMusicColorProfile(hue: 0, saturation: 0, luminance: 0,
                                           hueVarianceDegrees: 0, edgeDensity: 0,
-                                          rootPitchClass: .c,
-                                          selectorSeed: selectorSeed,
-                                          hasReliableRoot: false)
+                                          rootPitchClass: rootPitchClass,
+                                          palette: emptyPalette,
+                                          visualSignature: visualSignature,
+                                          hasReliableRoot: isPortraitDominant,
+                                          isPortraitDominant: isPortraitDominant)
         }
-        r /= weight; g /= weight; b /= weight
+        r /= weight
+        g /= weight
+        b /= weight
         let (meanHue, meanSat) = hsb(r: r, g: g, b: b)
         let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        for value in gray {
+            luminanceDeviation += abs(value - lum)
+        }
+        let palette = makePalette(
+            sectorWeights: sectorWeights,
+            sectorLuminance: sectorLuminance,
+            sectorSaturation: sectorSaturation,
+            totalAlpha: weight,
+            totalChromaticWeight: totalChromaticWeight,
+            luminanceContrast: min(
+                1,
+                (luminanceMaximum - luminanceMinimum) * 0.55
+                    + (luminanceDeviation / Double(gray.count)) * 1.2
+            )
+        )
+        let rootPitchClass = isPortraitDominant
+            ? PitchClass(normalizing: proceduralRootPitchClass(from: visualSignature))
+            : colorBasedRootPitchClass(from: palette)
         return PhotoMusicColorProfile(
             hue: meanHue, saturation: meanSat, luminance: lum,
             hueVarianceDegrees: circularVarianceDegrees(hues),
             edgeDensity: sobelEdgeDensity(gray, side: side),
-            rootPitchClass: selectRootPitchClass(hueBins: hueBins,
-                                                 totalChromaticWeight: totalChromaticWeight,
-                                                 seed: selectorSeed),
-            selectorSeed: selectorSeed,
-            hasReliableRoot: totalChromaticWeight > 0.0001
+            rootPitchClass: rootPitchClass,
+            palette: palette,
+            visualSignature: visualSignature,
+            hasReliableRoot: palette.dominant != nil || isPortraitDominant,
+            isPortraitDominant: isPortraitDominant
         )
     }
 
-    // MARK: - Tone analysis (adapted from ImageSequenceGenerator.analyzeTones)
+    // MARK: - Portrait detection
 
-    private static func analyzeTones(cgImage source: CGImage) throws -> ([Int], Int) {
-        let significantSize = toneAnalysisSize(for: source)
-        let fullLevels = try toneLevels(source, width: significantSize.width, height: significantSize.height)
-        let total = max(1, fullLevels.count)
-        var counts = [Int](repeating: 0, count: 4)
-        for level in fullLevels {
-            counts[level] += 1
+    /// Runs Vision face detection and races it against a short timeout. The
+    /// returned result contains only a normalized area and status.
+    ///
+    /// The function is `async` so callers can `await` it without a second
+    /// layer of concurrency. Vision runs in an unstructured detached task so
+    /// a synchronous `VNImageRequestHandler.perform` cannot keep the timeout
+    /// path waiting. The late task retains its input until Vision returns, and
+    /// the gate discards its result after the fallback has fired.
+    private static func detectPortrait(
+        cgImage: CGImage,
+        timeout: Duration
+    ) async -> PortraitDetectionResult {
+        let timeoutResult = PortraitDetectionResult(faceAreaProportion: 0, status: .timeout)
+        return await runWithTimeout(timeout: timeout, fallback: timeoutResult) {
+            let request = VNDetectFaceRectanglesRequest()
+            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
+            do {
+                try handler.perform([request])
+                let faceArea = min(1, (request.results ?? []).reduce(0) { result, observation in
+                    result + observation.boundingBox.width * observation.boundingBox.height
+                })
+                return PortraitDetectionResult(
+                    faceAreaProportion: faceArea,
+                    status: request.results?.isEmpty == false ? .detected : .none
+                )
+            } catch {
+                return PortraitDetectionResult(faceAreaProportion: 0, status: .error)
+            }
         }
-        let significant = counts.filter { Double($0) / Double(total) >= significantToneFraction }.count
-        let gridLevels  = try toneLevels(source, width: MusicSequence.steps, height: MusicSequence.rows)
-        return (gridLevels, significant)
     }
 
-    private static func toneLevels(_ source: CGImage, width: Int, height: Int) throws -> [Int] {
+    private static func colorBasedRootPitchClass(from palette: PhotoMusicPalette) -> PitchClass {
+        guard let dominant = palette.dominant else { return .c }
+        return colorBasedRootPitchClass(fromHue: dominant.hue)
+    }
+
+    static func colorBasedRootPitchClass(fromHue hue: Double) -> PitchClass {
+        circleOfFifths[hueSector(for: hue)]
+    }
+
+    /// SplitMix64 finalizer used only for deterministic portrait roots.
+    /// It is intentionally salted so the root seed cannot be reused as a Jam seed.
+    static func splitMix64(_ value: UInt64) -> UInt64 {
+        var mixed = value &+ 0x9E3779B97F4A7C15
+        mixed = (mixed ^ (mixed >> 30)) &* 0xBF58476D1CE4E5B9
+        mixed = (mixed ^ (mixed >> 27)) &* 0x94D049BB133111EB
+        return mixed ^ (mixed >> 31)
+    }
+
+    /// Stable portrait root derived only from normalized visual content.
+    static func proceduralRootPitchClass(from visualSignature: UInt64) -> Int {
+        Int(splitMix64(visualSignature ^ proceduralRootSalt) % 12)
+    }
+
+    /// Small internal seam for racing an operation against a real timeout.
+    /// The operation is detached because it may contain synchronous work that
+    /// does not observe task cancellation, such as Vision's `perform`. External
+    /// cancellation takes the same fallback path; the detached operation may
+    /// still finish later and is discarded by the gate.
+    static func runWithTimeout<T: Sendable>(
+        timeout: Duration,
+        fallback: T,
+        operation: @escaping @Sendable () async -> T
+    ) async -> T {
+        let gate = SingleCompletionGate()
+        let cancellation = CancellationRelay()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { (continuation: CheckedContinuation<T, Never>) in
+                let operationTask = Task.detached(priority: .userInitiated) {
+                    let value = await operation()
+                    guard gate.tryFire() else { return }
+                    cancellation.cancel()
+                    continuation.resume(returning: value)
+                }
+
+                let timeoutTask = Task.detached(priority: .userInitiated) {
+                    do {
+                        try await Task.sleep(for: timeout)
+                    } catch {
+                        return
+                    }
+                    guard gate.tryFire() else { return }
+                    cancellation.cancel()
+                    continuation.resume(returning: fallback)
+                }
+
+                cancellation.install {
+                    operationTask.cancel()
+                    timeoutTask.cancel()
+                    guard gate.tryFire() else { return }
+                    continuation.resume(returning: fallback)
+                }
+            }
+        }, onCancel: {
+            cancellation.cancel()
+        })
+    }
+
+    /// Installs a cancellation action without racing the caller's cancellation
+    /// against continuation setup. The action is always invoked outside the
+    /// lock, and is released as soon as cancellation wins.
+    private final class CancellationRelay: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        private var action: (@Sendable () -> Void)?
+
+        func install(_ action: @escaping @Sendable () -> Void) {
+            lock.lock()
+            guard !cancelled else {
+                lock.unlock()
+                action()
+                return
+            }
+            self.action = action
+            lock.unlock()
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let action = self.action
+            self.action = nil
+            lock.unlock()
+            action?()
+        }
+    }
+
+    /// Single-completion gate for the two concurrent race callers. The state
+    /// is protected by the lock; callers run their continuation callback only
+    /// after `tryFire()` has released it.
+    final class SingleCompletionGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var fired = false
+
+        func tryFire() -> Bool {
+            lock.lock()
+            guard !fired else {
+                lock.unlock()
+                return false
+            }
+            fired = true
+            lock.unlock()
+            return true
+        }
+    }
+
+    // MARK: - Spatial color/contrast analysis
+
+    private static func analyzeSteps(
+        cgImage source: CGImage,
+        palette: PhotoMusicPalette
+    ) throws -> [PhotoStepFeature] {
+        let width = MusicSequence.steps
+        let height = MusicSequence.rows
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         guard let ctx = CGContext(
             data: &pixels, width: width, height: height,
             bitsPerComponent: 8, bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
+            space: sRGBColorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { throw PhotoMusicPipelineError.renderFailed }
         ctx.interpolationQuality = .medium
         ctx.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return (0..<width * height).map { i in
-            let p   = i * 4
-            let alpha = Double(pixels[p + 3]) / 255
-            guard alpha > 0 else { return 0 }
-            let red = min(max(Double(pixels[p]) / 255 / alpha, 0), 1)
-            let green = min(max(Double(pixels[p + 1]) / 255 / alpha, 0), 1)
-            let blue = min(max(Double(pixels[p + 2]) / 255 / alpha, 0), 1)
-            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-            let normalized = normalizedToneAnalysisLuminance(luminance)
-            return min(3, max(0, Int((normalized * 4).rounded(.down))))
-        }
-    }
 
-    private static func toneAnalysisSize(for source: CGImage) -> (width: Int, height: Int) {
-        let width = source.width
-        let height = source.height
-        let maximum = max(width, height)
-        guard maximum > toneAnalysisMaximumDimension else {
-            return (max(1, width), max(1, height))
+        var luminances = [Double](repeating: 0, count: width * height)
+        var cells = [PhotoStepFeature?](repeating: nil, count: width * height)
+        for index in 0..<(width * height) {
+            guard let sample = rgbaComponents(from: pixels, at: index) else { continue }
+            let (hue, saturation) = hsb(r: sample.red, g: sample.green, b: sample.blue)
+            luminances[index] = sample.luminance
+            cells[index] = PhotoStepFeature(
+                step: index % width,
+                row: index / width,
+                hueSector: saturation >= minimumSaturationForHue ? hueSector(for: hue) : nil,
+                saturation: saturation,
+                luminance: sample.luminance,
+                localContrast: 0
+            )
         }
 
-        let scale = Double(toneAnalysisMaximumDimension) / Double(maximum)
-        return (
-            width: max(1, Int((Double(width) * scale).rounded())),
-            height: max(1, Int((Double(height) * scale).rounded()))
-        )
-    }
+        var contrastedCells: [PhotoStepFeature] = []
+        var maximumContrast = 0.0
+        for index in 0..<(width * height) {
+            guard let cell = cells[index] else { continue }
+            let x = index % width
+            let y = index / width
+            var differences: [Double] = []
+            for (neighborX, neighborY) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+                where (0..<width).contains(neighborX) && (0..<height).contains(neighborY)
+            {
+                let neighborIndex = neighborY * width + neighborX
+                let luminanceDifference = abs(cell.luminance - luminances[neighborIndex])
+                let chromaticDifference: Double
+                if let cellSector = cell.hueSector,
+                   let neighborSector = cells[neighborIndex]?.hueSector
+                {
+                    let hueDistance = Double(circularHueDistance(cellSector, neighborSector)) / 6
+                    chromaticDifference = hueDistance * min(cell.saturation, cells[neighborIndex]?.saturation ?? 0) * 0.35
+                } else {
+                    chromaticDifference = abs(cell.saturation - (cells[neighborIndex]?.saturation ?? 0)) * 0.35
+                }
+                differences.append(max(luminanceDifference, chromaticDifference))
+            }
+            let localContrast = differences.isEmpty
+                ? 0
+                : min(1, (differences.max() ?? 0) * 0.7 + (differences.reduce(0, +) / Double(differences.count)) * 0.3)
+            maximumContrast = max(maximumContrast, localContrast)
+            contrastedCells.append(PhotoStepFeature(
+                step: cell.step,
+                row: cell.row,
+                hueSector: cell.hueSector,
+                saturation: cell.saturation,
+                luminance: cell.luminance,
+                localContrast: localContrast
+            ))
+        }
 
-    private static func normalizedToneAnalysisLuminance(_ luminance: Double) -> Double {
-        let contrast = ((luminance - 0.5) * 1.12 + 0.5).clamped(to: 0...1)
-        let shadowBias = contrast + max(0, 0.24 - contrast) * 0.10
-        return (shadowBias - max(0, shadowBias - 0.82) * 0.08).clamped(to: 0...1)
+        guard maximumContrast >= minimumLocalContrast else { return [] }
+        let presenceThreshold = max(minimumLocalContrast, maximumContrast * 0.30)
+        var result: [PhotoStepFeature] = []
+        for step in 0..<width {
+            let candidates = contrastedCells.filter { $0.step == step }
+            guard let selected = candidates.max(by: { lhs, rhs in
+                let lhsScore = lhs.localContrast * 1.4 + lhs.saturation * 0.12
+                let rhsScore = rhs.localContrast * 1.4 + rhs.saturation * 0.12
+                if lhsScore != rhsScore { return lhsScore < rhsScore }
+                return lhs.row > rhs.row
+            }), selected.localContrast >= presenceThreshold else { continue }
+            result.append(selected)
+        }
+
+        // Palette is intentionally part of this analysis contract: color is
+        // read per region below, while palette relevance controls neutral rest.
+        if palette.dominant == nil {
+            return result.filter { $0.localContrast >= presenceThreshold }
+        }
+        return result
     }
 
     // MARK: - Sequence builder (adapted from ImageSequenceGenerator)
 
-    private static func buildSequence(colorProfile p: PhotoMusicColorProfile,
-                                      gridLevels: [Int],
-                                      significantToneCount: Int,
-                                      fallback: SequenceFallback) -> MusicSequence {
+    private static func buildSequence(
+        colorProfile p: PhotoMusicColorProfile,
+        stepFeatures: [PhotoStepFeature],
+        fallback: SequenceFallback
+    ) -> MusicSequence {
         let mode = fallback == .none && !p.isFinite ? .invalidProfile : fallback
         let isFallback = mode != .none
-        let rootContext: (root: Int, source: String)
-        if isFallback {
-            rootContext = fallbackRoot(for: p)
+        let root = p.isFinite && p.hasReliableRoot
+            ? p.rootPitchClass.rawValue
+            : PitchClass.c.rawValue
+        let rootSource: String
+        if p.isFinite && p.hasReliableRoot {
+            rootSource = p.isPortraitDominant ? "procedural-signature" : "dominant-color"
         } else {
-            rootContext = (
-                root: p.rootPitchClass.rawValue,
-                source: p.hasReliableRoot ? "partial-color" : "seed"
-            )
+            rootSource = "neutral-default"
         }
-        let root     = rootContext.root
-        let scale    = isFallback ? fallbackScale(for: p) : musicScale(for: p)
-        let bpm      = safeBPM(for: p.luminance)
-        let harmony  = MusicHarmony(rootPitchClass: root, scale: scale, bpm: bpm)
-        let octRange = isFallback ? 1 : octaveRange(for: significantToneCount)
-        let gate     = isFallback
+        let scale = isFallback ? fallbackScale(for: p) : musicScale(for: p)
+        let bpm = safeBPM(for: p.luminance)
+        let harmony = MusicHarmony(rootPitchClass: root, scale: scale, bpm: bpm)
+        let octRange = isFallback ? 1 : octaveRange(for: stepFeatures)
+        let gate = isFallback
             ? fallbackGate(for: p.edgeDensity)
             : computeGate(edgeDensity: p.edgeDensity.isFinite ? p.edgeDensity : 0.12)
-        let waveform: MusicWaveform = isFallback
-            ? .triangle
-            : ((p.hue.isFinite && p.hue >= 90 && p.hue < 300) ? .square : .triangle)
-        let profile  = SoundProfile(gate: gate, octaveRange: octRange, waveform: waveform)
+        let waveform: MusicWaveform =
+            p.hue.isFinite && p.hue >= 90 && p.hue < 300 ? .square : .triangle
+        let profile = SoundProfile(gate: gate, octaveRange: octRange, waveform: waveform)
 
         let notes: [MusicNote]
         if isFallback {
-            let seed = p.selectorSeed ?? 0
-            let variation = Int(seed % UInt64(fallbackMotifs.count))
-            notes = fallbackNotes(root: root, scale: scale, seed: seed, variation: variation)
+            notes = fallbackNotes(root: root, scale: scale)
         } else {
             var generated: [MusicNote] = []
-            for row in 0..<MusicSequence.rows {
-                for step in 0..<MusicSequence.steps {
-                    let level = gridLevels[row * MusicSequence.steps + step]
-                    guard level > 0 else { continue }
-                    let offset = pitchOffset(row: row, scale: scale, octaveRange: octRange)
-                    generated.append(MusicNote(
-                        step: step, row: row,
-                        midiNote: 60 + root + offset,
-                        velocity: Float(level) / 3
-                    ))
-                }
+            var previousMIDINote: Int?
+            for feature in stepFeatures {
+                let degree = safeScaleDegree(for: feature, profile: p, scale: scale)
+                let midiNote = melodicMIDINote(
+                    root: root,
+                    degree: degree,
+                    feature: feature,
+                    previousMIDINote: previousMIDINote
+                )
+                previousMIDINote = midiNote
+                let accent = feature.localContrast >= 0.30 ? 1.08 : 1.0
+                let velocity = Float(
+                    (0.24 + feature.saturation * 0.38 + feature.localContrast * 0.50) * accent
+                ).clamped(to: 0.20...0.92)
+                generated.append(MusicNote(
+                    step: feature.step,
+                    row: feature.row,
+                    midiNote: midiNote,
+                    velocity: velocity
+                ))
             }
             notes = generated
         }
@@ -464,30 +767,17 @@ enum PhotoMusicPipeline {
         let sequence = MusicSequence(harmony: harmony, notes: notes, soundProfile: profile)
         if isFallback {
             #if DEBUG
-            let seed = p.selectorSeed ?? 0
-            let variation = Int(seed % UInt64(fallbackMotifs.count))
             logFallback(
                 mode,
-                rootSource: rootContext.source,
+                rootSource: rootSource,
                 root: root,
                 scale: scale,
-                variation: variation,
                 sequence: sequence
             )
             assertValidFallback(sequence)
             #endif
         }
         return sequence
-    }
-
-    private static func fallbackRoot(for p: PhotoMusicColorProfile) -> (root: Int, source: String) {
-        if p.isFinite, p.hasReliableRoot {
-            return (p.rootPitchClass.rawValue, "partial-color")
-        }
-        if let seed = p.selectorSeed {
-            return (Int(seed % 12), "seed")
-        }
-        return (PitchClass.c.rawValue, "default")
     }
 
     private static func fallbackScale(for p: PhotoMusicColorProfile) -> MusicScale {
@@ -508,29 +798,20 @@ enum PhotoMusicPipeline {
 
     private static func fallbackNotes(
         root: Int,
-        scale: MusicScale,
-        seed: UInt64,
-        variation: Int
+        scale: MusicScale
     ) -> [MusicNote] {
-        let motif = fallbackMotifs[variation]
-        let maximumDegree = scale.degrees.max() ?? 0
-        let registerTarget = 68 + Int((seed >> 8) % 9)
-        let rootMIDINote = (60...84)
-            .filter {
-                PitchClass(normalizing: $0).rawValue == root
-                    && $0 + maximumDegree <= 84
-            }
-            .min { abs($0 - registerTarget) < abs($1 - registerTarget) }
-            ?? 60 + root
-
+        let rootMIDINote = (60...72).first {
+            PitchClass(normalizing: $0).rawValue == root
+        } ?? 60
+        let degreeIndices = [0, min(1, scale.degrees.count - 1), min(2, scale.degrees.count - 1), 0]
         return fallbackSteps.enumerated().map { index, step in
-            let degreeIndex = motif[index]
-            let midiNote = rootMIDINote + scale.degrees[degreeIndex]
+            let degree = scale.degrees[degreeIndices[index]]
+            let midiNote = rootMIDINote + degree
             return MusicNote(
                 step: step,
-                row: min(MusicSequence.rows - 1, max(0, MusicSequence.rows / 2 - degreeIndex)),
-                midiNote: midiNote,
-                velocity: [0.58, 0.66, 0.74, 0.62, 0.70][index]
+                row: [4, 3, 2, 4][index],
+                midiNote: min(84, midiNote),
+                velocity: [0.42, 0.52, 0.60, 0.48][index]
             )
         }
     }
@@ -553,13 +834,23 @@ enum PhotoMusicPipeline {
     // MARK: - Musical heuristics
 
     private static func musicScale(for p: PhotoMusicColorProfile) -> MusicScale {
-        if p.hueVarianceDegrees > highHueVarianceDegrees  { return .wholeTone }
-        if p.hueVarianceDegrees >= lowHueVarianceDegrees  { return .dorian }
-        return p.saturation >= 0.45 ? .majorPentatonic : .minorPentatonic
+        // Jam understands both pentatonic families without discarding degrees;
+        // keep the photo scale inside that safe vocabulary.
+        let energy = p.saturation * 0.55
+            + p.palette.contrastAmount * 0.25
+            + min(1, Double(p.palette.diversity) / 4) * 0.20
+        return energy >= 0.46 ? .majorPentatonic : .minorPentatonic
     }
 
-    private static func octaveRange(for significantToneCount: Int) -> Double {
-        switch significantToneCount { case 4...: 2; case 3: 1.5; default: 1 }
+    private static func octaveRange(for features: [PhotoStepFeature]) -> Double {
+        guard let minimumRow = features.map(\.row).min(),
+              let maximumRow = features.map(\.row).max()
+        else { return 1 }
+        switch maximumRow - minimumRow {
+        case 5...: return 2
+        case 3...: return 1.5
+        default: return 1
+        }
     }
 
     private static func computeGate(edgeDensity: Double) -> Double {
@@ -567,12 +858,58 @@ enum PhotoMusicPipeline {
         return longGate + (shortGate - longGate) * n
     }
 
-    private static func pitchOffset(row: Int, scale: MusicScale, octaveRange: Double) -> Int {
-        let reversed    = MusicSequence.rows - 1 - row
-        let span        = Int((12 * octaveRange).rounded())
-        let target      = Double(reversed) / Double(MusicSequence.rows - 1) * Double(span)
-        let candidates  = (0...Int(ceil(octaveRange))).flatMap { oct in scale.degrees.map { $0 + oct * 12 } }
-        return candidates.min { abs(Double($0) - target) < abs(Double($1) - target) } ?? 0
+    private static func safeScaleDegree(
+        for feature: PhotoStepFeature,
+        profile: PhotoMusicColorProfile,
+        scale: MusicScale
+    ) -> Int {
+        let rawPitchClass: Int
+        if let sector = feature.hueSector {
+            let localPalette = profile.palette.entries.min { lhs, rhs in
+                circularHueDistance(sector, lhs.sector) < circularHueDistance(sector, rhs.sector)
+            }
+            let referenceSector = localPalette?.sector ?? sector
+            let distance = circularHueDistance(sector, referenceSector)
+            rawPitchClass = circleOfFifths[distance <= 2 ? sector : referenceSector].rawValue
+        } else {
+            rawPitchClass = profile.rootPitchClass.rawValue
+        }
+
+        let relative = (rawPitchClass - profile.rootPitchClass.rawValue + 12) % 12
+        return scale.degrees.min { lhs, rhs in
+            let lhsDistance = pitchClassDistance(relative, lhs)
+            let rhsDistance = pitchClassDistance(relative, rhs)
+            if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+            return lhs < rhs
+        } ?? 0
+    }
+
+    private static func melodicMIDINote(
+        root: Int,
+        degree: Int,
+        feature: PhotoStepFeature,
+        previousMIDINote: Int?
+    ) -> Int {
+        let target = 52
+            + Int((Double(MusicSequence.rows - 1 - feature.row) / Double(MusicSequence.rows - 1) * 28).rounded())
+            + Int(((feature.luminance - 0.5) * 8).rounded())
+        let pitchClass = (root + degree) % 12
+        let candidates = (48...96).filter {
+            PitchClass(normalizing: $0).rawValue == pitchClass
+        }
+        let boundedCandidates: [Int]
+        if let previousMIDINote {
+            let nearby = candidates.filter { abs($0 - previousMIDINote) <= 12 }
+            boundedCandidates = nearby.isEmpty ? candidates : nearby
+        } else {
+            boundedCandidates = candidates
+        }
+        return boundedCandidates.min { lhs, rhs in
+            let lhsDistance = abs(lhs - target)
+            let rhsDistance = abs(rhs - target)
+            if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+            return lhs < rhs
+        } ?? 60 + root
     }
 
     // MARK: - Color math
@@ -611,40 +948,129 @@ enum PhotoMusicPipeline {
         return count == 0 ? 0 : Double(edges) / Double(count)
     }
 
-    private static func stableSelectorSeed(bytes: [UInt8]) -> UInt64 {
+    private static func rgbaComponents(
+        from pixels: [UInt8],
+        at index: Int
+    ) -> (red: Double, green: Double, blue: Double, alpha: Double, luminance: Double)? {
+        let offset = index * 4
+        guard pixels.indices.contains(offset + 3) else { return nil }
+        let alpha = Double(pixels[offset + 3]) / 255
+        guard alpha > 0 else { return nil }
+        let red = min(1, max(0, Double(pixels[offset]) / 255 / alpha))
+        let green = min(1, max(0, Double(pixels[offset + 1]) / 255 / alpha))
+        let blue = min(1, max(0, Double(pixels[offset + 2]) / 255 / alpha))
+        return (
+            red: red,
+            green: green,
+            blue: blue,
+            alpha: alpha,
+            luminance: 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        )
+    }
+
+    private static let emptyPalette = PhotoMusicPalette(
+        dominant: nil,
+        secondary: nil,
+        contrast: nil,
+        accent: nil,
+        chromaticProportion: 0,
+        contrastAmount: 0
+    )
+
+    private static func makePalette(
+        sectorWeights: [Double],
+        sectorLuminance: [Double],
+        sectorSaturation: [Double],
+        totalAlpha: Double,
+        totalChromaticWeight: Double,
+        luminanceContrast: Double
+    ) -> PhotoMusicPalette {
+        let chromaticProportion = (totalChromaticWeight / max(totalAlpha, 1e-6)).clamped(to: 0...1)
+        guard chromaticProportion >= minimumChromaticProportion,
+              totalChromaticWeight > 0
+        else {
+            return PhotoMusicPalette(
+                dominant: nil,
+                secondary: nil,
+                contrast: nil,
+                accent: nil,
+                chromaticProportion: chromaticProportion,
+                contrastAmount: luminanceContrast
+            )
+        }
+
+        let rankedSectors = sectorWeights.indices
+            .filter { sectorWeights[$0] > totalChromaticWeight * 0.03 }
+            .sorted {
+                if sectorWeights[$0] != sectorWeights[$1] {
+                    return sectorWeights[$0] > sectorWeights[$1]
+                }
+                return $0 < $1
+            }
+        guard let dominantSector = rankedSectors.first else { return emptyPalette }
+
+        func color(for sector: Int) -> PhotoPaletteColor {
+            let weight = sectorWeights[sector]
+            return PhotoPaletteColor(
+                hue: (Double(sector) + 0.5) * 30,
+                saturation: sectorSaturation[sector] / max(weight, 1e-6),
+                luminance: sectorLuminance[sector] / max(weight, 1e-6),
+                sector: sector,
+                proportion: weight / totalChromaticWeight
+            )
+        }
+
+        let dominant = color(for: dominantSector)
+        let secondarySector = rankedSectors.first { $0 != dominantSector }
+        let secondary = secondarySector.map(color)
+        let contrastSector = rankedSectors
+            .filter { $0 != dominantSector && $0 != secondarySector }
+            .max {
+                abs(color(for: $0).luminance - dominant.luminance) * sectorWeights[$0]
+                    < abs(color(for: $1).luminance - dominant.luminance) * sectorWeights[$1]
+            }
+        let contrast = contrastSector.map(color)
+        let accentSector = rankedSectors
+            .filter { $0 != dominantSector && $0 != secondarySector && $0 != contrastSector }
+            .max {
+                sectorSaturation[$0] < sectorSaturation[$1]
+            }
+        let accent = accentSector.map(color)
+
+        return PhotoMusicPalette(
+            dominant: dominant,
+            secondary: secondary,
+            contrast: contrast,
+            accent: accent,
+            chromaticProportion: chromaticProportion,
+            contrastAmount: luminanceContrast
+        )
+    }
+
+    private static func hueSector(for hue: Double) -> Int {
+        min(11, max(0, Int(hue.truncatingRemainder(dividingBy: 360) / 30)))
+    }
+
+    private static func circularHueDistance(_ lhs: Int, _ rhs: Int) -> Int {
+        let direct = abs(lhs - rhs)
+        return min(direct, 12 - direct)
+    }
+
+    private static func pitchClassDistance(_ lhs: Int, _ rhs: Int) -> Int {
+        let direct = abs(lhs - rhs)
+        return min(direct, 12 - direct)
+    }
+
+    /// Stable signature of the normalized 64×64 visual raster. It is the only
+    /// input to the procedural portrait root and remains independent of Cover,
+    /// sequence construction, and Jam variation selection.
+    private static func stableContentSignature(bytes: [UInt8]) -> UInt64 {
         var hash: UInt64 = 0xcbf29ce484222325
         for byte in bytes {
-            hash ^= UInt64(byte)
+            hash ^= UInt64(byte >> 4)
             hash &*= 0x100000001b3
         }
         return hash
-    }
-
-    private static func selectRootPitchClass(hueBins: [Double],
-                                             totalChromaticWeight: Double,
-                                             seed: UInt64) -> PitchClass {
-        let softenedWeights: [Double]
-
-        if totalChromaticWeight > 0.0001 {
-            let fallback = totalChromaticWeight * weightedHueFallbackRatio / 12
-            softenedWeights = hueBins.map { pow($0 + fallback, weightedHueSofteningExponent) }
-        } else {
-            softenedWeights = Array(repeating: 1, count: 12)
-        }
-
-        let totalWeight = max(softenedWeights.reduce(0, +), 0.0001)
-        let selector = Double(seed) / Double(UInt64.max)
-        let target = selector * totalWeight
-
-        var cumulative = 0.0
-        for (index, weight) in softenedWeights.enumerated() {
-            cumulative += weight
-            if target <= cumulative {
-                return PitchClass(rawValue: index) ?? .c
-            }
-        }
-
-        return .b
     }
 }
 
@@ -664,6 +1090,12 @@ private extension PhotoMusicColorProfile {
 
 private extension Double {
     func clamped(to range: ClosedRange<Double>) -> Double {
+        min(max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+private extension Float {
+    func clamped(to range: ClosedRange<Float>) -> Float {
         min(max(self, range.lowerBound), range.upperBound)
     }
 }
