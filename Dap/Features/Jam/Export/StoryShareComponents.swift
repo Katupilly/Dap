@@ -33,12 +33,12 @@ struct StoryShareSurface: View {
     let onSelect: (StoryShareTemplate) -> Void
     let onStories: () -> Void
     let onShare: () -> Void
+    var aspectRatio: CGFloat = 317.4 / 541.2
 
     @State private var scrollTarget: StoryShareTemplate?
 
     var body: some View {
         GeometryReader { proxy in
-            let aspectRatio: CGFloat = 317.4 / 541.2
             let cardSpacing: CGFloat = 17.2
             let leadingPadding: CGFloat = 20
             let peek = min(48, max(32, proxy.size.width * 0.098))

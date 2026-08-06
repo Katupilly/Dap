@@ -2,20 +2,12 @@ import SwiftUI
 import UIKit
 
 struct PhotoStoryExportSnapshot: Identifiable, Sendable {
-    struct Note: Identifiable, Sendable {
-        let step: Int
-        let row: Int
-
-        var id: String { "\(step)-\(row)" }
-    }
-
     let id: UUID
     let imageData: Data
     let title: String
     let root: String
     let scale: String
     let bpm: Int
-    let notes: [Note]
     let palette: ColorPalette
 
     private init(
@@ -25,7 +17,6 @@ struct PhotoStoryExportSnapshot: Identifiable, Sendable {
         root: String,
         scale: String,
         bpm: Int,
-        notes: [Note],
         palette: ColorPalette
     ) {
         self.id = id
@@ -34,7 +25,6 @@ struct PhotoStoryExportSnapshot: Identifiable, Sendable {
         self.root = root
         self.scale = scale
         self.bpm = bpm
-        self.notes = notes
         self.palette = palette
     }
 
@@ -49,7 +39,6 @@ struct PhotoStoryExportSnapshot: Identifiable, Sendable {
             root: pitch.symbol,
             scale: sound.sequence.harmony.scale.displayName,
             bpm: sound.sequence.harmony.bpm,
-            notes: sound.sequence.notes.map { Note(step: $0.step, row: $0.row) },
             palette: RetroCoverRenderer.tonalPalette(for: pitch)
         )
     }
@@ -59,6 +48,18 @@ struct PhotoExportPayload {
     let image: UIImage
     let pngData: Data
     let pixelSize: CGSize
+}
+
+struct PhotoStoryExportLayout {
+    static let canvasSize = CGSize(width: 1080, height: 1920)
+    static let photoFrame = CGRect(x: 120, y: 380, width: 840, height: 1000)
+    static let photoCornerRadius: CGFloat = 50
+    static let eyebrowTop: CGFloat = 223.51
+    static let titleTop: CGFloat = 254.51
+    static let titleMaxWidth: CGFloat = 840
+    static let metadataFrame = CGRect(x: 169.5, y: 1484, width: 741, height: 62)
+    static let signatureTop: CGFloat = 1749.75
+    static let previewAspectRatio = canvasSize.width / canvasSize.height
 }
 
 struct PhotoExportRenderer {
@@ -135,7 +136,8 @@ struct PhotoStoryExportSheet: View {
                 isShareEnabled: payloads[selection] != nil,
                 onSelect: { selection = $0 },
                 onStories: shareToInstagram,
-                onShare: { isShowingShareSheet = true }
+                onShare: { isShowingShareSheet = true },
+                aspectRatio: PhotoStoryExportLayout.previewAspectRatio
             )
             .padding(.top, 62)
 
@@ -254,8 +256,6 @@ enum PhotoStoryRenderError: Error, LocalizedError {
 }
 
 struct PhotoStoryRenderer {
-    static let outputPixelSize = CGSize(width: 1080, height: 1920)
-
     @MainActor
     func render(snapshot: PhotoStoryExportSnapshot) async throws -> PhotoStoryRenderResult {
         guard let image = UIImage(data: snapshot.imageData, scale: 1) else {
@@ -272,12 +272,12 @@ struct PhotoStoryRenderer {
     ) async throws -> PhotoStoryRenderResult {
 
         let content = PhotoStoryExportView(snapshot: snapshot, image: image)
-            .frame(width: Self.outputPixelSize.width, height: Self.outputPixelSize.height)
+            .frame(width: PhotoStoryExportLayout.canvasSize.width, height: PhotoStoryExportLayout.canvasSize.height)
             .environment(\.colorScheme, .dark)
             .environment(\.displayScale, 1)
 
         let renderer = ImageRenderer(content: content)
-        renderer.proposedSize = ProposedViewSize(Self.outputPixelSize)
+        renderer.proposedSize = ProposedViewSize(PhotoStoryExportLayout.canvasSize)
         renderer.scale = 1
         renderer.isOpaque = true
 
@@ -302,51 +302,222 @@ private struct PhotoStoryExportView: View {
     let image: UIImage
 
     var body: some View {
-        ZStack {
-            background
+        let gradient = PhotoStoryBackgroundGradient(palette: snapshot.palette)
+        let headerForeground = foregroundColors(
+            atNormalizedY: (CGFloat(240) + CGFloat(320)) / 2 / PhotoStoryExportLayout.canvasSize.height,
+            gradient: gradient
+        )
+        let metadataForeground = foregroundColors(
+            atNormalizedY: PhotoStoryExportLayout.metadataFrame.midY / PhotoStoryExportLayout.canvasSize.height,
+            gradient: gradient
+        )
+        let signatureForeground = foregroundColors(
+            atNormalizedY: (CGFloat(1750) + CGFloat(1781)) / 2 / PhotoStoryExportLayout.canvasSize.height,
+            gradient: gradient
+        )
 
-            VStack(alignment: .leading, spacing: 38) {
-                titleBlock
+        ZStack(alignment: .top) {
+            gradient.view
+            photoContainer
 
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 708, height: 844)
-                    .clipShape(RoundedRectangle(cornerRadius: 42, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 42, style: .continuous)
-                            .stroke(.white.opacity(0.18), lineWidth: 2)
-                    }
-                    .shadow(color: .black.opacity(0.34), radius: 48, y: 30)
-                    .frame(maxWidth: .infinity)
+            Text("DAP PHOTO")
+                .font(.custom("ZTTalk-Medium", size: 24))
+                .foregroundStyle(headerForeground.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, PhotoStoryExportLayout.eyebrowTop)
 
-                facts
-                sequencer
-                Spacer(minLength: 0)
-                signature
-            }
-            .padding(.top, 180)
-            .padding(.horizontal, 82)
-            .padding(.bottom, 190)
+            Text(snapshot.title)
+                .font(.custom("ZTTalk-Medium", size: 48))
+                .foregroundStyle(headerForeground.primary)
+                .frame(width: PhotoStoryExportLayout.titleMaxWidth, alignment: .center)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
+                .allowsTightening(true)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, PhotoStoryExportLayout.titleTop)
+
+            metadata(foreground: metadataForeground)
+
+            Text("Made with Dap")
+                .font(.custom("ZTTalk-SemiBold", size: 24))
+                .foregroundStyle(signatureForeground.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, PhotoStoryExportLayout.signatureTop)
         }
-        .frame(width: PhotoStoryRenderer.outputPixelSize.width, height: PhotoStoryRenderer.outputPixelSize.height)
+        .frame(width: PhotoStoryExportLayout.canvasSize.width, height: PhotoStoryExportLayout.canvasSize.height)
         .environment(\.colorScheme, .dark)
     }
 
-    private var background: some View {
+    private var photoContainer: some View {
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFill()
+            .frame(
+                width: PhotoStoryExportLayout.photoFrame.width,
+                height: PhotoStoryExportLayout.photoFrame.height
+            )
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: PhotoStoryExportLayout.photoCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: PhotoStoryExportLayout.photoCornerRadius,
+                    style: .continuous
+                )
+                    .stroke(.white.opacity(0.18), lineWidth: 2)
+            }
+            .shadow(color: .black.opacity(0.34), radius: 48, y: 30)
+            .position(
+                x: PhotoStoryExportLayout.photoFrame.midX,
+                y: PhotoStoryExportLayout.photoFrame.midY
+            )
+    }
+
+    private func metadata(foreground: AdaptiveStoryForeground) -> some View {
+        HStack(spacing: 0) {
+            metadataColumn("ROOT", snapshot.root, foreground: foreground)
+            Spacer(minLength: 0)
+            metadataColumn("SCALE", snapshot.scale, foreground: foreground)
+            Spacer(minLength: 0)
+            metadataColumn("BPM", "\(snapshot.bpm)", foreground: foreground)
+        }
+        .frame(
+            width: PhotoStoryExportLayout.metadataFrame.width,
+            height: PhotoStoryExportLayout.metadataFrame.height,
+            alignment: .topLeading
+        )
+        .position(
+            x: PhotoStoryExportLayout.metadataFrame.midX,
+            y: PhotoStoryExportLayout.metadataFrame.minY + PhotoStoryExportLayout.metadataFrame.height / 2
+        )
+    }
+
+    private func metadataColumn(
+        _ label: String,
+        _ value: String,
+        foreground: AdaptiveStoryForeground
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.custom("ZTTalk-SemiBold", size: 24))
+                .foregroundStyle(foreground.secondary)
+            Text(value)
+                .font(.custom("ZTTalk-SemiBold", size: 24))
+                .foregroundStyle(foreground.primary)
+                .lineLimit(1)
+        }
+    }
+}
+
+private struct AdaptiveStoryForeground {
+    let primary: Color
+    let secondary: Color
+}
+
+private func foregroundColors(
+    atNormalizedY normalizedY: CGFloat,
+    gradient: PhotoStoryBackgroundGradient
+) -> AdaptiveStoryForeground {
+    let luminance = gradient.relativeLuminance(atNormalizedY: Double(normalizedY))
+    let blackContrast = (luminance + 0.05) / 0.05
+    let whiteContrast = 1.05 / (luminance + 0.05)
+    let primary = blackContrast > whiteContrast ? Color.black : Color.white
+    return AdaptiveStoryForeground(primary: primary, secondary: primary.opacity(0.60))
+}
+
+private struct PhotoStoryBackgroundGradient {
+    private struct Stop {
+        let color: RGBColor
+        let opacity: Double
+        let location: Double
+
+        var swiftUIStop: Gradient.Stop {
+            Gradient.Stop(
+                color: Color(jamRGB: color).opacity(opacity),
+                location: location
+            )
+        }
+    }
+
+    private struct RGBA {
+        let red: Double
+        let green: Double
+        let blue: Double
+        let alpha: Double
+
+        static let black = Self(red: 0, green: 0, blue: 0, alpha: 1)
+
+        init(color: RGBColor, opacity: Double) {
+            self.init(
+                red: Double(color.red) / 255,
+                green: Double(color.green) / 255,
+                blue: Double(color.blue) / 255,
+                alpha: opacity
+            )
+        }
+
+        init(red: Double, green: Double, blue: Double, alpha: Double) {
+            self.red = red
+            self.green = green
+            self.blue = blue
+            self.alpha = alpha
+        }
+
+        func composited(over background: Self) -> Self {
+            let outputAlpha = alpha + background.alpha * (1 - alpha)
+            guard outputAlpha > 0 else { return Self(red: 0, green: 0, blue: 0, alpha: 0) }
+
+            return Self(
+                red: (red * alpha + background.red * background.alpha * (1 - alpha)) / outputAlpha,
+                green: (green * alpha + background.green * background.alpha * (1 - alpha)) / outputAlpha,
+                blue: (blue * alpha + background.blue * background.alpha * (1 - alpha)) / outputAlpha,
+                alpha: outputAlpha
+            )
+        }
+
+        var relativeLuminance: Double {
+            func linearized(_ component: Double) -> Double {
+                component <= 0.03928
+                    ? component / 12.92
+                    : pow((component + 0.055) / 1.055, 2.4)
+            }
+
+            return 0.2126 * linearized(red)
+                + 0.7152 * linearized(green)
+                + 0.0722 * linearized(blue)
+        }
+    }
+
+    private let diagonalStops: [Stop]
+    private let overlayStops: [Stop]
+
+    init(palette: ColorPalette) {
+        diagonalStops = [
+            Stop(color: palette.shadow, opacity: 1, location: 0),
+            Stop(color: palette.dark, opacity: 0.92, location: 0.5),
+            Stop(color: palette.base, opacity: 0.74, location: 1)
+        ]
+        overlayStops = [
+            Stop(color: .black, opacity: 0.06, location: 0),
+            Stop(color: .black, opacity: 0.36, location: 1)
+        ]
+    }
+
+    @ViewBuilder
+    var view: some View {
         ZStack {
             LinearGradient(
-                colors: [
-                    Color(jamRGB: snapshot.palette.shadow),
-                    Color(jamRGB: snapshot.palette.dark).opacity(0.92),
-                    Color(jamRGB: snapshot.palette.base).opacity(0.74)
-                ],
+                stops: diagonalStops.map(\.swiftUIStop),
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
 
             LinearGradient(
-                colors: [.black.opacity(0.06), .black.opacity(0.36)],
+                stops: overlayStops.map(\.swiftUIStop),
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -354,80 +525,50 @@ private struct PhotoStoryExportView: View {
         .ignoresSafeArea()
     }
 
-    private var titleBlock: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("DAP PHOTO")
-                .font(.custom("ZTTalk-Bold", size: 24, relativeTo: .caption))
-                .tracking(3.8)
-                .foregroundStyle(.white.opacity(0.52))
-
-            Text(snapshot.title)
-                .font(.custom("ZTTalk-Bold", size: 82, relativeTo: .largeTitle))
-                .foregroundStyle(.white)
-                .lineLimit(2)
-                .minimumScaleFactor(0.72)
-        }
+    func relativeLuminance(atNormalizedY normalizedY: Double) -> Double {
+        effectiveColor(atNormalizedY: normalizedY).relativeLuminance
     }
 
-    private var facts: some View {
-        HStack(spacing: 14) {
-            fact("ROOT", snapshot.root)
-            fact("SCALE", snapshot.scale)
-            fact("BPM", "\(snapshot.bpm)")
-        }
+    private func effectiveColor(atNormalizedY normalizedY: Double) -> RGBA {
+        let y = min(max(normalizedY, 0), 1)
+        let diagonal = sample(diagonalStops, at: diagonalLocation(atNormalizedY: y))
+            .composited(over: .black)
+        let overlay = sample(overlayStops, at: y)
+        return overlay.composited(over: diagonal)
     }
 
-    private func fact(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.custom("ZTTalk-Bold", size: 16, relativeTo: .caption))
-                .tracking(1.1)
-                .foregroundStyle(.white.opacity(0.48))
-            Text(value)
-                .font(.custom("ZTTalk-Bold", size: 27, relativeTo: .headline))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private func diagonalLocation(atNormalizedY normalizedY: Double) -> Double {
+        let width = Double(PhotoStoryExportLayout.canvasSize.width)
+        let height = Double(PhotoStoryExportLayout.canvasSize.height)
+        return (0.5 * width * width + normalizedY * height * height)
+            / (width * width + height * height)
     }
 
-    private var sequencer: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("SEQUENCE")
-                .font(.custom("ZTTalk-Bold", size: 22, relativeTo: .headline))
-                .tracking(1.4)
-                .foregroundStyle(.white)
+    private func sample(_ stops: [Stop], at location: Double) -> RGBA {
+        guard let first = stops.first else { return .black }
+        guard let last = stops.last else { return .black }
+        let position = min(max(location, first.location), last.location)
 
-            VStack(spacing: 8) {
-                ForEach((0..<MusicSequence.rows).reversed(), id: \.self) { row in
-                    HStack(spacing: 5) {
-                        ForEach(0..<MusicSequence.steps, id: \.self) { step in
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(isActive(step: step, row: row) ? Color(jamRGB: snapshot.palette.highlight).opacity(0.92) : .white.opacity(0.14))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 12)
-                        }
-                    }
-                }
-            }
+        guard let upperIndex = stops.firstIndex(where: { $0.location >= position }) else {
+            return RGBA(color: last.color, opacity: last.opacity)
         }
-        .padding(26)
-        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .stroke(.white.opacity(0.16), lineWidth: 1.5)
+        guard upperIndex > 0 else {
+            return RGBA(color: first.color, opacity: first.opacity)
         }
+
+        let lower = stops[upperIndex - 1]
+        let upper = stops[upperIndex]
+        let span = upper.location - lower.location
+        let ratio = span == 0 ? 0 : (position - lower.location) / span
+        return RGBA(
+            red: interpolate(Double(lower.color.red) / 255, Double(upper.color.red) / 255, ratio),
+            green: interpolate(Double(lower.color.green) / 255, Double(upper.color.green) / 255, ratio),
+            blue: interpolate(Double(lower.color.blue) / 255, Double(upper.color.blue) / 255, ratio),
+            alpha: interpolate(lower.opacity, upper.opacity, ratio)
+        )
     }
 
-    private var signature: some View {
-        Text("Made with Dap")
-            .font(.custom("ZTTalk-Bold", size: 24, relativeTo: .footnote))
-            .foregroundStyle(.white.opacity(0.62))
-            .frame(maxWidth: .infinity, alignment: .center)
-    }
-
-    private func isActive(step: Int, row: Int) -> Bool {
-        snapshot.notes.contains { $0.step == step && $0.row == row }
+    private func interpolate(_ lower: Double, _ upper: Double, _ ratio: Double) -> Double {
+        lower + (upper - lower) * ratio
     }
 }
